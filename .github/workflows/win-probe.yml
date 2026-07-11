@@ -1,0 +1,203 @@
+name: win-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show tools
+        shell: pwsh
+        run: |
+          Write-Host "7z:"; (Get-Command 7z -ErrorAction SilentlyContinue) | Format-List
+          Write-Host "curl:"; (Get-Command curl.exe -ErrorAction SilentlyContinue) | Format-List
+          Write-Host "python:"; (Get-Command python -ErrorAction SilentlyContinue) | Format-List
+          Write-Host "Free space C:"; Get-PSDrive C | Format-List
+
+      - name: Download Isabelle2025-2.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $urls = @(
+            "https://dist.isabelle.cit.tum.de/dist/Isabelle2025-2.exe?token=Isabelle",
+            "https://isabelle.in.tum.de/dist/Isabelle2025-2.exe"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            Write-Host "Trying $u"
+            curl.exe -f -L --retry 5 --retry-delay 10 -o C:\Isabelle.exe $u
+            if ($LASTEXITCODE -eq 0 -and (Test-Path C:\Isabelle.exe)) {
+              $sz = (Get-Item C:\Isabelle.exe).Length
+              Write-Host "Downloaded, size = $sz bytes"
+              if ($sz -gt 100000000) { $ok = $true; break }
+              else { Write-Host "Too small, trying next mirror" }
+            } else {
+              Write-Host "curl failed exit=$LASTEXITCODE"
+            }
+          }
+          if (-not $ok) { throw "Download failed from all mirrors" }
+
+      - name: Extract with 7z
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path C:\isa | Out-Null
+          Write-Host "Extracting..."
+          7z x C:\Isabelle.exe "-oC:\isa" -y | Select-Object -Last 20
+          Write-Host "--- top of C:\isa ---"
+          Get-ChildItem C:\isa | Format-Table Name,Mode
+          $home = Get-ChildItem C:\isa -Directory | Where-Object { $_.Name -like "Isabelle*" } | Select-Object -First 1
+          if (-not $home) { throw "No Isabelle* dir after extraction" }
+          $HOMEDIR = $home.FullName
+          Write-Host "ISABELLE_HOME candidate = $HOMEDIR"
+          "ISABELLE_HOME=$HOMEDIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "--- checking key files ---"
+          Test-Path "$HOMEDIR\bin\isabelle"
+          Test-Path "$HOMEDIR\contrib\cygwin\bin\bash.exe"
+          Test-Path "$HOMEDIR\contrib\cygwin\isabelle\uninitialized"
+          Write-Host "--- Isabelle*.exe launchers present ---"
+          Get-ChildItem "$HOMEDIR" -Filter "*.exe" | Format-Table Name
+
+      - name: Run Cygwin init (-init)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $HOMEDIR = $env:ISABELLE_HOME
+          $exe = Get-ChildItem "$HOMEDIR" -Filter "Isabelle*.exe" | Select-Object -First 1
+          Write-Host "Launcher = $($exe.FullName)"
+          $marker = "$HOMEDIR\contrib\cygwin\isabelle\uninitialized"
+          Write-Host "uninitialized marker present before init: $(Test-Path $marker)"
+          Write-Host "===INIT_BEGIN==="
+          $p = Start-Process -FilePath $exe.FullName -ArgumentList "-init" -NoNewWindow -PassThru `
+                 -RedirectStandardOutput C:\init_out.txt -RedirectStandardError C:\init_err.txt
+          $timeout = 600
+          $waited = 0
+          $markerGone = $false
+          while (-not $p.HasExited -and $waited -lt $timeout) {
+            Start-Sleep -Seconds 10
+            $waited += 10
+            if (-not (Test-Path $marker)) {
+              Write-Host "marker gone at ${waited}s (cygwin_init consumed it)"
+              $markerGone = $true
+              Start-Sleep -Seconds 20   # let rebaseall/postinstall finish
+              break
+            }
+          }
+          if (-not $p.HasExited) { Write-Host "init process still running after ${waited}s, killing (likely GUI)"; $p | Stop-Process -Force }
+          else { Write-Host "init exited with code $($p.ExitCode) after ${waited}s" }
+          Write-Host "--- init stdout ---"; if (Test-Path C:\init_out.txt) { Get-Content C:\init_out.txt }
+          Write-Host "--- init stderr ---"; if (Test-Path C:\init_err.txt) { Get-Content C:\init_err.txt }
+          Write-Host "===INIT_END==="
+          Write-Host "uninitialized marker present AFTER init: $(Test-Path $marker)"
+
+      - name: Fallback init via JVM tool if still uninitialized
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $HOMEDIR = $env:ISABELLE_HOME
+          $marker = "$HOMEDIR\contrib\cygwin\isabelle\uninitialized"
+          if (Test-Path $marker) {
+            Write-Host "Still uninitialized -> booting a JVM tool to trigger cygwin_init"
+            Write-Host "===FALLBACK_INIT_BEGIN==="
+            & "$HOMEDIR\contrib\cygwin\bin\bash.exe" --login -c "cd '$HOMEDIR'; ./bin/isabelle build -n -l HOL 2>&1 | head -40"
+            Write-Host "marker after fallback: $(Test-Path $marker)"
+            Write-Host "===FALLBACK_INIT_END==="
+          } else {
+            Write-Host "Already initialized; skipping fallback"
+          }
+
+      - name: Write isabelle.bat wrapper
+        shell: pwsh
+        run: |
+          $HOMEDIR = $env:ISABELLE_HOME
+          $bat = @"
+@echo off
+setlocal
+set "ISABELLE_HOME=$HOMEDIR"
+set "HOME=%HOMEDRIVE%%HOMEPATH%"
+set "LANG=en_US.UTF-8"
+set "CHERE_INVOKING=true"
+set "CYGWIN=nodosfilewarning"
+set "PATH=%ISABELLE_HOME%\bin;%PATH%"
+"%ISABELLE_HOME%\contrib\cygwin\bin\bash.exe" --login -c "exec isabelle \"`$@\"" isabelle %*
+endlocal
+"@
+          $bat | Out-File -FilePath C:\isabelle.bat -Encoding ascii
+          Write-Host "--- isabelle.bat ---"
+          Get-Content C:\isabelle.bat
+
+      - name: Probe A - ISABELLE_HOME_USER via bat
+        if: always()
+        shell: cmd
+        run: |
+          echo ===PROBE_A_BEGIN===
+          call C:\isabelle.bat getenv -b ISABELLE_HOME_USER
+          echo exitcode=%ERRORLEVEL%
+          echo ===PROBE_A_END===
+
+      - name: Probe B - ISABELLE_HOME via bat
+        if: always()
+        shell: cmd
+        run: |
+          echo ===PROBE_B_BEGIN===
+          call C:\isabelle.bat getenv -b ISABELLE_HOME
+          echo exitcode=%ERRORLEVEL%
+          echo ===PROBE_B_END===
+
+      - name: Probe C - direct isabelle (no wrapper) from cmd
+        if: always()
+        shell: cmd
+        run: |
+          echo ===PROBE_C_BEGIN===
+          isabelle getenv -b ISABELLE_HOME_USER
+          echo exitcode=%ERRORLEVEL%
+          echo ===PROBE_C_END===
+
+      - name: Probe D - native python popen
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "python probing C:\isabelle.bat"
+          python "$env:GITHUB_WORKSPACE\probe.py" "C:\isabelle.bat"
+
+      - name: Probe E - jedit via bat
+        if: always()
+        shell: cmd
+        run: |
+          echo ===PROBE_E1_BEGIN===
+          call C:\isabelle.bat jedit -h
+          echo exitcode=%ERRORLEVEL%
+          echo ===PROBE_E1_END===
+          echo ===PROBE_E2_BEGIN===
+          call C:\isabelle.bat jedit -b
+          echo exitcode=%ERRORLEVEL%
+          echo ===PROBE_E2_END===
+
+      - name: Probe F - cygpath -w on ISABELLE_HOME_USER
+        if: always()
+        shell: cmd
+        run: |
+          echo ===PROBE_F_BEGIN===
+          for /f "delims=" %%p in ('call C:\isabelle.bat getenv -b ISABELLE_HOME_USER') do set POSIXP=%%p
+          echo POSIX=%POSIXP%
+          call C:\isabelle.bat env cygpath -w "%POSIXP%"
+          echo exitcode=%ERRORLEVEL%
+          echo ===PROBE_F_END===
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-logs
+          path: |
+            C:\isabelle.bat
+            C:\init_out.txt
+            C:\init_err.txt
+          if-no-files-found: warn

@@ -117,19 +117,19 @@ jobs:
         shell: pwsh
         run: |
           $HOMEDIR = $env:ISABELLE_HOME
-          $bat = @"
-@echo off
-setlocal
-set "ISABELLE_HOME=$HOMEDIR"
-set "HOME=%HOMEDRIVE%%HOMEPATH%"
-set "LANG=en_US.UTF-8"
-set "CHERE_INVOKING=true"
-set "CYGWIN=nodosfilewarning"
-set "PATH=%ISABELLE_HOME%\bin;%PATH%"
-"%ISABELLE_HOME%\contrib\cygwin\bin\bash.exe" --login -c "exec isabelle \"`$@\"" isabelle %*
-endlocal
-"@
-          $bat | Out-File -FilePath C:\isabelle.bat -Encoding ascii
+          $lines = @(
+            '@echo off',
+            'setlocal',
+            ('set "ISABELLE_HOME=' + $HOMEDIR + '"'),
+            'set "HOME=%HOMEDRIVE%%HOMEPATH%"',
+            'set "LANG=en_US.UTF-8"',
+            'set "CHERE_INVOKING=true"',
+            'set "CYGWIN=nodosfilewarning"',
+            'set "PATH=%ISABELLE_HOME%\bin;%PATH%"',
+            '"%ISABELLE_HOME%\contrib\cygwin\bin\bash.exe" --login -c "exec isabelle \"$@\"" isabelle %*',
+            'endlocal'
+          )
+          Set-Content -Path C:\isabelle.bat -Value $lines -Encoding ascii
           Write-Host "--- isabelle.bat ---"
           Get-Content C:\isabelle.bat
 

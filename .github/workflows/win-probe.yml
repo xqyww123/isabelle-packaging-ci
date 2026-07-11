@@ -53,9 +53,9 @@ jobs:
           7z x C:\Isabelle.exe "-oC:\isa" -y | Select-Object -Last 20
           Write-Host "--- top of C:\isa ---"
           Get-ChildItem C:\isa | Format-Table Name,Mode
-          $home = Get-ChildItem C:\isa -Directory | Where-Object { $_.Name -like "Isabelle*" } | Select-Object -First 1
-          if (-not $home) { throw "No Isabelle* dir after extraction" }
-          $HOMEDIR = $home.FullName
+          $isaHome = Get-ChildItem C:\isa -Directory | Where-Object { $_.Name -like "Isabelle*" } | Select-Object -First 1
+          if (-not $isaHome) { throw "No Isabelle* dir after extraction" }
+          $HOMEDIR = $isaHome.FullName
           Write-Host "ISABELLE_HOME candidate = $HOMEDIR"
           "ISABELLE_HOME=$HOMEDIR" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "--- checking key files ---"

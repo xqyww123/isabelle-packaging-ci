@@ -2,11 +2,44 @@ name: build
 
 # Reusable workflow: builds the *patched* Isabelle distribution.
 #
-# Job A  (this round)  — ubuntu-latest: source -> patches -> hg commit -> Admin/init
-#                        -> Admin/build_release  -> all 4 platform bundles (NO heaps).
-#                        The Windows .exe is cross-built here on Linux (launch4j/7zz are
-#                        unix-only; see PACKAGING_DESIGN.md §5.0).
-# Job B..F (next round) — per-platform native heap builds + heap injection + conda.
+# Job A   — ubuntu-latest: source -> patches -> hg commit -> Admin/init
+#           -> Admin/build_release  -> all 4 platform bundles (NO heaps).
+#           The Windows .exe is cross-built here on Linux (launch4j/7zz are
+#           unix-only; see PACKAGING_DESIGN.md §5.0).
+# Job B-E — per-platform NATIVE heap builds (heaps cannot be cross-built).
+# Job F   — (next round) heap injection into the bundles + conda packaging.
+#
+# ---------------------------------------------------------------------------
+# Two things that cost a lot of CI time to discover -- read before editing.
+# ---------------------------------------------------------------------------
+#
+# (1) TeX.  build_release ALWAYS runs `isabelle build_doc -a`; there is no flag to
+#     skip it, so the runner needs a fairly complete TeX Live.  The final,
+#     empirically-minimal list is in the "Install build deps" step below.  Beyond
+#     the set named in PACKAGING_DESIGN.md §7, a bare GitHub runner additionally
+#     needs:
+#       texlive-font-utils + ghostscript  -> `epstopdf` (13 documents die without it)
+#       cm-super + texlive-fonts-extra    -> scalable Type-1 fonts, else microtype
+#                                            in Demo_LIPIcs aborts with
+#                                            "auto expansion is only possible with
+#                                             scalable fonts"
+#     The step ends with explicit kpsewhich/`command -v` assertions: if TeX is
+#     incomplete we want to fail in 30s, not 25 minutes into build_doc.
+#
+# (2) Version detection / the `isabelle` shim.  my-better-isabelle-prover picks its
+#     patch set by parsing `isabelle version`.  In a bare hg checkout that is
+#     useless: etc/ISABELLE_IDENTIFIER does not exist yet (lib/scripts/getsettings
+#     only fills it in at release time), so `isabelle version` does NOT print
+#     "Isabelle2025-2" and the tool bails out with "no patches available".
+#     Work-around (step 3): hand the tool a 5-line shim that answers the only two
+#     questions it asks -- `version` and `getenv -b ISABELLE_HOME` -- and forwards
+#     everything else to the real binary.  We deliberately do NOT edit the pristine
+#     source tree: build_release rewrites those files itself later.
+#
+# Related gotcha (do not "fix" this): `isabelle getenv ML_IDENTIFIER` prints an
+# EMPTY value in Isabelle2025-2 -- ML_IDENTIFIER is not a settings variable at all,
+# it is computed Scala-side (Pure/ML/ml_settings.scala: ml_system + "_" + ml_platform).
+# Jobs B-E therefore read the heap directory name off `ls heaps/` instead.
 
 on:
   workflow_call:
@@ -303,11 +336,342 @@ jobs:
           rm -rf "$RUNNER_TEMP/verify"
           exit $fail
 
-      - name: Upload bundles
+      # One artifact PER BUNDLE (not one 5.8 GB blob): Jobs B-E each need exactly
+      # one of them, and actions/download-artifact cannot fetch a single file out
+      # of a larger artifact.
+      - name: Upload bundle (generic source archive)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.release }}-bundles-noheap
-          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/*
+          name: ${{ inputs.release }}-src
+          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}.tar.gz
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+      - name: Upload bundle (linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-linux
+          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}_linux.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload bundle (linux_arm)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-linux_arm
+          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}_linux_arm.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload bundle (macos)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-macos
+          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}_macos.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload bundle (windows .exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-windows
+          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}.exe
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  # ===========================================================================
+  # Jobs B-E: NATIVE heap builds.  One per platform -- heaps cannot be
+  # cross-built (PACKAGING_DESIGN.md §3.5 / §5.0 rule 2).
+  #
+  # !! They consume Job A's PLATFORM BUNDLES, not the generic source archive. !!
+  # The generic archive cannot build heaps at all, and `isabelle components -a`
+  # cannot fix that.  Proof, from the 2025-2 sources:
+  #   * build_release purges Admin/ from the archive (build_release.scala:540), so
+  #     the catalog `Admin/components/main` that `components -I` wires into the user
+  #     settings does not exist -> getfunctions:293 "Bad component catalog file" -> exit 2.
+  #   * The bundled components are recorded in the archive's etc/components only as
+  #     COMMENTS (`#bundled:polyml-...`, record_bundled_components, build_release.scala:180),
+  #     and getfunctions:302 skips every line starting with '#'.  So
+  #     ISABELLE_COMPONENTS_MISSING is EMPTY and `components -a` (lib/Tools/components,
+  #     which resolves exactly $ISABELLE_COMPONENTS_MISSING) is a silent no-op.
+  #   * Turning those comments into real `contrib/...` entries is `activate_components`
+  #     (build_release.scala:200), which runs only in the per-platform bundle stage.
+  #   => the generic archive has NO Poly/ML and NO JDK; `isabelle build` cannot even start.
+  # The platform bundles, by contrast, already carry a fully activated contrib/ for
+  # their platform -- they are exactly what a user downloads.  So: unpack, build.
+  #
+  # The build command is copied verbatim from what build_release itself runs on its
+  # build_host (build_release.scala:245-258), including `-o parallel_proofs=0`:
+  #     bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main
+  # `Main` is a real session (src/Doc/ROOT:310, `session Main (doc) in "Main" = HOL +`)
+  # and the default session of our toolchain; a heap is a delta over its parent, so
+  # Main costs a few MB on top of HOL.
+  # ===========================================================================
+
+  heaps-linux:
+    name: "Job ${{ matrix.id }} - heaps ${{ matrix.bundle }} (${{ matrix.runner }})"
+    needs: bundles
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: B
+            runner: ubuntu-latest
+            bundle: linux
+          - id: C
+            runner: ubuntu-24.04-arm
+            bundle: linux_arm
+    env:
+      RELEASE: ${{ inputs.release }}
+    steps:
+      - name: Download the ${{ matrix.bundle }} bundle from Job A
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-${{ matrix.bundle }}
+          path: ${{ runner.temp }}/dl
+
+      - name: Unpack
+        run: |
+          set -euo pipefail
+          # /tmp lives on the 145 GB ext4 root disk on GitHub Linux runners (not tmpfs)
+          # => ISABELLE_TMP_PREFIX needs NO override.  (PACKAGING_DESIGN.md §5.3)
+          df -hT / /tmp
+          mkdir -p "$HOME/isa"
+          tar xzf "$RUNNER_TEMP/dl/${RELEASE}_${{ matrix.bundle }}.tar.gz" -C "$HOME/isa"
+          ISA="$HOME/isa/$RELEASE"
+          echo "ISA=$ISA" >> "$GITHUB_ENV"
+          "$ISA/bin/isabelle" version
+          "$ISA/bin/isabelle" getenv -b ISABELLE_PLATFORM64 ML_SYSTEM
+          echo "--- ISABELLE_ID (must be our patched rev) ---"
+          cat "$ISA/etc/ISABELLE_ID"
+          echo "--- heaps/ must be EMPTY at this point ---"
+          ls -R "$ISA/heaps" 2>/dev/null || echo "  (no heaps/ dir - as expected)"
+
+      - name: "Build heaps: HOL, Main"
+        working-directory: ${{ env.ISA }}
+        run: |
+          set -euo pipefail
+          nproc; free -g || true
+          t0=$(date +%s)
+          bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main
+          echo "heap build took $(( ($(date +%s) - t0) / 60 )) min"
+          df -h /
+
+      - name: Verify heaps
+        working-directory: ${{ env.ISA }}
+        run: |
+          set -euo pipefail
+          rm -rf heaps/*/log
+          n=$(ls heaps | wc -l)
+          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ML_IDENTIFIER dir, got $n"; ls heaps; exit 1; }
+          id=$(ls heaps)
+          echo "ML_IDENTIFIER = $id"
+          for s in Pure HOL Main; do
+            f="heaps/$id/$s"
+            [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
+            printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(sha256sum "$f" | cut -c1-16)"
+          done
+          [ "$(wc -c < "heaps/$id/HOL")" -gt 100000000 ] || { echo "::error::HOL heap suspiciously small"; exit 1; }
+
+      - name: Upload heaps
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-heaps-${{ matrix.bundle }}
+          path: ${{ env.ISA }}/heaps
+          if-no-files-found: error
+          retention-days: 7
+
+  heaps-macos:
+    name: "Job D - heaps macos x2 (macos-14)"
+    needs: bundles
+    runs-on: macos-14
+    timeout-minutes: 330
+    env:
+      RELEASE: ${{ inputs.release }}
+    steps:
+      - name: Free up disk (drop the extra Xcodes)
+        run: |
+          set -euo pipefail
+          df -h /
+          t0=$(date +%s)
+          # ~42 GB in ~90s.  Without this the runner has only ~40 GB free, which is
+          # not enough for the bundle + two full heap trees.  (PACKAGING_DESIGN.md §5.2)
+          sudo rm -rf /Applications/Xcode_*.app || true
+          echo "cleanup took $(( $(date +%s) - t0 ))s"
+          df -h /
+
+      - name: Download the macos bundle from Job A
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-macos
+          path: ${{ runner.temp }}/dl
+
+      - name: Unpack
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/isa"
+          tar xzf "$RUNNER_TEMP/dl/${RELEASE}_macos.tar.gz" -C "$HOME/isa"
+          # The macOS bundle IS an app bundle: build_release renames the whole tree to
+          # <name>.app (build_release.scala:722), so ISABELLE_HOME == .../Isabelle2025-2.app
+          ISA="$HOME/isa/$RELEASE.app"
+          [ -d "$ISA" ] || { echo "::error::expected $ISA"; ls -l "$HOME/isa"; exit 1; }
+          echo "ISA=$ISA" >> "$GITHUB_ENV"
+          "$ISA/bin/isabelle" version
+          cat "$ISA/etc/ISABELLE_ID"
+          echo "--- Rosetta (needed for the x86_64 pass) ---"
+          arch -x86_64 /usr/bin/true && echo "  Rosetta OK" || echo "::warning::Rosetta not usable"
+
+      - name: "Build heaps x2: ML_system_apple = false, then true"
+        working-directory: ${{ env.ISA }}
+        run: |
+          set -euo pipefail
+          sysctl -n hw.ncpu; df -h /
+          # `isabelle getenv -o` does NOT exist.  The only way to switch ML_system_apple
+          # is the preferences file -- exactly what build_release does on its build_host
+          # (build_release.scala:248).  It must be a *preference*, not `build -o`, because
+          # the heap directory name is derived from ML_PLATFORM at settings-init time.
+          HOME_USER="$(bin/isabelle getenv -b ISABELLE_HOME_USER)"
+          mkdir -p "$HOME_USER/etc"
+          for apple in false true; do
+            echo "===================== ML_system_apple = $apple ====================="
+            echo "ML_system_apple = $apple" > "$HOME_USER/etc/preferences"
+            t0=$(date +%s)
+            bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main
+            echo "--- pass ML_system_apple=$apple took $(( ($(date +%s) - t0) / 60 )) min"
+            ls heaps
+            df -h /
+          done
+
+      - name: Verify heaps (two ML_IDENTIFIERs)
+        working-directory: ${{ env.ISA }}
+        run: |
+          set -euo pipefail
+          rm -rf heaps/*/log
+          n=$(ls heaps | wc -l | tr -d ' ')
+          [ "$n" -eq 2 ] || { echo "::error::expected 2 ML_IDENTIFIER dirs (x86_64 + arm64), got $n"; ls heaps; exit 1; }
+          for id in $(ls heaps); do
+            echo "ML_IDENTIFIER = $id"
+            for s in Pure HOL Main; do
+              f="heaps/$id/$s"
+              [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
+              printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(shasum -a 256 "$f" | cut -c1-16)"
+            done
+            [ "$(wc -c < "heaps/$id/HOL")" -gt 100000000 ] || { echo "::error::HOL heap suspiciously small"; exit 1; }
+          done
+          # the two HOL heaps must really differ (different ML platform)
+          a=$(ls heaps | sed -n 1p); b=$(ls heaps | sed -n 2p)
+          [ "$(shasum -a 256 "heaps/$a/HOL" | cut -d' ' -f1)" != "$(shasum -a 256 "heaps/$b/HOL" | cut -d' ' -f1)" ] \
+            || { echo "::error::the two HOL heaps are identical - the apple/non-apple switch did not take"; exit 1; }
+
+      - name: Upload heaps
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-heaps-macos
+          path: ${{ env.ISA }}/heaps
+          if-no-files-found: error
+          retention-days: 7
+
+  heaps-windows:
+    name: "Job E - heaps windows (windows-latest)"
+    needs: bundles
+    runs-on: windows-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: bash          # Git-bash; the Isabelle build itself runs under Cygwin bash
+    env:
+      RELEASE: ${{ inputs.release }}
+      # C: has only ~33 GB free, D: has ~147 GB -> keep every temp byte off C:.
+      TMPDIR: ${{ runner.temp }}
+      TEMP: ${{ runner.temp }}
+      TMP: ${{ runner.temp }}
+    steps:
+      - name: Disk survey
+        run: |
+          wmic logicaldisk get name,freespace,size || true
+          echo "RUNNER_TEMP=$RUNNER_TEMP"
+
+      - name: Download the windows .exe from Job A
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-windows
+          path: ${{ runner.temp }}/dl
+
+      - name: Unpack the self-extracting .exe with 7-Zip
+        run: |
+          set -euo pipefail
+          # The .exe is a 7z SFX: sfx module + config + 7z archive of the Isabelle tree
+          # (build_release.scala:820-841).  7-Zip (preinstalled) extracts it directly.
+          mkdir -p /d/isa
+          7z x -y -o"D:\\isa" "$(cygpath -w "$RUNNER_TEMP/dl/$RELEASE.exe" 2>/dev/null || echo "$RUNNER_TEMP\\dl\\$RELEASE.exe")" > /d/7z.log || { tail -30 /d/7z.log; exit 1; }
+          tail -3 /d/7z.log
+          ls /d/isa
+          [ -d "/d/isa/$RELEASE" ] || { echo "::error::7z did not produce /d/isa/$RELEASE"; exit 1; }
+          echo "ISA_WIN=D:\\isa\\$RELEASE" >> "$GITHUB_ENV"
+          echo "ISA_CYG=/cygdrive/d/isa/$RELEASE" >> "$GITHUB_ENV"
+
+      - name: Initialize Cygwin (recover symlinks, rebaseall, postinstall)
+        run: |
+          set -euo pipefail
+          # After a raw 7z extraction the tree is marked `contrib/cygwin/isabelle/uninitialized`:
+          # build_release strips ALL symlinks and records them in contrib/cygwin/isabelle/symlinks
+          # (build_release.scala:808-818).  Environment.cygwin_init() (Tools/Setup/src/Environment.java:303,
+          # comment: "init (e.g. after extraction via 7zip)") recovers them and runs
+          # rebaseall + postinstall.  Any isabelle_setup entry point triggers it via
+          # Environment.init(); the jar's Main-Class is isabelle.setup.Setup.
+          JAVA=$(ls -d /d/isa/$RELEASE/contrib/jdk-*/x86_64-windows/bin/java.exe)
+          JAR=$(ls -d /d/isa/$RELEASE/contrib/isabelle_setup-*/lib/isabelle_setup.jar)
+          echo "java = $JAVA"
+          echo "jar  = $JAR"
+          ls -l "/d/isa/$RELEASE/contrib/cygwin/isabelle/uninitialized"
+          "$JAVA" "-Disabelle.root=$ISA_WIN" "-Dcygwin.root=$ISA_WIN\\contrib\\cygwin" \
+                  -jar "$(cygpath -w "$JAR")" classpath | head -3
+          if [ -f "/d/isa/$RELEASE/contrib/cygwin/isabelle/uninitialized" ]; then
+            echo "::error::cygwin_init did not run (uninitialized marker still present)"; exit 1
+          fi
+          echo "Cygwin initialized (marker gone, symlinks recovered)."
+
+      - name: "Build heaps: HOL, Main  (under Cygwin bash)"
+        run: |
+          set -euo pipefail
+          BASH_CYG="/d/isa/$RELEASE/contrib/cygwin/bin/bash.exe"
+          # Isabelle itself always shells out as `<cygwin>\bin\bash.exe -c ...`
+          # (Pure/System/bash.scala:74).  We do the same.  HOME must be a *Cygwin* path:
+          # git-bash would otherwise leak a Windows-style HOME (C:\Users\...) into the
+          # Cygwin shell and getsettings would create nonsense directories.
+          mkdir -p /d/home
+          "$BASH_CYG" -c 'export PATH=/usr/bin:/bin:$PATH; export HOME=/cygdrive/d/home; export USER_HOME=$HOME; cd '"$ISA_CYG"' && bin/isabelle version && bin/isabelle getenv -b ML_SYSTEM ISABELLE_HOME_USER'
+          t0=$(date +%s)
+          "$BASH_CYG" -c 'export PATH=/usr/bin:/bin:$PATH; export HOME=/cygdrive/d/home; export USER_HOME=$HOME; cd '"$ISA_CYG"' && bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main'
+          echo "heap build took $(( ($(date +%s) - t0) / 60 )) min"
+
+      - name: Verify heaps
+        run: |
+          set -euo pipefail
+          cd "/d/isa/$RELEASE"
+          rm -rf heaps/*/log
+          n=$(ls heaps | wc -l)
+          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ML_IDENTIFIER dir, got $n"; ls heaps; exit 1; }
+          id=$(ls heaps)
+          echo "ML_IDENTIFIER = $id"
+          for s in Pure HOL Main; do
+            f="heaps/$id/$s"
+            [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
+            printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(sha256sum "$f" | cut -c1-16)"
+          done
+          [ "$(wc -c < "heaps/$id/HOL")" -gt 100000000 ] || { echo "::error::HOL heap suspiciously small"; exit 1; }
+
+      - name: Upload heaps
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-heaps-windows
+          path: D:\isa\${{ inputs.release }}\heaps
+          if-no-files-found: error
+          retention-days: 7

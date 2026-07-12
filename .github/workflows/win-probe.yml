@@ -1,9 +1,10 @@
 name: win-probe
 
+# Historical probe -- kept as EVIDENCE, not as a regression test.
+# Manual trigger ONLY: these are one-off experiments whose failures are
+# expected and must not redden every push.
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 jobs:
   probe:

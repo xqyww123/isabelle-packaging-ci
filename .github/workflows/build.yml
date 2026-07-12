@@ -247,8 +247,8 @@ jobs:
                       "src/Pure/PIDE/protocol.scala:cancel_execution" \
                       "src/Tools/VSCode/src/lsp.scala:theory_status" \
                       "src/Tools/VSCode/src/language_server.scala:theory_status" ; do
-            f=${spec%:*}; sym=${spec##*:}
-            if grep -q "$sym" "$f"; then echo "  OK       $f  contains '$sym'"
+            f=${spec%%:*}; sym=${spec#*:}
+            if grep -qF "$sym" "$f"; then echo "  OK       $f  contains '$sym'"
             else echo "::error::$f does NOT contain '$sym' - user patch missing"; fail=1; fi
           done
           # perspective_eof_clamp: pos1 is clamped to EOF in vscode_model
@@ -266,15 +266,18 @@ jobs:
 
           echo
           echo "===== DEV patches: all three features must be ABSENT ====="
+          # NB the expose_map_syn marker must be the SIGNATURE line `val map_syn:`.
+          # A bare "map_syn" is a false positive: vanilla sign.ML already defines
+          # `fun map_syn` privately (sign.ML:160) -- the patch only EXPORTS it.
           for spec in "src/Pure/Thy/thy_info.ML:register_thy" \
-                      "src/Pure/sign.ML:map_syn" \
+                      "src/Pure/sign.ML:val map_syn:" \
                       "etc/options:show_types_nv" \
                       "src/Pure/Syntax/printer.ML:show_types_nv" \
                       "src/Pure/Isar/attrib.ML:show_types_nv" ; do
-            f=${spec%:*}; sym=${spec##*:}
-            if grep -q "$sym" "$f"; then
+            f=${spec%%:*}; sym=${spec#*:}          # marker may contain ':' -> split on the FIRST one
+            if grep -qF "$sym" "$f"; then
               echo "::error::$f CONTAINS '$sym' - a dev patch leaked into the release!"
-              grep -n "$sym" "$f" | head -3; fail=1
+              grep -nF "$sym" "$f" | head -3; fail=1
             else
               echo "  OK       $f  has no '$sym'"
             fi
@@ -375,11 +378,13 @@ jobs:
           done
 
           echo "--- DEV patches must be ABSENT from the shipped SOURCE ---"
+          # `val map_syn:` (the exported signature), NOT bare "map_syn": vanilla
+          # sign.ML already has a private `fun map_syn`.
           for spec in "src/Pure/Thy/thy_info.ML:register_thy" \
-                      "src/Pure/sign.ML:map_syn" \
+                      "src/Pure/sign.ML:val map_syn:" \
                       "etc/options:show_types_nv" ; do
             f=${spec%%:*}; sym=${spec#*:}
-            if grep -q "$sym" "$ISA/$f"; then
+            if grep -qF "$sym" "$ISA/$f"; then
               echo "::error::dev patch leaked into the bundle: $f contains $sym"; fail=1
             else echo "  OK    $f  has no $sym"; fi
           done

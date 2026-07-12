@@ -71,11 +71,24 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             mercurial patch curl unzip \
             texlive-latex-recommended texlive-latex-extra texlive-science \
-            texlive-plain-generic texlive-fonts-recommended latexmk
+            texlive-plain-generic texlive-fonts-recommended latexmk \
+            texlive-font-utils texlive-fonts-extra texlive-publishers \
+            texlive-pictures texlive-bibtex-extra cm-super ghostscript
+          # ^ beyond the list in PACKAGING_DESIGN.md §7, a bare runner also needs:
+          #   texlive-font-utils + ghostscript -> `epstopdf` (13 docs die without it)
+          #   cm-super / texlive-fonts-extra   -> scalable T1 fonts, else microtype in
+          #                                       Demo_LIPIcs dies with
+          #                                       "auto expansion is only possible with
+          #                                        scalable fonts"
           hg --version | head -1
           patch --version | head -1
           latexmk --version | head -1
+          echo "epstopdf: $(command -v epstopdf || echo MISSING)"
+          command -v epstopdf >/dev/null
           kpsewhich stmaryrd.sty
+          for f in microtype.sty libertine.sty type1cm.sty; do
+            echo "$f -> $(kpsewhich $f || echo '(not found)')"
+          done
           java -version 2>&1 | head -1
 
       - name: Restore cached hg clone

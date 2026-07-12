@@ -7,7 +7,11 @@ name: build
 #           The Windows .exe is cross-built here on Linux (launch4j/7zz are
 #           unix-only; see PACKAGING_DESIGN.md §5.0).
 # Job B-E — per-platform NATIVE heap builds (heaps cannot be cross-built).
-# Job F   — (next round) heap injection into the bundles + conda packaging.
+# Job F   — ubuntu-latest: inject each platform's heaps into that platform's bundle
+#           and turn the result into a conda package (one per conda subdir).
+#           It VERIFIES by installing from a local channel; it does NOT publish.
+#           Publishing to R2 lives in release.yml, so that a push can never move
+#           the channel (PACKAGING_DESIGN.md §5.4).
 #
 # ---------------------------------------------------------------------------
 # Two things that cost a lot of CI time to discover -- read before editing.
@@ -515,7 +519,6 @@ jobs:
         working-directory: ${{ env.ISA }}
         run: |
           set -euo pipefail
-          rm -rf heaps/*/log
           n=$(ls heaps | wc -l)
           [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ML_IDENTIFIER dir, got $n"; ls heaps; exit 1; }
           id=$(ls heaps)
@@ -524,8 +527,19 @@ jobs:
             f="heaps/$id/$s"
             [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
             printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(sha256sum "$f" | cut -c1-16)"
+            # !! heaps/<ML_ID>/log/<S>.db must SURVIVE into the artifact. !!
+            # It is the session database, not a log.  `isabelle build` decides that a
+            # session is finished-and-current by looking it up there -- NOT by the heap
+            # file existing.  An earlier revision of this job did `rm -rf heaps/*/log`
+            # here; the resulting conda package installed fine and `isabelle version`
+            # worked, but the first real build printed "Building HOL ..." and recompiled
+            # HOL from scratch, making the shipped heap useless.  The official Isabelle
+            # bundle ships these very files, which is why it does not rebuild HOL.
+            [ -f "heaps/$id/log/$s.db" ] || { echo "::error::missing session db $id/log/$s.db"; exit 1; }
           done
           [ "$(wc -c < "heaps/$id/HOL")" -gt 100000000 ] || { echo "::error::HOL heap suspiciously small"; exit 1; }
+          echo "--- session databases (these MUST ship) ---"
+          ls -l "heaps/$id/log/"
 
       - name: Upload heaps
         uses: actions/upload-artifact@v4
@@ -600,7 +614,9 @@ jobs:
         working-directory: ${{ env.ISA }}
         run: |
           set -euo pipefail
-          rm -rf heaps/*/log
+          # Do NOT delete heaps/*/log -- log/<S>.db is the session database that makes
+          # `isabelle build` treat the session as already built.  See the long note in
+          # Job B/C's verify step.
           n=$(ls heaps | wc -l | tr -d ' ')
           [ "$n" -eq 2 ] || { echo "::error::expected 2 ML_IDENTIFIER dirs (x86_64 + arm64), got $n"; ls heaps; exit 1; }
           for id in $(ls heaps); do
@@ -609,8 +625,10 @@ jobs:
               f="heaps/$id/$s"
               [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
               printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(shasum -a 256 "$f" | cut -c1-16)"
+              [ -f "heaps/$id/log/$s.db" ] || { echo "::error::missing session db $id/log/$s.db"; exit 1; }
             done
             [ "$(wc -c < "heaps/$id/HOL")" -gt 100000000 ] || { echo "::error::HOL heap suspiciously small"; exit 1; }
+            ls -l "heaps/$id/log/"
           done
           # the two HOL heaps must really differ (different ML platform)
           a=$(ls heaps | sed -n 1p); b=$(ls heaps | sed -n 2p)
@@ -736,7 +754,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "/d/isa/$RELEASE"
-          rm -rf heaps/*/log
+          # Do NOT delete heaps/*/log -- see the note in Job B/C's verify step.
           n=$(ls heaps | wc -l)
           [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ML_IDENTIFIER dir, got $n"; ls heaps; exit 1; }
           id=$(ls heaps)
@@ -745,8 +763,10 @@ jobs:
             f="heaps/$id/$s"
             [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
             printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(sha256sum "$f" | cut -c1-16)"
+            [ -f "heaps/$id/log/$s.db" ] || { echo "::error::missing session db $id/log/$s.db"; exit 1; }
           done
           [ "$(wc -c < "heaps/$id/HOL")" -gt 100000000 ] || { echo "::error::HOL heap suspiciously small"; exit 1; }
+          ls -l "heaps/$id/log/"
 
       - name: Upload heaps
         uses: actions/upload-artifact@v4
@@ -755,3 +775,236 @@ jobs:
           path: D:/isa/${{ inputs.release }}/heaps
           if-no-files-found: error
           retention-days: 7
+
+  # ===========================================================================
+  # Job F: heap injection + conda packaging.
+  #
+  # Everything happens on Linux, for every target platform -- including win-64.
+  # Nothing is compiled here; we unpack, copy heaps in, and zip the result into a
+  # .conda.  (That the Windows package can be made on Linux is not a shortcut: it
+  # is the same reason Job A cross-builds the .exe -- PACKAGING_DESIGN.md §5.0.)
+  #
+  # Mapping bundle x heaps -> conda subdir:
+  #
+  #   linux-64       <- bundle linux      + heaps linux
+  #   linux-aarch64  <- bundle linux_arm  + heaps linux_arm
+  #   osx-64         <- bundle macos      + heaps macos   \  ONE universal macOS bundle
+  #   osx-arm64      <- bundle macos      + heaps macos   /  feeds BOTH osx subdirs
+  #   win-64         <- bundle windows    + heaps windows
+  #
+  # The macOS heap artifact holds TWO ML_IDENTIFIER dirs (Job D builds with
+  # ML_system_apple=false and =true).  scripts/pack.sh copies every ML_IDENTIFIER dir
+  # it is given, so both osx packages carry both heaps.  That is deliberate: the macOS
+  # bundle is universal anyway, and no ML_IDENTIFIER is hard-coded anywhere in this
+  # pipeline (`isabelle getenv ML_IDENTIFIER` is EMPTY -- §5.1.1), so whichever
+  # ML_PLATFORM a given Mac resolves to at run time, its heap is present.
+  #
+  # This job PUBLISHES NOTHING.  It verifies the packages against a local channel and
+  # uploads them as an artifact; release.yml is what pushes them to R2.
+  # ===========================================================================
+  conda:
+    name: "Job F - conda packages (all subdirs)"
+    needs: [bundles, heaps-linux, heaps-macos, heaps-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RELEASE: ${{ inputs.release }}
+      CH: ${{ github.workspace }}/channel      # local channel, for verification only
+      OUT: ${{ github.workspace }}/out
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Disk assertion (+ cleanup only if needed)
+        run: |
+          set -euo pipefail
+          df -h /
+          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "free on / = ${avail} GB"
+          # Peak here: 4 bundles (~5 GB) + heaps (~2 GB) + one unpacked tree (~2.5 GB)
+          # + one $PREFIX copy (~2.5 GB) + 5 finished .conda (~5 GB).  We unpack and
+          # package ONE platform at a time and delete the staging in between.
+          if [ "$avail" -lt "${{ inputs.min_free_gb }}" ]; then
+            echo "::warning::free disk below threshold - running cleanup"
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                        /usr/local/.ghcup /usr/local/share/powershell \
+                        /usr/share/swift /usr/local/share/chromium \
+                        /opt/hostedtoolcache/CodeQL || true
+            df -h /
+          fi
+
+      - name: Install 7zz + rattler-build
+        run: |
+          set -euo pipefail
+          # 7zz: to unpack Job A's Windows SFX .exe.
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 7zip
+          7zz i > /dev/null && echo "7zz: $(7zz | head -2 | tail -1)"
+
+          # rattler-build: a single static binary.  conda-build is in maintenance mode
+          # and takes minutes where this takes seconds (PACKAGING_DESIGN.md §3.3).
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/rb.tar.gz \
+            https://github.com/prefix-dev/rattler-build/releases/latest/download/rattler-build-x86_64-unknown-linux-musl.tar.gz
+          tar xzf /tmp/rb.tar.gz -C /tmp
+          mv /tmp/rattler-build-x86_64-unknown-linux-musl/rattler-build "$HOME/.local/bin/"
+          chmod +x "$HOME/.local/bin/rattler-build"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/rattler-build" --version
+
+      - name: Download all bundles (Job A)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.release }}-bundle-*
+          path: ${{ runner.temp }}/bundles
+
+      - name: Download all heaps (Jobs B-E)
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.release }}-heaps-*
+          path: ${{ runner.temp }}/heaps
+
+      - name: Survey the inputs
+        run: |
+          set -euo pipefail
+          echo "===== bundles ====="; find "$RUNNER_TEMP/bundles" -type f -printf '%10s  %p\n'
+          echo "===== heaps ====="  ; find "$RUNNER_TEMP/heaps"   -type f -printf '%10s  %p\n'
+
+      - name: "Inject heaps + build the conda packages"
+        run: |
+          set -euo pipefail
+          B="$RUNNER_TEMP/bundles"
+          H="$RUNNER_TEMP/heaps"
+          export WORK="$RUNNER_TEMP/pack"
+
+          # subdir | bundle artifact suffix | heaps artifact suffix | file inside the bundle artifact
+          # (osx-64 and osx-arm64 both come from the ONE universal macOS bundle.)
+          for spec in \
+            "linux-64      linux      linux      ${RELEASE}_linux.tar.gz" \
+            "linux-aarch64 linux_arm  linux_arm  ${RELEASE}_linux_arm.tar.gz" \
+            "osx-64        macos      macos      ${RELEASE}_macos.tar.gz" \
+            "osx-arm64     macos      macos      ${RELEASE}_macos.tar.gz" \
+            "win-64        windows    windows    ${RELEASE}.exe"
+          do
+            set -- $spec
+            subdir=$1; bsuf=$2; hsuf=$3; file=$4
+            echo "::group::$subdir"
+            scripts/pack.sh \
+              --subdir "$subdir" \
+              --bundle "$B/$RELEASE-bundle-$bsuf/$file" \
+              --heaps  "$H/$RELEASE-heaps-$hsuf" \
+              --out    "$OUT"
+            # reclaim the unpacked tree + the build prefix before the next platform
+            rm -rf "$WORK/stage" "$OUT/bld"
+            df -h / | tail -1
+            echo "::endgroup::"
+          done
+
+      - name: "All five packages present?"
+        run: |
+          set -euo pipefail
+          fail=0
+          for s in linux-64 linux-aarch64 osx-64 osx-arm64 win-64; do
+            f=$(ls "$OUT/$s"/isabelle-*.conda 2>/dev/null || true)
+            if [ -n "$f" ]; then
+              printf '  OK    %-14s %s (%s)\n' "$s" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
+            else
+              echo "::error::no package for $s"; fail=1
+            fi
+          done
+          exit $fail
+
+      # -------------------------------------------------------------------------
+      # Verify against a LOCAL channel: deterministic, no network, no CDN in the
+      # way (PACKAGING_DESIGN.md §5.4).  Only linux-64 can actually be RUN here --
+      # the other four are cross-targets and this runner cannot execute them.
+      # -------------------------------------------------------------------------
+      - name: "Index a local channel and install linux-64 from it"
+        run: |
+          set -euo pipefail
+          $CONDA/bin/conda install -y -n base -c conda-forge conda-index -q
+
+          mkdir -p "$CH/noarch"
+          for s in linux-64 linux-aarch64 osx-64 osx-arm64 win-64; do
+            mkdir -p "$CH/$s"; cp "$OUT/$s"/isabelle-*.conda "$CH/$s/"
+          done
+          # --no-zst: Cloudflare caches repodata.json.zst for 4h but never the plain
+          # .json, and conda prefers the .zst -> a fresh publish would be invisible for
+          # hours.  (PACKAGING_DESIGN.md §3.3)
+          $CONDA/bin/python -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
+            --channel-name conda.qiyuan.me
+
+          echo "===== what the channel advertises ====="
+          $CONDA/bin/python - <<'PY'
+          import json, pathlib, os
+          ch = pathlib.Path(os.environ["CH"])
+          for sub in sorted(p.name for p in ch.iterdir() if p.is_dir()):
+              rd = ch / sub / "repodata.json"
+              if not rd.exists(): continue
+              for fn, m in json.load(rd.open())["packages.conda"].items():
+                  print(f"  {sub:14s} {m['name']}-{m['version']}-{m['build']}  depends={m['depends']}")
+          PY
+
+          echo "===== conda create from the local channel ====="
+          $CONDA/bin/conda create -y -p "$RUNNER_TEMP/isaenv" \
+            -c "file://$CH" --override-channels isabelle
+
+      - name: "Run the installed Isabelle (this is the actual proof)"
+        run: |
+          set -euo pipefail
+          ENV="$RUNNER_TEMP/isaenv"
+          export PATH="$ENV/bin:$PATH"
+
+          echo "--- conda sees it ---"
+          $CONDA/bin/conda list -p "$ENV" isabelle
+
+          echo "--- bin/isabelle is the relative symlink into opt/ ---"
+          ls -l "$ENV/bin/isabelle"
+
+          echo "--- isabelle version ---"
+          isabelle version
+
+          echo "--- ISABELLE_HOME must resolve INTO the conda prefix ---"
+          home=$(isabelle getenv -b ISABELLE_HOME)
+          echo "ISABELLE_HOME = $home"
+          [ "$home" = "$ENV/opt/$RELEASE" ] || { echo "::error::ISABELLE_HOME is $home, expected $ENV/opt/$RELEASE"; exit 1; }
+
+          echo "--- the prebuilt heaps shipped INSIDE the package ---"
+          ls -l "$home"/heaps/*/ "$home"/heaps/*/log/
+
+          # -------------------------------------------------------------------------
+          # The heap must actually be USED.  Build a one-line session on top of Main and
+          # assert that HOL is NOT recompiled.
+          #
+          # Do NOT "verify" this with `isabelle build -n` (a dry run).  It is a FALSE
+          # PASS: with the session databases missing it still printed nothing to build,
+          # while a real build turned around and recompiled the whole of HOL.  Only a
+          # real build tells the truth.
+          # -------------------------------------------------------------------------
+          P="$RUNNER_TEMP/probe"; mkdir -p "$P"
+          printf 'theory T imports Main begin\nlemma "(2::nat) + 2 = 4" by simp\nend\n' > "$P/T.thy"
+          printf 'session Probe = HOL +\n  theories T\n' > "$P/ROOT"
+
+          echo "--- building a session that imports Main ---"
+          t0=$(date +%s)
+          isabelle build -d "$P" Probe 2>&1 | tee "$RUNNER_TEMP/probe.log"
+          echo "took $(( $(date +%s) - t0 ))s"
+
+          if grep -q 'Building HOL' "$RUNNER_TEMP/probe.log"; then
+            echo "::error::Isabelle REBUILT HOL -- the shipped heap was not used."
+            echo "          Almost certainly heaps/<ML_ID>/log/*.db did not make it into"
+            echo "          the package; without the session database the heap is ignored."
+            exit 1
+          fi
+          grep -q 'Finished Probe' "$RUNNER_TEMP/probe.log" || {
+            echo "::error::the probe session did not build"; exit 1; }
+          echo "  -> HOL was NOT rebuilt: the prebuilt heap in the package was loaded."
+
+      - name: Upload the conda packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: conda-packages
+          path: ${{ github.workspace }}/out/*/isabelle-*.conda
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

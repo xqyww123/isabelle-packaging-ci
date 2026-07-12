@@ -198,12 +198,28 @@ HOME="$ORIG_HOME" claude -p "$PROMPT" \
   --json-schema "$SCHEMA" > "$OUT_DIR/verdict.json" 2>"$OUT_DIR/claude.err"
 rc=$?
 set -e
-if [ $rc -ne 0 ]; then
-  # claude reports auth/API failures in the JSON body, not on stderr -- print it, or the
-  # cause ("Not logged in", rate limit, ...) is invisible.
-  echo "::error::claude exited $rc: $(jq -r '.result // "no result field"' "$OUT_DIR/verdict.json" 2>/dev/null)"
-  cat "$OUT_DIR/claude.err"
-  exit 1
+
+# ---------------------------------------------------------------------------------
+# No verdict is not the same thing as a bad verdict.
+#
+# The token is a *subscription* token, so this call shares a quota with whatever the
+# owner is doing interactively.  Hitting the session limit, or an expired login, or any
+# API hiccup, makes claude exit non-zero -- and none of that says anything about the
+# package.  Failing the build on it would train everyone to ignore a red Job F.
+#
+# A genuinely broken GUI always comes back AS a verdict (started="no").  So: only a
+# verdict can turn this red.  A missing one is a loud warning and the screenshot is
+# still uploaded for a human to look at.  (claude reports these failures in the JSON
+# body, not on stderr -- read .result or the cause is invisible.)
+# ---------------------------------------------------------------------------------
+verdict=$(jq -r '.structured_output // "null"' "$OUT_DIR/verdict.json" 2>/dev/null || echo null)
+if [ $rc -ne 0 ] || [ "$verdict" = null ]; then
+  why=$(jq -r '.result // "no result field"' "$OUT_DIR/verdict.json" 2>/dev/null || echo "unparseable output")
+  echo "::warning::Claude Code returned no verdict (exit $rc): $why"
+  echo "::warning::The GUI is therefore UNVERIFIED this run.  This is NOT a package failure --"
+  echo "::warning::it is an auth/quota/API problem.  The screenshot is uploaded; look at it."
+  cat "$OUT_DIR/claude.err" 2>/dev/null || true
+  exit 0
 fi
 
 echo "=== verdict ==="

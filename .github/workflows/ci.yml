@@ -21,3 +21,6 @@ jobs:
     with:
       release: Isabelle2025-2
       platforms: linux,linux_arm,windows,macos
+    # the GUI check in Job F needs CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
+    # receives NO secrets unless the caller passes them.
+    secrets: inherit

@@ -60,6 +60,17 @@ on:
         description: "abort-free disk threshold on / (GB); below this we run cleanup"
         type: number
         default: 60
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: >-
+          Claude subscription token (`claude setup-token`) for Job F's GUI check.
+          Optional: without it the screenshot is still taken and uploaded, and only
+          the AI judgement is skipped.  A reusable workflow gets NO secrets unless
+          they are declared here AND passed by the caller (`secrets: inherit`).
+          NB deliberately not ANTHROPIC_API_KEY -- that outranks the OAuth token in
+          Claude Code's auth chain and would bill the metered API instead of the
+          subscription.
+        required: false
 
 jobs:
   bundles:
@@ -1013,6 +1024,45 @@ jobs:
           grep -q 'Finished Probe' "$RUNNER_TEMP/probe.log" || {
             echo "::error::the probe session did not build"; exit 1; }
           echo "  -> HOL was NOT rebuilt: the prebuilt heap in the package was loaded."
+
+      # -------------------------------------------------------------------------
+      # The GUI is the one thing no headless assertion reaches: every check above
+      # passes on a package whose jEdit dies on startup.  So: run jEdit under Xvfb on
+      # a theory with one lemma that must succeed and one that must fail, screenshot
+      # it, and have Claude Code look at the pixels.  The verdict is the DISCRIMINATING
+      # pair -- an error marker on exactly the bad line -- because "a window appeared"
+      # is satisfied by an empty frame.  See scripts/verify_gui.sh for the reasoning
+      # (notably: it pins ML_system_64 from the shipped heap's name, or jEdit silently
+      # rebuilds HOL in a dialog and the screenshot goes falsely green).
+      # -------------------------------------------------------------------------
+      - name: Install GUI-check deps (Xvfb, xdotool, ImageMagick)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11-utils xdotool imagemagick
+          for t in Xvfb xdpyinfo xdotool import jq; do
+            command -v "$t" >/dev/null || { echo "::error::missing $t"; exit 1; }
+          done
+
+      - name: "GUI verification: start jEdit and have Claude Code judge the screenshot"
+        env:
+          # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: scripts/verify_gui.sh "$RUNNER_TEMP/isaenv" "$RUNNER_TEMP/gui"
+
+      - name: Upload the GUI screenshot + verdict
+        if: always()          # on failure this IS the evidence -- upload it either way
+        uses: actions/upload-artifact@v4
+        with:
+          name: gui-verification
+          path: |
+            ${{ runner.temp }}/gui/jedit.png
+            ${{ runner.temp }}/gui/verdict.json
+            ${{ runner.temp }}/gui/jedit.log
+            ${{ runner.temp }}/gui/claude.err
+            ${{ runner.temp }}/gui/xvfb.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload the conda packages
         uses: actions/upload-artifact@v4

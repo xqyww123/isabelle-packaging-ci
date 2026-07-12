@@ -87,41 +87,37 @@ jobs:
 
       - name: "(1) hg clone Isabelle"
         if: steps.hgcache.outputs.cache-hit != 'true'
-        env:
-          HG_URL: https://isabelle.in.tum.de/repos/isabelle
         run: |
           set -uo pipefail
-          # isabelle.in.tum.de has BOTH an A and an AAAA record, but on the runner
-          # getaddrinfo returns the AAAA first and that path is dead (instant RST /
-          # truncated responses).  Pin the A record in /etc/hosts => IPv4 only.
-          echo "--- DNS as the runner sees it ---"
-          getent ahosts isabelle.in.tum.de || true
-          IPV4=$(getent ahostsv4 isabelle.in.tum.de | awk '{print $1; exit}')
-          echo "pinning isabelle.in.tum.de -> $IPV4 (IPv4)"
-          echo "$IPV4 isabelle.in.tum.de" | sudo tee -a /etc/hosts
-          curl -4 -sS -o /dev/null -w 'capabilities: HTTP %{http_code} in %{time_total}s\n' \
-            "$HG_URL?cmd=capabilities" || echo "curl rc=$?"
-
-          clone_try() {  # $1 = extra hg flags
-            rm -rf "$ISA_SRC"
-            hg clone $1 "$HG_URL" "$ISA_SRC"
-          }
-          ok=0
-          for attempt in 1 2 3 4 5; do
-            echo "=== stream clone attempt $attempt ==="
-            if clone_try --stream; then ok=1; break; fi
-            echo "::warning::stream clone attempt $attempt failed"; sleep 20
+          # Source order matters:
+          #   isabelle.sketis.net = Makarius' official mirror -- the ONLY one that
+          #     currently answers.  (It is also where build_release pulls the native
+          #     components from, so the runner must reach it anyway.)
+          #   isabelle.in.tum.de  = the canonical repo, but as of 2026-07-12 it RSTs
+          #     every TLS connection (from GitHub runners AND from a normal desktop:
+          #     "curl: (35) Recv failure: Connection reset by peer").  Kept as fallback.
+          for url in https://isabelle.sketis.net/repos/isabelle \
+                     https://isabelle.in.tum.de/repos/isabelle; do
+            echo "### probing $url"
+            curl -sS -o /dev/null -w '    capabilities: HTTP %{http_code} in %{time_total}s\n' \
+              "$url?cmd=capabilities" || echo "    curl rc=$?"
           done
-          if [ "$ok" -ne 1 ]; then
-            echo "::warning::--stream failed; falling back to a regular (bundle) clone"
-            for attempt in 1 2 3 4 5; do
-              echo "=== plain clone attempt $attempt ==="
-              if clone_try ""; then ok=1; break; fi
-              echo "::warning::plain clone attempt $attempt failed"; sleep 20
+
+          ok=0
+          for url in https://isabelle.sketis.net/repos/isabelle \
+                     https://isabelle.in.tum.de/repos/isabelle; do
+            for flags in --stream ""; do
+              for attempt in 1 2 3; do
+                echo "=== clone $url ${flags:-<plain>} attempt $attempt ==="
+                rm -rf "$ISA_SRC"
+                if hg clone $flags "$url" "$ISA_SRC"; then ok=1; break 3; fi
+                echo "::warning::failed: $url ${flags:-<plain>} attempt $attempt"
+                sleep 15
+              done
             done
-          fi
-          [ "$ok" -eq 1 ] || { echo "::error::cannot clone $HG_URL"; exit 1; }
-          hg -R "$ISA_SRC" id -r "$RELEASE"
+          done
+          [ "$ok" -eq 1 ] || { echo "::error::cannot clone the Isabelle repository"; exit 1; }
+          echo "Isabelle2025-2 resolves to: $(hg -R "$ISA_SRC" id -r "$RELEASE")"
           du -sh "$ISA_SRC/.hg"
 
       - name: Save hg clone to cache

@@ -713,15 +713,25 @@ jobs:
           # symlinks and runs rebaseall + postinstall.  It fires from Environment.init(),
           # which any isabelle_setup entry point triggers; the jar's Main-Class is
           # isabelle.setup.Setup, and its `classpath` op is the cheapest one.
+          #
+          # The classpath must be  SCALA_INTERFACES : ISABELLE_SETUP_JAR  -- exactly what
+          # Isabelle itself passes (lib/scripts/getsettings:118).  `-jar setup.jar` alone
+          # dies with  NoClassDefFoundError: dotty/tools/dotc/interfaces/SimpleReporter,
+          # because Build.classpath() touches the Scala compiler interfaces, which live in
+          # contrib/scala-*/lib/scala3-interfaces-*.jar.
           JDK=$(basename "$(ls -d /d/isa/$RELEASE/contrib/jdk-*)")
-          SETUP=$(basename "$(ls -d /d/isa/$RELEASE/contrib/isabelle_setup-*)")
           JAVA="/d/isa/$RELEASE/contrib/$JDK/x86_64-windows/bin/java.exe"
-          JAR_WIN="$ISA_WIN\\contrib\\$SETUP\\lib\\isabelle_setup.jar"
-          echo "java = $JAVA"
-          echo "jar  = $JAR_WIN"
+          JAR="$(ls /d/isa/$RELEASE/contrib/isabelle_setup-*/lib/isabelle_setup.jar)"
+          IFACE="$(ls /d/isa/$RELEASE/contrib/scala-*/lib/scala3-interfaces-*.jar)"
+          # /d/isa/<rel>/x/y  ->  D:\isa\<rel>\x\y   (git-bash cygpath targets MSYS, not this Cygwin)
+          tw() { local rel="${1#/d/isa/$RELEASE/}"; echo "$ISA_WIN\\${rel//\//\\}"; }
+          CP="$(tw "$IFACE");$(tw "$JAR")"
+          echo "java      = $JAVA"
+          echo "classpath = $CP"
           ls -l "/d/isa/$RELEASE/contrib/cygwin/isabelle/uninitialized"
+          MSYS2_ARG_CONV_EXCL='*' \
           "$JAVA" "-Disabelle.root=$ISA_WIN" "-Dcygwin.root=$ISA_WIN\\contrib\\cygwin" \
-                  -jar "$JAR_WIN" classpath | head -2
+                  -classpath "$CP" isabelle.setup.Setup classpath | head -2
           if [ -f "/d/isa/$RELEASE/contrib/cygwin/isabelle/uninitialized" ]; then
             echo "::error::cygwin_init did not run (the 'uninitialized' marker is still there)"
             exit 1

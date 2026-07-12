@@ -2,9 +2,16 @@ name: disk-probe
 
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "which platforms to probe"
+        default: all
+        type: choice
+        options: [all, linux, windows, macos]
 
 jobs:
   probe-linux:
+    if: ${{ inputs.scope == 'all' || inputs.scope == 'linux' }}
     strategy:
       fail-fast: false
       matrix:
@@ -77,11 +84,39 @@ jobs:
             dd if=/dev/zero of=/mnt/isabelle-tmp-test/probe.bin bs=1M count=2048 status=none && \
               echo "wrote 2GiB to /mnt OK" && ls -lh /mnt/isabelle-tmp-test/probe.bin
             df -h /mnt
-            rm -rf /mnt/isabelle-tmp-test
+            sudo rm -rf /mnt/isabelle-tmp-test
           else
             echo "/mnt DOES NOT EXIST on this runner"
           fi
+          echo "--- IS /mnt A SEPARATE FILESYSTEM? ---"
+          if mountpoint -q /mnt; then echo "YES: /mnt is its own mount"; else echo "NO: /mnt is just a directory on /"; fi
+          echo "--- unmounted block devices? ---"
+          lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS
+          for dev in /dev/nvme0n1 /dev/sdb; do
+            if [ -b $dev ]; then
+              echo "==> $dev exists, size $(sudo blockdev --getsize64 $dev 2>/dev/null | numfmt --to=iec 2>/dev/null)"
+              sudo blkid $dev || echo "   (no filesystem signature)"
+            fi
+          done
           echo "===MNT_END==="
+
+      - name: "Real capacity test: 22 GiB ISABELLE_TMP peak + 8 GiB build tree"
+        run: |
+          echo "===CAPACITY_BEGIN==="
+          echo "target: hold 22 GiB in RUNNER_TEMP (ISABELLE_TMP peak) + 8 GiB build tree simultaneously"
+          df -h /
+          mkdir -p "$RUNNER_TEMP/isatmp" "$HOME/buildtree"
+          echo "--- writing 22 GiB to \$RUNNER_TEMP ---"
+          /usr/bin/time -f "  22GiB write took %e s" dd if=/dev/zero of="$RUNNER_TEMP/isatmp/peak.bin" bs=1M count=22528 status=none
+          echo "--- writing 8 GiB build tree ---"
+          dd if=/dev/zero of="$HOME/buildtree/tree.bin" bs=1M count=8192 status=none
+          echo "--- df with BOTH present (30 GiB in flight) ---"
+          df -h /
+          echo "still avail: $(df -h --output=avail / | tail -1 | tr -d ' ')"
+          du -sh "$RUNNER_TEMP/isatmp" "$HOME/buildtree"
+          rm -rf "$RUNNER_TEMP/isatmp" "$HOME/buildtree"
+          echo "VERDICT: 30 GiB simultaneous allocation SUCCEEDED on $(uname -m)"
+          echo "===CAPACITY_END==="
 
       - name: Size of preinstalled junk (du, BEFORE deleting)
         run: |
@@ -166,6 +201,7 @@ jobs:
           echo "===SUMMARY_END==="
 
   probe-windows:
+    if: ${{ inputs.scope == 'all' || inputs.scope == 'windows' }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -275,6 +311,7 @@ jobs:
           Write-Host "===CLEANUP_END==="
 
   probe-macos:
+    if: ${{ inputs.scope == 'all' || inputs.scope == 'macos' }}
     strategy:
       fail-fast: false
       matrix:

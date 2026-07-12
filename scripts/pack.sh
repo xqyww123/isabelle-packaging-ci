@@ -61,8 +61,16 @@ case "$BUNDLE" in
     ;;
   *.exe)
     # The Windows bundle is a 7z self-extracting archive: sfx stub + config + a 7z
-    # archive of the whole tree (build_release.scala:820-841).  7zz reads it directly.
-    7zz x -y -o"$STAGE" "$BUNDLE" > "$WORK/7z.log" || { tail -40 "$WORK/7z.log"; exit 1; }
+    # archive of the whole tree (build_release.scala:820-841).  7-Zip reads it directly.
+    #
+    # Do NOT hard-code `7zz`.  That is upstream 7-Zip's (and conda-forge's) name for the
+    # binary; Debian/Ubuntu's `7zip` package installs it as `7z`.  Hard-coding 7zz made
+    # this line die with "command not found" on ubuntu-latest AFTER the other four
+    # packages had already been built.  Accept either name.
+    SEVENZIP=$(command -v 7zz || command -v 7z) || {
+      echo "::error::no 7-Zip binary found (tried 7zz and 7z)"; exit 1; }
+    echo "7-Zip: $SEVENZIP"
+    "$SEVENZIP" x -y -o"$STAGE" "$BUNDLE" > "$WORK/7z.log" || { tail -40 "$WORK/7z.log"; exit 1; }
     ;;
   *)
     [ -d "$BUNDLE" ] || { echo "::error::$BUNDLE is neither .tar.gz, .exe, nor a directory"; exit 1; }
@@ -149,11 +157,23 @@ export ISA_RELEASE="$RELEASE"
 export ISA_ID
 export ISA_BUILD_NUMBER="${ISA_BUILD_NUMBER:-0}"
 
+# --test native: run the recipe's tests only when the target IS this machine.
+#
+# The default (native-and-emulated) runs them for EVERY target, which is wrong in both
+# directions when cross-packaging from Linux:
+#   win-64  -> the test takes the non-unix branch, `isabelle.bat version`, which exits
+#              127 on a Linux builder; rattler-build then quarantines a perfectly good
+#              package into <output-dir>/broken/.
+#   osx-*   -> the test takes the unix branch and PASSES, but it passed by running the
+#              macOS package's bash script on Linux.  A false pass is worse than no test.
+# Only linux-64 can be honestly tested here, and Job F does that far more thoroughly
+# anyway: it installs from a local channel and builds a real session (see build.yml).
 rattler-build build \
   --recipe "$HERE/../conda/recipe.yaml" \
   --target-platform "$SUBDIR" \
   --output-dir "$OUT" \
-  --no-build-id
+  --no-build-id \
+  --test native
 
 echo "=== produced ==="
 find "$OUT" -name '*.conda' -newer "$TREE/etc/ISABELLE_ID" -printf '%p  %s bytes\n' 2>/dev/null || \

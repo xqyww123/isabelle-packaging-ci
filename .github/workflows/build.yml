@@ -854,13 +854,25 @@ jobs:
             df -h /
           fi
 
-      - name: Install 7zz + rattler-build
+      - name: Install 7-Zip + rattler-build
         run: |
           set -euo pipefail
-          # 7zz: to unpack Job A's Windows SFX .exe.
+          # 7-Zip: to unpack Job A's Windows SFX .exe.
+          # !! The binary is `7z` on Debian/Ubuntu, NOT `7zz`.  `7zz` is upstream 7-Zip's
+          # !! (and conda-forge's) name; Ubuntu's `7zip` package installs /usr/bin/7z.
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends 7zip
-          7zz i > /dev/null && echo "7zz: $(7zz | head -2 | tail -1)"
+
+          # A REAL assertion.  The previous version of this line was
+          #     7zz i > /dev/null && echo "7zz: ..."
+          # which is a FAKE guard: under `set -e`, a command that is not the last in an
+          # && list is exempt from errexit, so `7zz: command not found` was swallowed and
+          # this step went GREEN with no 7-Zip at all.  The build then died 25 minutes
+          # later inside pack.sh, on the fifth and last package.  Guards must be written
+          # so that they can actually fail.
+          command -v 7zz >/dev/null || command -v 7z >/dev/null || {
+            echo "::error::no 7-Zip binary found (tried 7zz and 7z)"; exit 1; }
+          echo "7-Zip: $(command -v 7zz || command -v 7z)"
 
           # rattler-build: a single static binary.  conda-build is in maintenance mode
           # and takes minutes where this takes seconds (PACKAGING_DESIGN.md §3.3).

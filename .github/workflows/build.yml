@@ -247,13 +247,20 @@ jobs:
           DIST="$OUT/dist-$RELEASE"
           fail=0
 
-          echo "===== every bundle present and non-trivial ====="
-          for f in "$RELEASE.tar.gz" "${RELEASE}_linux.tar.gz" "${RELEASE}_linux_arm.tar.gz" \
-                   "${RELEASE}_macos.tar.gz" "$RELEASE.exe"; do
+          echo "===== every bundle present and of a plausible size ====="
+          # generic source archive: no native components -> tens of MB.
+          # platform bundles: full contrib for that platform -> hundreds of MB.
+          for spec in "$RELEASE.tar.gz:20000000" \
+                      "${RELEASE}_linux.tar.gz:400000000" \
+                      "${RELEASE}_linux_arm.tar.gz:400000000" \
+                      "${RELEASE}_macos.tar.gz:400000000" \
+                      "$RELEASE.exe:400000000"; do
+            f=${spec%:*}; min=${spec##*:}
             if [ -f "$DIST/$f" ]; then
               sz=$(stat -c %s "$DIST/$f")
-              printf '  OK    %-32s %s (%s bytes)\n' "$f" "$(du -h "$DIST/$f" | cut -f1)" "$sz"
-              [ "$sz" -gt 100000000 ] || { echo "::error::$f suspiciously small"; fail=1; }
+              printf '  OK    %-32s %6s (%s bytes, min %s)\n' \
+                "$f" "$(du -h "$DIST/$f" | cut -f1)" "$sz" "$min"
+              [ "$sz" -gt "$min" ] || { echo "::error::$f suspiciously small"; fail=1; }
             else
               echo "::error::MISSING $f"; fail=1
             fi

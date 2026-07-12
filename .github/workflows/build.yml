@@ -585,17 +585,30 @@ jobs:
     timeout-minutes: 240
     defaults:
       run:
-        shell: bash          # Git-bash; the Isabelle build itself runs under Cygwin bash
+        shell: bash          # Git-bash; the Isabelle build itself runs under CYGWIN bash
     env:
       RELEASE: ${{ inputs.release }}
     steps:
-      - name: "Disk survey + move TEMP off the small C: drive"
+      # ---------------------------------------------------------------------
+      # Disk: C: has ~33 GB free, D: has ~147 GB.  Everything (tree, temp, HOME)
+      # goes on D:.
+      #
+      # !! Exporting TMPDIR/TEMP/TMP is NOT enough. !!  Under Cygwin,
+      # lib/scripts/getsettings:30 OVERWRITES them unconditionally:
+      #     TMPDIR="$(cygpath -u "$LOCALAPPDATA")/Temp"
+      # and etc/settings:90 then derives ISABELLE_TMP_PREFIX="$TMPDIR/isabelle".
+      # So the only lever that actually moves Isabelle's scratch space off C: is
+      # LOCALAPPDATA.  (TMPDIR/TEMP/TMP are still set below, for the non-Cygwin
+      # side: 7-Zip, the JVM, and the actions/* JS actions.)
+      # ---------------------------------------------------------------------
+      - name: "Disk survey + move ALL temp/scratch off the small C: drive"
         run: |
-          wmic logicaldisk get name,freespace,size || true
-          echo "RUNNER_TEMP=$RUNNER_TEMP"
-          # C: has only ~33 GB free, D: has ~147 GB -> keep every temp byte off C:.
-          # (job-level `env:` cannot reference the `runner` context, hence GITHUB_ENV)
+          set -euo pipefail
+          df -h | grep -Ei '^(Filesystem|[CD]:)' || df -h
+          echo "RUNNER_TEMP=$RUNNER_TEMP   LOCALAPPDATA=${LOCALAPPDATA:-}"
+          mkdir -p /d/localapp/Temp /d/home /d/isa
           {
+            echo "LOCALAPPDATA=D:\\localapp"   # -> Cygwin TMPDIR=/cygdrive/d/localapp/Temp
             echo "TMPDIR=$RUNNER_TEMP"
             echo "TEMP=$RUNNER_TEMP"
             echo "TMP=$RUNNER_TEMP"
@@ -610,50 +623,67 @@ jobs:
       - name: Unpack the self-extracting .exe with 7-Zip
         run: |
           set -euo pipefail
-          # The .exe is a 7z SFX: sfx module + config + 7z archive of the Isabelle tree
-          # (build_release.scala:820-841).  7-Zip (preinstalled) extracts it directly.
-          mkdir -p /d/isa
-          7z x -y -o"D:\\isa" "$(cygpath -w "$RUNNER_TEMP/dl/$RELEASE.exe" 2>/dev/null || echo "$RUNNER_TEMP\\dl\\$RELEASE.exe")" > /d/7z.log || { tail -30 /d/7z.log; exit 1; }
+          # The .exe is a 7z SFX: sfx module + config + a 7z archive of the whole
+          # Isabelle tree (build_release.scala:820-841).  7-Zip (preinstalled on the
+          # runner) extracts it directly.
+          SEVENZ=7z
+          command -v "$SEVENZ" >/dev/null || SEVENZ="/c/Program Files/7-Zip/7z.exe"
+          "$SEVENZ" x -y "-oD:\\isa" "$RUNNER_TEMP\\dl\\$RELEASE.exe" > /d/7z.log || { tail -40 /d/7z.log; exit 1; }
           tail -3 /d/7z.log
-          ls /d/isa
-          [ -d "/d/isa/$RELEASE" ] || { echo "::error::7z did not produce /d/isa/$RELEASE"; exit 1; }
-          echo "ISA_WIN=D:\\isa\\$RELEASE" >> "$GITHUB_ENV"
+          [ -d "/d/isa/$RELEASE" ] || { echo "::error::7z did not produce D:\\isa\\$RELEASE"; ls /d/isa; exit 1; }
+          du -sh "/d/isa/$RELEASE"
+          # Windows-style paths, built by string concatenation: git-bash's cygpath is
+          # NOT the Cygwin we are targeting, so do not rely on it here.
+          echo "ISA_WIN=D:\\isa\\$RELEASE"        >> "$GITHUB_ENV"
           echo "ISA_CYG=/cygdrive/d/isa/$RELEASE" >> "$GITHUB_ENV"
 
       - name: Initialize Cygwin (recover symlinks, rebaseall, postinstall)
         run: |
           set -euo pipefail
-          # After a raw 7z extraction the tree is marked `contrib/cygwin/isabelle/uninitialized`:
-          # build_release strips ALL symlinks and records them in contrib/cygwin/isabelle/symlinks
-          # (build_release.scala:808-818).  Environment.cygwin_init() (Tools/Setup/src/Environment.java:303,
-          # comment: "init (e.g. after extraction via 7zip)") recovers them and runs
-          # rebaseall + postinstall.  Any isabelle_setup entry point triggers it via
-          # Environment.init(); the jar's Main-Class is isabelle.setup.Setup.
-          JAVA=$(ls -d /d/isa/$RELEASE/contrib/jdk-*/x86_64-windows/bin/java.exe)
-          JAR=$(ls -d /d/isa/$RELEASE/contrib/isabelle_setup-*/lib/isabelle_setup.jar)
+          # A raw 7z extraction leaves the tree marked
+          # contrib/cygwin/isabelle/uninitialized: build_release STRIPS every symlink
+          # and records them in contrib/cygwin/isabelle/symlinks (build_release.scala:808-818).
+          # Environment.cygwin_init() -- whose own comment reads "init (e.g. after
+          # extraction via 7zip)" (Tools/Setup/src/Environment.java:303) -- recovers the
+          # symlinks and runs rebaseall + postinstall.  It fires from Environment.init(),
+          # which any isabelle_setup entry point triggers; the jar's Main-Class is
+          # isabelle.setup.Setup, and its `classpath` op is the cheapest one.
+          JDK=$(basename "$(ls -d /d/isa/$RELEASE/contrib/jdk-*)")
+          SETUP=$(basename "$(ls -d /d/isa/$RELEASE/contrib/isabelle_setup-*)")
+          JAVA="/d/isa/$RELEASE/contrib/$JDK/x86_64-windows/bin/java.exe"
+          JAR_WIN="$ISA_WIN\\contrib\\$SETUP\\lib\\isabelle_setup.jar"
           echo "java = $JAVA"
-          echo "jar  = $JAR"
+          echo "jar  = $JAR_WIN"
           ls -l "/d/isa/$RELEASE/contrib/cygwin/isabelle/uninitialized"
           "$JAVA" "-Disabelle.root=$ISA_WIN" "-Dcygwin.root=$ISA_WIN\\contrib\\cygwin" \
-                  -jar "$(cygpath -w "$JAR")" classpath | head -3
+                  -jar "$JAR_WIN" classpath | head -2
           if [ -f "/d/isa/$RELEASE/contrib/cygwin/isabelle/uninitialized" ]; then
-            echo "::error::cygwin_init did not run (uninitialized marker still present)"; exit 1
+            echo "::error::cygwin_init did not run (the 'uninitialized' marker is still there)"
+            exit 1
           fi
-          echo "Cygwin initialized (marker gone, symlinks recovered)."
+          echo "Cygwin initialized: marker gone, symlinks recovered."
 
       - name: "Build heaps: HOL, Main  (under Cygwin bash)"
         run: |
           set -euo pipefail
           BASH_CYG="/d/isa/$RELEASE/contrib/cygwin/bin/bash.exe"
           # Isabelle itself always shells out as `<cygwin>\bin\bash.exe -c ...`
-          # (Pure/System/bash.scala:74).  We do the same.  HOME must be a *Cygwin* path:
-          # git-bash would otherwise leak a Windows-style HOME (C:\Users\...) into the
-          # Cygwin shell and getsettings would create nonsense directories.
-          mkdir -p /d/home
-          "$BASH_CYG" -c 'export PATH=/usr/bin:/bin:$PATH; export HOME=/cygdrive/d/home; export USER_HOME=$HOME; cd '"$ISA_CYG"' && bin/isabelle version && bin/isabelle getenv -b ML_SYSTEM ISABELLE_HOME_USER'
+          # (Pure/System/bash.scala:74); we do the same.  HOME/USER_HOME must be given
+          # as *Cygwin* paths -- otherwise getsettings derives USER_HOME from
+          # $USERPROFILE and puts ISABELLE_HOME_USER on C:.
+          PRE='export PATH=/usr/bin:/bin:$PATH; export HOME=/cygdrive/d/home; export USER_HOME=$HOME;'
+          "$BASH_CYG" -c "$PRE"' cd '"$ISA_CYG"' && bin/isabelle version && bin/isabelle getenv -b ML_SYSTEM ISABELLE_HOME_USER ISABELLE_TMP_PREFIX'
+          # assert the scratch space really is on D: (see the LOCALAPPDATA note above)
+          tmp=$("$BASH_CYG" -c "$PRE"' cd '"$ISA_CYG"' && bin/isabelle getenv -b ISABELLE_TMP_PREFIX')
+          echo "ISABELLE_TMP_PREFIX = $tmp"
+          case "$tmp" in
+            /cygdrive/d/*) echo "  OK: scratch is on D:" ;;
+            *) echo "::error::ISABELLE_TMP_PREFIX is not on D: ($tmp) - C: will fill up"; exit 1 ;;
+          esac
           t0=$(date +%s)
-          "$BASH_CYG" -c 'export PATH=/usr/bin:/bin:$PATH; export HOME=/cygdrive/d/home; export USER_HOME=$HOME; cd '"$ISA_CYG"' && bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main'
+          "$BASH_CYG" -c "$PRE"' cd '"$ISA_CYG"' && bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main'
           echo "heap build took $(( ($(date +%s) - t0) / 60 )) min"
+          df -h | grep -Ei '^(Filesystem|[CD]:)' || true
 
       - name: Verify heaps
         run: |
@@ -675,6 +705,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.release }}-heaps-windows
-          path: D:\isa\${{ inputs.release }}\heaps
+          path: D:/isa/${{ inputs.release }}/heaps
           if-no-files-found: error
           retention-days: 7

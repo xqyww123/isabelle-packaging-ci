@@ -66,8 +66,9 @@ jobs:
           cd "$RUNNER_TEMP"
           ok=0
           for u in \
-            "https://dist.isabelle.cit.tum.de/dist/Isabelle2025-2_macos.tar.gz" \
-            "https://isabelle.in.tum.de/dist/Isabelle2025-2_macos.tar.gz" ; do
+            "https://dist.isabelle.cit.tum.de/dist/Isabelle2025-2_macos.tar.gz?token=Isabelle" \
+            "https://isabelle.in.tum.de/dist/Isabelle2025-2_macos.tar.gz?token=Isabelle" \
+            "https://isabelle.sketis.net/dist/Isabelle2025-2_macos.tar.gz?token=Isabelle" ; do
             echo "Trying $u"
             if curl -f -L --retry 5 --retry-delay 10 -o isa.tar.gz "$u"; then
               sz=$(stat -f%z isa.tar.gz)

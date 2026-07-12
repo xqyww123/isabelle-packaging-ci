@@ -79,9 +79,34 @@ jobs:
           java -version 2>&1 | head -1
 
       - name: "(1) hg clone Isabelle"
+        env:
+          HG_URL: https://isabelle.in.tum.de/repos/isabelle
         run: |
-          set -euo pipefail
-          hg clone --stream https://isabelle.in.tum.de/repos/isabelle "$ISA_SRC"
+          set -uo pipefail
+          echo "--- connectivity probe ---"
+          getent hosts isabelle.in.tum.de || true
+          curl -sS -o /dev/null -w 'capabilities: HTTP %{http_code} in %{time_total}s\n' \
+            "$HG_URL?cmd=capabilities" || echo "curl rc=$?"
+
+          ok=0
+          for attempt in 1 2 3; do
+            rm -rf "$ISA_SRC"
+            echo "=== stream clone attempt $attempt ==="
+            if hg clone --stream "$HG_URL" "$ISA_SRC"; then ok=1; break; fi
+            echo "::warning::stream clone attempt $attempt failed"
+            sleep 15
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::warning::--stream failed 3x; falling back to a regular (bundle) clone"
+            for attempt in 1 2 3; do
+              rm -rf "$ISA_SRC"
+              echo "=== plain clone attempt $attempt ==="
+              if hg clone "$HG_URL" "$ISA_SRC"; then ok=1; break; fi
+              echo "::warning::plain clone attempt $attempt failed"
+              sleep 15
+            done
+          fi
+          [ "$ok" -eq 1 ] || { echo "::error::cannot clone $HG_URL"; exit 1; }
           du -sh "$ISA_SRC/.hg"
 
       - name: "(2) hg update -r $RELEASE"

@@ -78,36 +78,58 @@ jobs:
           kpsewhich stmaryrd.sty
           java -version 2>&1 | head -1
 
+      - name: Restore cached hg clone
+        id: hgcache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/isabelle-src
+          key: hg-isabelle-v1
+
       - name: "(1) hg clone Isabelle"
+        if: steps.hgcache.outputs.cache-hit != 'true'
         env:
           HG_URL: https://isabelle.in.tum.de/repos/isabelle
         run: |
           set -uo pipefail
-          echo "--- connectivity probe ---"
-          getent hosts isabelle.in.tum.de || true
-          curl -sS -o /dev/null -w 'capabilities: HTTP %{http_code} in %{time_total}s\n' \
+          # isabelle.in.tum.de has BOTH an A and an AAAA record, but on the runner
+          # getaddrinfo returns the AAAA first and that path is dead (instant RST /
+          # truncated responses).  Pin the A record in /etc/hosts => IPv4 only.
+          echo "--- DNS as the runner sees it ---"
+          getent ahosts isabelle.in.tum.de || true
+          IPV4=$(getent ahostsv4 isabelle.in.tum.de | awk '{print $1; exit}')
+          echo "pinning isabelle.in.tum.de -> $IPV4 (IPv4)"
+          echo "$IPV4 isabelle.in.tum.de" | sudo tee -a /etc/hosts
+          curl -4 -sS -o /dev/null -w 'capabilities: HTTP %{http_code} in %{time_total}s\n' \
             "$HG_URL?cmd=capabilities" || echo "curl rc=$?"
 
-          ok=0
-          for attempt in 1 2 3; do
+          clone_try() {  # $1 = extra hg flags
             rm -rf "$ISA_SRC"
+            hg clone $1 "$HG_URL" "$ISA_SRC"
+          }
+          ok=0
+          for attempt in 1 2 3 4 5; do
             echo "=== stream clone attempt $attempt ==="
-            if hg clone --stream "$HG_URL" "$ISA_SRC"; then ok=1; break; fi
-            echo "::warning::stream clone attempt $attempt failed"
-            sleep 15
+            if clone_try --stream; then ok=1; break; fi
+            echo "::warning::stream clone attempt $attempt failed"; sleep 20
           done
           if [ "$ok" -ne 1 ]; then
-            echo "::warning::--stream failed 3x; falling back to a regular (bundle) clone"
-            for attempt in 1 2 3; do
-              rm -rf "$ISA_SRC"
+            echo "::warning::--stream failed; falling back to a regular (bundle) clone"
+            for attempt in 1 2 3 4 5; do
               echo "=== plain clone attempt $attempt ==="
-              if hg clone "$HG_URL" "$ISA_SRC"; then ok=1; break; fi
-              echo "::warning::plain clone attempt $attempt failed"
-              sleep 15
+              if clone_try ""; then ok=1; break; fi
+              echo "::warning::plain clone attempt $attempt failed"; sleep 20
             done
           fi
           [ "$ok" -eq 1 ] || { echo "::error::cannot clone $HG_URL"; exit 1; }
+          hg -R "$ISA_SRC" id -r "$RELEASE"
           du -sh "$ISA_SRC/.hg"
+
+      - name: Save hg clone to cache
+        if: steps.hgcache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/isabelle-src
+          key: hg-isabelle-v1
 
       - name: "(2) hg update -r $RELEASE"
         working-directory: ${{ env.ISA_SRC }}

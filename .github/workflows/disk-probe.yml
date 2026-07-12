@@ -230,7 +230,7 @@ jobs:
           }
           Write-Host "===JUNK_DU_END==="
 
-      - name: D: drive probe
+      - name: "D drive probe"
         shell: pwsh
         run: |
           Write-Host "===DDRIVE_BEGIN==="

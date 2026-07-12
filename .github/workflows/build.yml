@@ -588,15 +588,18 @@ jobs:
         shell: bash          # Git-bash; the Isabelle build itself runs under Cygwin bash
     env:
       RELEASE: ${{ inputs.release }}
-      # C: has only ~33 GB free, D: has ~147 GB -> keep every temp byte off C:.
-      TMPDIR: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
-      TMP: ${{ runner.temp }}
     steps:
-      - name: Disk survey
+      - name: "Disk survey + move TEMP off the small C: drive"
         run: |
           wmic logicaldisk get name,freespace,size || true
           echo "RUNNER_TEMP=$RUNNER_TEMP"
+          # C: has only ~33 GB free, D: has ~147 GB -> keep every temp byte off C:.
+          # (job-level `env:` cannot reference the `runner` context, hence GITHUB_ENV)
+          {
+            echo "TMPDIR=$RUNNER_TEMP"
+            echo "TEMP=$RUNNER_TEMP"
+            echo "TMP=$RUNNER_TEMP"
+          } >> "$GITHUB_ENV"
 
       - name: Download the windows .exe from Job A
         uses: actions/download-artifact@v4

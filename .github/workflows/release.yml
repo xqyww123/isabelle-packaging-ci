@@ -1,0 +1,29 @@
+name: release
+
+# PLACEHOLDER -- not implemented yet.
+#
+# Planned (PACKAGING_DESIGN.md §5.1):
+#   call build.yml (Job A: bundles)            <-- DONE, see build.yml
+#   Jobs B-E: native heap builds
+#              ubuntu-latest / ubuntu-24.04-arm / macos-14 / windows-latest
+#              isabelle build -o system_heaps -b HOL,Main   (macOS twice: ML_system_apple=false/true)
+#   Job F:     inject heaps into the bundles (7zz re-wraps the Windows SFX .exe)
+#              -> rattler-build conda packages
+#              -> conda index --no-zst --no-bz2   <-- MANDATORY, see the Cloudflare CDN trap in §3.3
+#              -> rclone sync to R2 (https://conda.qiyuan.me)
+#
+# Secrets already configured on this repo (unused until Job F exists):
+#   CONDA_R2_ACCESS_KEY_ID / CONDA_R2_SECRET_ACCESS_KEY / CONDA_R2_TOKEN_VALUE
+
+on:
+  workflow_dispatch:
+
+jobs:
+  todo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: TODO
+        run: |
+          echo "TODO: release pipeline not implemented yet."
+          echo "Round 1 delivered Job A only (see .github/workflows/build.yml)."
+          echo "Jobs B-F (native heaps, heap injection, conda packaging, R2 publish) are next."

@@ -1,0 +1,250 @@
+name: build
+
+# Reusable workflow: builds the *patched* Isabelle distribution.
+#
+# Job A  (this round)  — ubuntu-latest: source -> patches -> hg commit -> Admin/init
+#                        -> Admin/build_release  -> all 4 platform bundles (NO heaps).
+#                        The Windows .exe is cross-built here on Linux (launch4j/7zz are
+#                        unix-only; see PACKAGING_DESIGN.md §5.0).
+# Job B..F (next round) — per-platform native heap builds + heap injection + conda.
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        description: "Isabelle release name (= hg tag)"
+        type: string
+        default: Isabelle2025-2
+      platforms:
+        description: "platform families for build_release"
+        type: string
+        default: linux,linux_arm,windows,macos
+      min_free_gb:
+        description: "abort-free disk threshold on / (GB); below this we run cleanup"
+        type: number
+        default: 60
+
+jobs:
+  bundles:
+    name: "Job A - bundles (all platforms, no heaps)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      RELEASE: ${{ inputs.release }}
+      PLATFORMS: ${{ inputs.platforms }}
+      ISA_SRC: ${{ github.workspace }}/isabelle-src
+      OUT: ${{ github.workspace }}/out
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - name: Disk assertion (+ cleanup only if needed)
+        run: |
+          set -euo pipefail
+          df -h /
+          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "free on / = ${avail} GB (threshold ${{ inputs.min_free_gb }} GB)"
+          if [ "$avail" -lt "${{ inputs.min_free_gb }}" ]; then
+            echo "::warning::free disk below threshold - running cleanup"
+            t0=$(date +%s)
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                        /usr/local/.ghcup /usr/local/share/powershell \
+                        /usr/share/swift /usr/local/share/chromium \
+                        /opt/hostedtoolcache/CodeQL || true
+            echo "cleanup took $(( $(date +%s) - t0 ))s"
+            df -h /
+            avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+            [ "$avail" -ge 40 ] || { echo "::error::still only ${avail} GB free"; exit 1; }
+          else
+            echo "plenty of space - no cleanup needed"
+          fi
+          # NOTE: /tmp is on the 145G ext4 root disk (not tmpfs) on GitHub runners
+          # => ISABELLE_TMP_PREFIX needs NO override here.  (PACKAGING_DESIGN.md §5.3)
+          echo "--- /tmp filesystem ---"; df -hT /tmp
+
+      - name: Install build deps (mercurial, patch, TeX Live)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mercurial patch curl unzip \
+            texlive-latex-recommended texlive-latex-extra texlive-science \
+            texlive-plain-generic texlive-fonts-recommended latexmk
+          hg --version | head -1
+          patch --version | head -1
+          latexmk --version | head -1
+          kpsewhich stmaryrd.sty
+          java -version 2>&1 | head -1
+
+      - name: "(1) hg clone Isabelle"
+        run: |
+          set -euo pipefail
+          hg clone --stream https://isabelle.in.tum.de/repos/isabelle "$ISA_SRC"
+          du -sh "$ISA_SRC/.hg"
+
+      - name: "(2) hg update -r $RELEASE"
+        working-directory: ${{ env.ISA_SRC }}
+        run: |
+          set -euo pipefail
+          hg update -r "$RELEASE"
+          echo "upstream rev = $(hg id -i)"
+          echo "UPSTREAM_REV=$(hg id -i)" >> "$GITHUB_ENV"
+
+      - name: "(3) Apply my-better-isabelle-prover patches"
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet my-better-isabelle-prover
+          "$RUNNER_TEMP/venv/bin/pip" show my-better-isabelle-prover | sed -n '1,2p'
+          MBI="$RUNNER_TEMP/venv/bin/my-better-isabelle"
+
+          # --- why a shim -------------------------------------------------------
+          # The patch tool keys its patch set off `isabelle version`.  A bare hg
+          # checkout has an EMPTY ISABELLE_IDENTIFIER (lib/scripts/getsettings fills
+          # it in only at release time), so `isabelle version` does NOT print
+          # "Isabelle2025-2" and the tool would bail out with "no patches available".
+          # Rather than mutate the pristine source tree (which build_release later
+          # rewrites anyway), we hand the tool a 5-line shim that answers exactly the
+          # two questions it asks -- `version` and `getenv -b ISABELLE_HOME` -- and
+          # forwards anything else to the real binary.  Tool stays a black box.
+          mkdir -p "$RUNNER_TEMP/shim"
+          cat > "$RUNNER_TEMP/shim/isabelle" <<EOF
+          #!/usr/bin/env bash
+          case "\$1" in
+            version) echo "$RELEASE" ;;
+            getenv)  echo "$ISA_SRC" ;;
+            *) exec "$ISA_SRC/bin/isabelle" "\$@" ;;
+          esac
+          EOF
+          chmod +x "$RUNNER_TEMP/shim/isabelle"
+
+          # --no-build: scala_build happens inside build_release stage 1 anyway.
+          "$MBI" --isabelle-bin "$RUNNER_TEMP/shim/isabelle" patch --no-build
+          echo "--- status ---"
+          "$MBI" --isabelle-bin "$RUNNER_TEMP/shim/isabelle" status
+
+      - name: "(3b) Verify patches really landed in the source tree"
+        working-directory: ${{ env.ISA_SRC }}
+        run: |
+          set -euo pipefail
+          echo "--- hg status (should list exactly the patched files) ---"
+          hg status
+          echo "--- markers ---"
+          grep -n "register_thy"      src/Pure/Thy/thy_info.ML          | head -3
+          grep -n "cancel_execution"  src/Pure/PIDE/protocol.scala      | head -3
+          grep -n "theory_status"     src/Tools/VSCode/src/lsp.scala    | head -3
+          grep -n "map_syn"           src/Pure/sign.ML                  | head -3
+          n=$(hg status -m | wc -l)
+          echo "modified files = $n"
+          [ "$n" -eq 12 ] || { echo "::error::expected 12 modified files, got $n"; exit 1; }
+
+      - name: "(4) hg commit the patches  <-- without this, build_release drops them"
+        working-directory: ${{ env.ISA_SRC }}
+        run: |
+          set -euo pipefail
+          hg addremove -S
+          hg commit -u ci -m "our patches (my-better-isabelle-prover)"
+          REV=$(hg id -i)
+          echo "patched rev = $REV  (parent = $UPSTREAM_REV)"
+          echo "PATCHED_REV=$REV" >> "$GITHUB_ENV"
+          hg log -r . --template '{node|short} {desc}\n{parents}\n'
+
+      - name: "(5) Bootstrap: Admin/init"
+        working-directory: ${{ env.ISA_SRC }}
+        run: |
+          set -euo pipefail
+          # Admin/init = `bin/isabelle components -I` -> `components -a` -> scala_build.
+          # NOTE: running `components -a` alone is a no-op; the -I must come first.
+          ./Admin/init
+          ./bin/isabelle version
+          ./bin/isabelle getenv ISABELLE_HOME ML_IDENTIFIER
+
+      - name: "(6) Admin/build_release  (all platforms, NO -b => no heaps)"
+        working-directory: ${{ env.ISA_SRC }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT"
+          # NO -b !  Heaps cannot be cross-built (PACKAGING_DESIGN.md §5.0 rule 2);
+          # they are produced natively per platform in Jobs B-E (next round).
+          set +e
+          ./Admin/build_release -D "$OUT" -r "$PATCHED_REV" -R "$RELEASE" -p "$PLATFORMS"
+          rc=$?
+          set -e
+          echo "BUILD_RELEASE_EXIT=$rc"
+          df -h /
+          exit $rc
+
+      - name: "(7) Products"
+        run: |
+          set -euo pipefail
+          find "$OUT" -maxdepth 2 -mindepth 1 | sort
+          echo "--- dist dir ---"
+          ls -l "$OUT/dist-$RELEASE"
+          echo "--- sizes ---"
+          du -h "$OUT/dist-$RELEASE"/* | sort -h
+
+      - name: "(8) Verify: ISABELLE_ID, patched isabelle.jar, Windows .exe"
+        run: |
+          set -euo pipefail
+          DIST="$OUT/dist-$RELEASE"
+          fail=0
+
+          echo "===== every bundle present and non-trivial ====="
+          for f in "$RELEASE.tar.gz" "${RELEASE}_linux.tar.gz" "${RELEASE}_linux_arm.tar.gz" \
+                   "${RELEASE}_macos.tar.gz" "$RELEASE.exe"; do
+            if [ -f "$DIST/$f" ]; then
+              sz=$(stat -c %s "$DIST/$f")
+              printf '  OK    %-32s %s (%s bytes)\n' "$f" "$(du -h "$DIST/$f" | cut -f1)" "$sz"
+              [ "$sz" -gt 100000000 ] || { echo "::error::$f suspiciously small"; fail=1; }
+            else
+              echo "::error::MISSING $f"; fail=1
+            fi
+          done
+
+          echo "===== the .exe is a real PE binary (cross-built on Linux!) ====="
+          file "$DIST/$RELEASE.exe"
+
+          echo "===== unpack the linux bundle ====="
+          mkdir -p "$RUNNER_TEMP/verify"
+          tar xzf "$DIST/${RELEASE}_linux.tar.gz" -C "$RUNNER_TEMP/verify"
+          ISA="$RUNNER_TEMP/verify/$RELEASE"
+
+          echo "--- etc/ISABELLE_ID must equal our patch commit $PATCHED_REV ---"
+          got=$(cat "$ISA/etc/ISABELLE_ID")
+          echo "etc/ISABELLE_ID = $got"
+          [ "$got" = "$PATCHED_REV" ] || { echo "::error::ISABELLE_ID != $PATCHED_REV"; fail=1; }
+          echo "bin/isabelle version -> $("$ISA/bin/isabelle" version || true)"
+
+          echo "--- patches present in the shipped SOURCE ---"
+          grep -c "register_thy"     "$ISA/src/Pure/Thy/thy_info.ML"
+          grep -c "cancel_execution" "$ISA/src/Pure/PIDE/protocol.scala"
+
+          echo "--- patches COMPILED into lib/classes/isabelle.jar ---"
+          ls -l "$ISA/lib/classes/isabelle.jar"
+          unzip -p "$ISA/lib/classes/isabelle.jar" \
+            | grep -a -o -E 'theory_status|command_at_position|output_at_position|cancel_execution' \
+            | sort | uniq -c
+          for sym in theory_status command_at_position output_at_position cancel_execution; do
+            if unzip -p "$ISA/lib/classes/isabelle.jar" | grep -qa "$sym"; then
+              echo "  OK    $sym found in isabelle.jar"
+            else
+              echo "::error::$sym NOT in isabelle.jar"; fail=1
+            fi
+          done
+
+          echo "--- no heaps in this bundle (expected: heaps built natively in Jobs B-E) ---"
+          ls -R "$ISA/heaps" 2>/dev/null | head -20 || echo "  (no heaps/ dir)"
+
+          rm -rf "$RUNNER_TEMP/verify"
+          exit $fail
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundles-noheap
+          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

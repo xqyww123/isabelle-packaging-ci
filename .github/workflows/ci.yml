@@ -1,0 +1,23 @@
+name: ci
+
+# Continuous integration: build the patched Isabelle bundles on every push / PR.
+# Does NOT touch the conda channel -- publishing lives in release.yml.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'probe.py', '.github/workflows/*-probe.yml']
+  pull_request:
+    paths-ignore: ['**.md', 'probe.py', '.github/workflows/*-probe.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      release: Isabelle2025-2
+      platforms: linux,linux_arm,windows,macos

@@ -8,6 +8,76 @@ on:
       - '.github/workflows/macos-probe.yml'
 
 jobs:
+  # Does the Intel image still exist at all?
+  macos13-exists:
+    runs-on: macos-13
+    timeout-minutes: 10
+    steps:
+      - run: |
+          uname -m
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
+          sysctl -n hw.ncpu hw.memsize
+          df -h /
+
+  # Replicate Admin/build_release build_heaps: HOL heap twice on ONE runner.
+  hol-heaps:
+    runs-on: macos-14
+    timeout-minutes: 350
+    steps:
+      - name: Download + extract Isabelle
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          curl -f -L --retry 5 --retry-delay 10 -o isa.tar.gz \
+            "https://dist.isabelle.cit.tum.de/dist/Isabelle2025-2_macos.tar.gz?token=Isabelle"
+          mkdir -p isa && tar -xzf isa.tar.gz -C isa && rm isa.tar.gz
+          BIN=$(find "$RUNNER_TEMP/isa" -maxdepth 6 -type f -path '*/bin/isabelle' | head -1)
+          IH=$(dirname "$(dirname "$BIN")")
+          echo "ISABELLE_HOME=$IH" >> "$GITHUB_ENV"
+          df -h /
+
+      - name: Drop shipped heaps (force real rebuild)
+        run: |
+          set -e
+          rm -rf "$ISABELLE_HOME/heaps"
+          ls -la "$ISABELLE_HOME" | head
+
+      - name: HOL heap - ML_system_apple=false (x86_64, via Rosetta)
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          PREF="$("$IH/bin/isabelle" getenv -b ISABELLE_HOME_USER)/etc"
+          mkdir -p "$PREF"
+          echo "ML_system_apple = false" > "$PREF/preferences"
+          echo "===HOL_X86_BEGIN==="
+          date
+          time "$IH/bin/isabelle" build -o parallel_proofs=0 -o system_heaps -b -- HOL 2>&1 | tail -25
+          echo "HOL_X86_EXIT=${PIPESTATUS[0]}"
+          date
+          echo "===HOL_X86_END==="
+          ls -la "$IH"/heaps/*/
+          df -h /
+          vm_stat | head -5
+
+      - name: HOL heap - ML_system_apple=true (arm64 native)
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          PREF="$("$IH/bin/isabelle" getenv -b ISABELLE_HOME_USER)/etc"
+          echo "ML_system_apple = true" > "$PREF/preferences"
+          echo "===HOL_ARM_BEGIN==="
+          date
+          time "$IH/bin/isabelle" build -o parallel_proofs=0 -o system_heaps -b -- HOL 2>&1 | tail -25
+          echo "HOL_ARM_EXIT=${PIPESTATUS[0]}"
+          date
+          echo "===HOL_ARM_END==="
+          echo "===HOL_VERDICT_BEGIN==="
+          find "$IH/heaps" -maxdepth 2 | sort
+          for f in "$IH"/heaps/*/HOL; do [ -f "$f" ] && { ls -la "$f"; shasum -a 256 "$f"; }; done
+          df -h /
+          echo "===HOL_VERDICT_END==="
+
   probe:
     runs-on: macos-14
     timeout-minutes: 90

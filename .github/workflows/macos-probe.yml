@@ -1,0 +1,208 @@
+name: macos-probe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/macos-probe.yml'
+
+jobs:
+  probe:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Q1a - runner basics
+        run: |
+          set -x
+          uname -a
+          uname -m
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
+          sysctl -n hw.ncpu hw.memsize
+          df -h /
+          df -h "$RUNNER_TEMP" || true
+          echo "RUNNER_TEMP=$RUNNER_TEMP"
+          xcode-select -p || true
+
+      - name: Q1b - Rosetta 2 present?
+        run: |
+          echo "===ROSETTA_BEGIN==="
+          set +e
+          echo "--- pgrep oahd ---"
+          pgrep -l oahd; echo "pgrep_exit=$?"
+          echo "--- ls /Library/Apple/usr/libexec/oah ---"
+          ls -la /Library/Apple/usr/libexec/oah 2>&1
+          echo "--- arch -x86_64 /usr/bin/true ---"
+          /usr/bin/arch -x86_64 /usr/bin/true; echo "arch_true_exit=$?"
+          echo "--- arch -x86_64 /usr/bin/uname -m ---"
+          /usr/bin/arch -x86_64 /usr/bin/uname -m; echo "arch_uname_exit=$?"
+          echo "ROSETTA_OK_INITIAL=$?"
+          echo "===ROSETTA_END==="
+
+      - name: Q1c - try installing Rosetta if missing
+        run: |
+          set +e
+          /usr/bin/arch -x86_64 /usr/bin/true
+          if [ $? -eq 0 ]; then
+            echo "ROSETTA already works -> skip install"
+            echo "ROSETTA_STATUS=preinstalled" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "===ROSETTA_INSTALL_BEGIN==="
+          sudo softwareupdate --install-rosetta --agree-to-license 2>&1
+          echo "install_exit=$?"
+          echo "--- retest ---"
+          /usr/bin/arch -x86_64 /usr/bin/uname -m; echo "retest_exit=$?"
+          pgrep -l oahd
+          echo "===ROSETTA_INSTALL_END==="
+          /usr/bin/arch -x86_64 /usr/bin/true
+          if [ $? -eq 0 ]; then echo "ROSETTA_STATUS=installed_in_ci" >> "$GITHUB_ENV";
+          else echo "ROSETTA_STATUS=unavailable" >> "$GITHUB_ENV"; fi
+
+      - name: Q2a - download Isabelle2025-2_macos.tar.gz
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          ok=0
+          for u in \
+            "https://dist.isabelle.cit.tum.de/dist/Isabelle2025-2_macos.tar.gz" \
+            "https://isabelle.in.tum.de/dist/Isabelle2025-2_macos.tar.gz" ; do
+            echo "Trying $u"
+            if curl -f -L --retry 5 --retry-delay 10 -o isa.tar.gz "$u"; then
+              sz=$(stat -f%z isa.tar.gz)
+              echo "downloaded size=$sz"
+              if [ "$sz" -gt 100000000 ]; then ok=1; break; fi
+            fi
+          done
+          [ "$ok" = 1 ] || { echo "download failed"; exit 1; }
+          ls -la isa.tar.gz
+          shasum -a 256 isa.tar.gz
+
+      - name: Q2b - extract + locate ISABELLE_HOME
+        run: |
+          set -e
+          cd "$RUNNER_TEMP"
+          mkdir -p isa
+          time tar -xzf isa.tar.gz -C isa
+          echo "--- top level ---"
+          ls -la isa
+          BIN=$(find "$RUNNER_TEMP/isa" -maxdepth 6 -type f -path '*/bin/isabelle' | head -1)
+          echo "bin/isabelle = $BIN"
+          [ -n "$BIN" ] || { echo "no bin/isabelle found"; find "$RUNNER_TEMP/isa" -maxdepth 4 | head -60; exit 1; }
+          IH=$(dirname "$(dirname "$BIN")")
+          echo "ISABELLE_HOME=$IH"
+          echo "ISABELLE_HOME=$IH" >> "$GITHUB_ENV"
+          echo "--- quarantine attrs? ---"
+          xattr -l "$BIN" || true
+          df -h /
+
+      - name: Q3 - inspect contrib platform dirs (polyml / jdk / etc)
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          echo "===CONTRIB_BEGIN==="
+          echo "--- contrib listing ---"
+          ls "$IH/contrib"
+          for c in "$IH"/contrib/polyml-* "$IH"/contrib/jdk* "$IH"/contrib/z3-* "$IH"/contrib/e-* "$IH"/contrib/scala-*; do
+            [ -d "$c" ] || continue
+            echo "### $c"
+            ls "$c"
+          done
+          echo "--- ALL darwin platform dirs under contrib (depth 3) ---"
+          find "$IH/contrib" -maxdepth 3 -type d \( -name '*darwin*' -o -name '*x86_64-linux*' \) | sort
+          echo "--- polyml binaries: file(1) on each poly ---"
+          for p in $(find "$IH/contrib" -maxdepth 4 -type f -name 'poly' -perm +111); do
+            echo "### $p"; file "$p"; lipo -archs "$p" 2>/dev/null
+          done
+          echo "===CONTRIB_END==="
+
+      - name: Q3b - do the two poly binaries actually RUN here?
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          echo "===POLY_RUN_BEGIN==="
+          for p in $(find "$IH/contrib" -maxdepth 4 -type f -name 'poly' -perm +111); do
+            echo "### running: $p -v"
+            "$p" -v 2>&1 | head -5
+            echo "exit=$?"
+          done
+          echo "===POLY_RUN_END==="
+
+      - name: Q4 - shipped heaps + settings + apple option
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          echo "===HEAPS_SHIPPED_BEGIN==="
+          echo "--- $IH/heaps ---"
+          ls -la "$IH/heaps" 2>&1
+          for d in "$IH"/heaps/*/; do echo "### $d"; ls -la "$d" | head -20; done
+          echo "===HEAPS_SHIPPED_END==="
+          echo "--- ML_system_apple option ---"
+          "$IH/bin/isabelle" options -l 2>&1 | grep -i -E 'apple|ml_system'
+          echo "--- default getenv ---"
+          "$IH/bin/isabelle" getenv ML_IDENTIFIER ML_PLATFORM ML_HOME ML_OPTIONS ISABELLE_PLATFORM64 ISABELLE_APPLE_PLATFORM64 ISABELLE_HOME_USER
+          echo "--- getenv with apple=false ---"
+          "$IH/bin/isabelle" getenv -o ML_system_apple=false ML_IDENTIFIER ML_PLATFORM ML_HOME 2>&1 || \
+            ISABELLE_ML_SYSTEM_APPLE=false "$IH/bin/isabelle" getenv ML_IDENTIFIER ML_PLATFORM ML_HOME
+          echo "--- isabelle getenv -a | grep -i apple ---"
+          "$IH/bin/isabelle" getenv -a 2>&1 | grep -i -E 'apple|POLYML|ML_' | head -40
+
+      - name: Q5a - build Pure with ML_system_apple=FALSE (x86_64-darwin)
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          echo "===BUILD_X86_BEGIN==="
+          time "$IH/bin/isabelle" build -f -v -o system_heaps -o ML_system_apple=false -b Pure 2>&1
+          echo "BUILD_X86_EXIT=$?"
+          echo "--- heaps now ---"
+          ls -la "$IH/heaps"
+          echo "===BUILD_X86_END==="
+
+      - name: Q5b - build Pure with ML_system_apple=TRUE (arm64-darwin)
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          echo "===BUILD_ARM_BEGIN==="
+          time "$IH/bin/isabelle" build -f -v -o system_heaps -o ML_system_apple=true -b Pure 2>&1
+          echo "BUILD_ARM_EXIT=$?"
+          echo "--- heaps now ---"
+          ls -la "$IH/heaps"
+          echo "===BUILD_ARM_END==="
+
+      - name: Q6 - VERDICT - two heaps on one runner?
+        if: always()
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          echo "===VERDICT_BEGIN==="
+          echo "--- heaps tree ---"
+          find "$IH/heaps" -maxdepth 2 | sort
+          echo "--- Pure heap files ---"
+          for f in "$IH"/heaps/*/Pure; do
+            [ -f "$f" ] || continue
+            echo "### $f"
+            ls -la "$f"
+            shasum -a 256 "$f"
+            file "$f"
+          done
+          echo "--- count of ML_IDENTIFIER dirs containing Pure ---"
+          ls -d "$IH"/heaps/*/ 2>/dev/null | wc -l
+          echo "ROSETTA_STATUS=$ROSETTA_STATUS"
+          echo "===VERDICT_END==="
+
+      - name: Q7 - sanity: run Pure ML under each arch
+        if: always()
+        run: |
+          set +e
+          IH="$ISABELLE_HOME"
+          echo "===MLRUN_BEGIN==="
+          echo "--- apple=false ---"
+          "$IH/bin/isabelle" process -o system_heaps -o ML_system_apple=false -l Pure \
+            -e 'writeln (ML_System.platform ^ " | " ^ ML_System.name)' 2>&1 | tail -5
+          echo "exit=$?"
+          echo "--- apple=true ---"
+          "$IH/bin/isabelle" process -o system_heaps -o ML_system_apple=true -l Pure \
+            -e 'writeln (ML_System.platform ^ " | " ^ ML_System.name)' 2>&1 | tail -5
+          echo "exit=$?"
+          echo "===MLRUN_END==="

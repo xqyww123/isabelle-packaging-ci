@@ -63,6 +63,8 @@ jobs:
           # --s3-no-check-bucket it 403s, and every object's first PUT fails.
           curl -fsSL https://rclone.org/install.sh | sudo bash
           rclone version | head -1
+          # the runner's preinstalled Miniconda is ROOT-owned -- conda install would EACCES
+          sudo chown -R "$(id -u):$(id -g)" "$CONDA"
           $CONDA/bin/conda install -y -n base -c conda-forge conda-index -q
 
       - name: Configure the R2 remote (credentials never touch the disk)

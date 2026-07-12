@@ -922,6 +922,10 @@ jobs:
       - name: "Index a local channel and install linux-64 from it"
         run: |
           set -euo pipefail
+          # The runner's preinstalled Miniconda is ROOT-owned; without this, both the
+          # `conda install` below and the package cache that `conda create` writes to
+          # ($CONDA/pkgs) fail with EACCES.
+          sudo chown -R "$(id -u):$(id -g)" "$CONDA"
           $CONDA/bin/conda install -y -n base -c conda-forge conda-index -q
 
           mkdir -p "$CH/noarch"

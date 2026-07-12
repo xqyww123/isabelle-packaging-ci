@@ -191,7 +191,7 @@ jobs:
           echo "ROSETTA_STATUS=$ROSETTA_STATUS"
           echo "===VERDICT_END==="
 
-      - name: Q7 - sanity: run Pure ML under each arch
+      - name: "Q7 - sanity: run Pure ML under each arch"
         if: always()
         run: |
           set +e

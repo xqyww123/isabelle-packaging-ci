@@ -1,0 +1,355 @@
+name: disk-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Identity
+        run: |
+          echo "===IDENTITY_BEGIN==="
+          echo "matrix.os = ${{ matrix.os }}"
+          uname -a
+          cat /etc/os-release | head -3
+          echo "arch = $(dpkg --print-architecture)"
+          echo "===IDENTITY_END==="
+
+      - name: CPU / memory
+        run: |
+          echo "===CPU_MEM_BEGIN==="
+          echo "nproc = $(nproc)"
+          free -h
+          echo "--- swap ---"
+          swapon --show || echo "(no swap)"
+          echo "===CPU_MEM_END==="
+
+      - name: Disk layout (df -h, all mounts)
+        run: |
+          echo "===DF_ALL_BEGIN==="
+          df -h
+          echo "--- df -h -T (with fs types) ---"
+          df -h -T
+          echo "--- lsblk ---"
+          lsblk || true
+          echo "===DF_ALL_END==="
+
+      - name: Where do the temp dirs live?
+        run: |
+          echo "===TEMPDIRS_BEGIN==="
+          echo "RUNNER_TEMP     = $RUNNER_TEMP"
+          echo "RUNNER_WORKSPACE= $RUNNER_WORKSPACE"
+          echo "GITHUB_WORKSPACE= $GITHUB_WORKSPACE"
+          echo "TMPDIR          = ${TMPDIR:-<unset>}"
+          echo "HOME            = $HOME"
+          for d in "$RUNNER_TEMP" "$GITHUB_WORKSPACE" /tmp "$HOME" / /mnt /var/lib/docker; do
+            if [ -e "$d" ]; then
+              echo "---- $d ----"
+              df -h "$d" | tail -1
+              echo "   mountpoint: $(df --output=target "$d" | tail -1)"
+              echo "   avail(K)  : $(df -k --output=avail "$d" | tail -1 | tr -d ' ')"
+            else
+              echo "---- $d ---- DOES NOT EXIST"
+            fi
+          done
+          echo "===TEMPDIRS_END==="
+
+      - name: /mnt probe (writability + size)
+        run: |
+          echo "===MNT_BEGIN==="
+          if [ -d /mnt ]; then
+            ls -la /mnt
+            df -h /mnt
+            echo "--- try to write as non-root (runner user) ---"
+            if mkdir -p /mnt/isabelle-tmp-test 2>/dev/null; then
+              echo "mkdir /mnt/... WITHOUT sudo: OK"
+            else
+              echo "mkdir /mnt/... WITHOUT sudo: FAILED (need sudo)"
+              sudo mkdir -p /mnt/isabelle-tmp-test && sudo chown "$(id -u):$(id -g)" /mnt/isabelle-tmp-test \
+                && echo "with sudo + chown: OK"
+            fi
+            dd if=/dev/zero of=/mnt/isabelle-tmp-test/probe.bin bs=1M count=2048 status=none && \
+              echo "wrote 2GiB to /mnt OK" && ls -lh /mnt/isabelle-tmp-test/probe.bin
+            df -h /mnt
+            rm -rf /mnt/isabelle-tmp-test
+          else
+            echo "/mnt DOES NOT EXIST on this runner"
+          fi
+          echo "===MNT_END==="
+
+      - name: Size of preinstalled junk (du, BEFORE deleting)
+        run: |
+          echo "===JUNK_DU_BEGIN==="
+          for d in \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/share/boost \
+            /usr/local/share/powershell \
+            /usr/local/share/chromium \
+            /usr/local/lib/node_modules \
+            /opt/hostedtoolcache \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/lib/jvm \
+            /usr/share/swift \
+            /usr/share/miniconda \
+            /var/lib/docker \
+            /usr/local/julia* \
+            /usr/lib/google-cloud-sdk \
+            /usr/local/aws-cli \
+            /opt/az \
+            /usr/share/az_* \
+            /snap ; do
+            if [ -e $d ] 2>/dev/null; then
+              echo "$(sudo du -sh $d 2>/dev/null | cut -f1)	$d"
+            else
+              echo "-	$d (absent)"
+            fi
+          done
+          echo "--- docker images ---"
+          docker image ls -a || true
+          echo "--- total df BEFORE cleanup ---"
+          df -h /
+          echo "===JUNK_DU_END==="
+
+      - name: Reclaim space (manual rm -rf) and measure per-step
+        run: |
+          echo "===CLEANUP_BEGIN==="
+          avail0=$(df -k --output=avail / | tail -1 | tr -d ' ')
+          prev=$avail0
+          report() {
+            cur=$(df -k --output=avail / | tail -1 | tr -d ' ')
+            d=$(( (cur - prev) / 1024 ))
+            tot=$(( (cur - avail0) / 1024 ))
+            printf 'STEP %-28s freed %6d MiB   (cumulative %6d MiB, avail now %d MiB)\n' "$1" "$d" "$tot" "$((cur/1024))"
+            prev=$cur
+          }
+          echo "avail at start: $((avail0/1024)) MiB"
+          sudo rm -rf /usr/share/dotnet;              report dotnet
+          sudo rm -rf /usr/local/lib/android;         report android
+          sudo rm -rf /opt/ghc /usr/local/.ghcup;     report haskell
+          sudo rm -rf /usr/local/share/boost;         report boost
+          sudo rm -rf /opt/hostedtoolcache/CodeQL;    report codeql
+          sudo rm -rf /usr/local/share/powershell;    report powershell
+          sudo rm -rf /usr/local/share/chromium /usr/local/share/edge_driver /usr/local/share/gecko_driver || true
+          report browsers
+          sudo rm -rf /usr/share/swift;               report swift
+          sudo rm -rf /usr/share/miniconda;           report miniconda
+          sudo rm -rf /usr/lib/google-cloud-sdk /usr/local/aws-cli /opt/az; report cloud-clis
+          docker rmi -f $(docker image ls -aq) 2>/dev/null || true
+          sudo rm -rf /var/lib/docker;                report docker
+          sudo apt-get remove -y -qq '^llvm-.*' '^mongodb-.*' '^mysql-.*' azure-cli google-chrome-stable firefox powershell mono-devel > /dev/null 2>&1 || true
+          sudo apt-get autoremove -y -qq > /dev/null 2>&1 || true
+          sudo apt-get clean
+          report apt-purge
+          echo "--- df AFTER cleanup ---"
+          df -h
+          echo "TOTAL RECLAIMED ON / : $(( ( $(df -k --output=avail / | tail -1 | tr -d ' ') - avail0 ) / 1024 )) MiB"
+          echo "===CLEANUP_END==="
+
+      - name: Post-cleanup summary
+        run: |
+          echo "===SUMMARY_BEGIN==="
+          echo "matrix.os = ${{ matrix.os }}"
+          echo "root avail  : $(df -h --output=avail / | tail -1 | tr -d ' ')"
+          echo "/mnt avail  : $( [ -d /mnt ] && df -h --output=avail /mnt | tail -1 | tr -d ' ' || echo N/A )"
+          echo "tmp avail   : $(df -h --output=avail /tmp | tail -1 | tr -d ' ')"
+          echo "RUNNER_TEMP avail: $(df -h --output=avail "$RUNNER_TEMP" | tail -1 | tr -d ' ')"
+          df -h
+          echo "===SUMMARY_END==="
+
+  probe-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Identity / CPU / memory
+        shell: pwsh
+        run: |
+          Write-Host "===IDENTITY_BEGIN==="
+          [System.Environment]::OSVersion | Format-List
+          Write-Host "NUMBER_OF_PROCESSORS = $env:NUMBER_OF_PROCESSORS"
+          Get-CimInstance Win32_ComputerSystem | Select-Object TotalPhysicalMemory,NumberOfLogicalProcessors | Format-List
+          Write-Host "===IDENTITY_END==="
+
+      - name: Disk layout
+        shell: pwsh
+        run: |
+          Write-Host "===DF_ALL_BEGIN==="
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name,Used,Free,Root -AutoSize
+          Write-Host "--- Win32_LogicalDisk (bytes) ---"
+          Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,VolumeName,DriveType,
+            @{n='SizeGB';e={[math]::Round($_.Size/1GB,2)}},
+            @{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,2)}} | Format-Table -AutoSize
+          Write-Host "===DF_ALL_END==="
+
+      - name: Where do the temp dirs live?
+        shell: pwsh
+        run: |
+          Write-Host "===TEMPDIRS_BEGIN==="
+          Write-Host "RUNNER_TEMP      = $env:RUNNER_TEMP"
+          Write-Host "GITHUB_WORKSPACE = $env:GITHUB_WORKSPACE"
+          Write-Host "TEMP             = $env:TEMP"
+          Write-Host "TMP              = $env:TMP"
+          Write-Host "USERPROFILE      = $env:USERPROFILE"
+          foreach ($p in @($env:RUNNER_TEMP, $env:GITHUB_WORKSPACE, $env:TEMP, $env:USERPROFILE, "C:\", "D:\")) {
+            if ($p -and (Test-Path $p)) {
+              $root = [System.IO.Path]::GetPathRoot((Resolve-Path $p).Path)
+              $d = Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq $root.TrimEnd('\') }
+              Write-Host ("{0,-45} -> drive {1}  free {2} GB" -f $p, $root, [math]::Round($d.FreeSpace/1GB,2))
+            } else {
+              Write-Host ("{0,-45} -> ABSENT" -f $p)
+            }
+          }
+          Write-Host "===TEMPDIRS_END==="
+
+      - name: Size of preinstalled junk
+        shell: pwsh
+        run: |
+          Write-Host "===JUNK_DU_BEGIN==="
+          $paths = @(
+            "C:\Android","C:\Program Files\dotnet","C:\Program Files (x86)\Android",
+            "C:\hostedtoolcache\windows","C:\Program Files\Microsoft Visual Studio",
+            "C:\ghcup","C:\Program Files\Java","C:\Miniconda","C:\Program Files\MongoDB",
+            "C:\Program Files\PostgreSQL","C:\Program Files\Google\Chrome","C:\Rust",
+            "C:\Program Files\Microsoft SDKs","C:\Strawberry","C:\SeleniumWebDrivers"
+          )
+          foreach ($p in $paths) {
+            if (Test-Path $p) {
+              $sz = (Get-ChildItem $p -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+              Write-Host ("{0,8:N0} MB  {1}" -f ($sz/1MB), $p)
+            } else {
+              Write-Host ("       -   {0} (absent)" -f $p)
+            }
+          }
+          Write-Host "===JUNK_DU_END==="
+
+      - name: D: drive probe
+        shell: pwsh
+        run: |
+          Write-Host "===DDRIVE_BEGIN==="
+          if (Test-Path "D:\") {
+            Get-ChildItem "D:\" -Force | Format-Table Name,Length
+            New-Item -ItemType Directory -Force -Path "D:\isatmp" | Out-Null
+            $f = "D:\isatmp\probe.bin"
+            $fs = [System.IO.File]::Create($f)
+            $fs.SetLength(2GB)
+            $fs.Close()
+            Write-Host "wrote 2GB sparse-ish file to D: OK"
+            Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq "D:" } |
+              Select-Object DeviceID,@{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,2)}} | Format-List
+            Remove-Item $f -Force
+          } else {
+            Write-Host "NO D: DRIVE"
+          }
+          Write-Host "===DDRIVE_END==="
+
+      - name: Cleanup measurement (delete Android SDK + .NET + VS)
+        shell: pwsh
+        run: |
+          Write-Host "===CLEANUP_BEGIN==="
+          function FreeMB { (Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID -eq "C:" }).FreeSpace / 1MB }
+          $a0 = FreeMB; $prev = $a0
+          Write-Host ("free at start: {0:N0} MB" -f $a0)
+          function Report($name) {
+            $cur = FreeMB
+            Write-Host ("STEP {0,-22} freed {1,8:N0} MB   (cumulative {2,8:N0} MB, free now {3:N0} MB)" -f $name, ($cur - $script:prev), ($cur - $script:a0), $cur)
+            $script:prev = $cur
+          }
+          $script:a0 = $a0; $script:prev = $prev
+          Remove-Item -Recurse -Force "C:\Android" -ErrorAction SilentlyContinue; Report "Android"
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue; Report "dotnet"
+          Remove-Item -Recurse -Force "C:\Program Files\Microsoft Visual Studio" -ErrorAction SilentlyContinue; Report "VisualStudio"
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows\Ruby","C:\hostedtoolcache\windows\go","C:\hostedtoolcache\windows\node","C:\hostedtoolcache\windows\CodeQL" -ErrorAction SilentlyContinue; Report "hostedtoolcache"
+          Remove-Item -Recurse -Force "C:\Program Files\MongoDB","C:\Program Files\PostgreSQL","C:\Strawberry" -ErrorAction SilentlyContinue; Report "db+perl"
+          Write-Host "--- final ---"
+          Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID,
+            @{n='SizeGB';e={[math]::Round($_.Size/1GB,2)}},
+            @{n='FreeGB';e={[math]::Round($_.FreeSpace/1GB,2)}} | Format-Table -AutoSize
+          Write-Host "===CLEANUP_END==="
+
+  probe-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Identity / CPU / memory
+        run: |
+          echo "===IDENTITY_BEGIN==="
+          uname -a
+          sw_vers
+          echo "nproc(sysctl hw.ncpu) = $(sysctl -n hw.ncpu)"
+          echo "memsize = $(( $(sysctl -n hw.memsize) / 1024 / 1024 )) MiB"
+          echo "arch = $(uname -m)"
+          echo "===IDENTITY_END==="
+
+      - name: Disk layout
+        run: |
+          echo "===DF_ALL_BEGIN==="
+          df -h
+          echo "--- diskutil list ---"
+          diskutil list || true
+          echo "===DF_ALL_END==="
+
+      - name: Where do the temp dirs live?
+        run: |
+          echo "===TEMPDIRS_BEGIN==="
+          echo "RUNNER_TEMP      = $RUNNER_TEMP"
+          echo "GITHUB_WORKSPACE = $GITHUB_WORKSPACE"
+          echo "TMPDIR           = ${TMPDIR:-<unset>}"
+          echo "HOME             = $HOME"
+          for d in "$RUNNER_TEMP" "$GITHUB_WORKSPACE" "${TMPDIR:-/tmp}" /tmp "$HOME" / ; do
+            echo "---- $d ----"
+            df -h "$d" | tail -1
+          done
+          echo "===TEMPDIRS_END==="
+
+      - name: Size of preinstalled junk
+        run: |
+          echo "===JUNK_DU_BEGIN==="
+          for d in \
+            /Applications/Xcode*.app \
+            /Users/runner/Library/Android \
+            /Users/runner/hostedtoolcache \
+            /usr/local/lib/node_modules \
+            /opt/homebrew \
+            /usr/local/Homebrew \
+            /Library/Developer/CoreSimulator ; do
+            if [ -e $d ] 2>/dev/null; then
+              echo "$(sudo du -sh -d0 $d 2>/dev/null | tail -1)"
+            else
+              echo "-	$d (absent)"
+            fi
+          done
+          echo "--- df BEFORE ---"
+          df -h /
+          echo "===JUNK_DU_END==="
+
+      - name: Reclaim space (delete extra Xcodes + simulators)
+        run: |
+          echo "===CLEANUP_BEGIN==="
+          avail0=$(df -k / | tail -1 | awk '{print $4}')
+          echo "avail at start: $((avail0/1024)) MiB"
+          sudo rm -rf /Users/runner/Library/Android 2>/dev/null || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes 2>/dev/null || true
+          keep=$(ls -d /Applications/Xcode*.app 2>/dev/null | tail -1)
+          echo "keeping $keep"
+          for x in /Applications/Xcode*.app; do
+            [ "$x" = "$keep" ] && continue
+            echo "removing $x"
+            sudo rm -rf "$x"
+          done
+          cur=$(df -k / | tail -1 | awk '{print $4}')
+          echo "TOTAL RECLAIMED: $(( (cur - avail0) / 1024 )) MiB"
+          echo "--- df AFTER ---"
+          df -h
+          echo "===CLEANUP_END==="

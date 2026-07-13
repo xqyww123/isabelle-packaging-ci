@@ -55,6 +55,14 @@ echo "=============================================================="
 # 1. unpack the bundle  ->  $STAGE/<release>/
 # ---------------------------------------------------------------------------
 rm -rf "$STAGE"; mkdir -p "$STAGE"
+# Say so plainly if the bundle is not there.  Otherwise a missing/failed Job A artifact
+# surfaces as a bare `tar: Error is not recoverable: exiting now` (exit 2), which tells
+# whoever reads the CI log nothing about what actually went wrong.
+if [ ! -f "$BUNDLE" ] && [ ! -d "$BUNDLE" ]; then
+  echo "::error::bundle not found: $BUNDLE"
+  echo "          (is the Job A artifact for this platform missing from the download?)"
+  exit 1
+fi
 case "$BUNDLE" in
   *.tar.gz)
     tar xzf "$BUNDLE" -C "$STAGE"
@@ -89,6 +97,71 @@ echo "tree: $TREE"
 if [ -d "$TREE/heaps" ] && [ -n "$(ls -A "$TREE/heaps" 2>/dev/null)" ]; then
   echo "::error::the bundle already contains heaps -- Job A must not pass -b"
   ls -R "$TREE/heaps" | head; exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 1a. Remember the bundle's EMPTY directories, while the tree is still pristine.
+#
+# A conda payload carries FILES ONLY -- no directory entries (measured: 28706
+# entries in our win-64 package, every one of them a regular file).  conda creates
+# a directory only as the parent of some file it is unpacking, so every empty
+# directory in the official bundle silently disappears on install.  For Cygwin that
+# means /tmp, /var/tmp, /dev/shm, /home and the rebase state dirs are simply gone,
+# and every `isabelle` call greets the user with
+#     bash.exe: warning: could not find /tmp
+# We put them back at step 5 by dropping a marker file in each.
+#
+# Recorded HERE, before the obj/ purge below, on purpose: purging obj/ leaves its
+# parent directories empty, and those we do NOT want to resurrect -- they are build
+# scaffolding, and they sit at exactly the deep paths we are trying to shorten.
+# ---------------------------------------------------------------------------
+EMPTY_DIRS="$WORK/empty_dirs.txt"
+( cd "$TREE" && find . -type d -empty | sed 's|^\./||' | sort ) > "$EMPTY_DIRS"
+echo "empty directories in the pristine bundle: $(wc -l < "$EMPTY_DIRS")"
+
+# ---------------------------------------------------------------------------
+# 1b. Drop VSCodium's MSBuild scratch (**/obj/**).
+#
+# node-pty's native addon ships its incremental-build state -- .tlog files and
+# .lastbuildstate -- next to the compiled .node binary.  Nothing reads them at run
+# time; they exist to let MSBuild skip work on a rebuild that will never happen here.
+# They also own the single longest path in the bundle, at 212 characters, which is
+# what actually broke `conda create` on Windows.  The compiled binary itself lives in
+# Release/, not Release/obj/, and stays.
+#
+# We do NOT touch anything else in the Isabelle tree, and VSCodium itself stays --
+# deleting it was considered and rejected: VS Code is the mainstream front end.
+# ---------------------------------------------------------------------------
+n_obj=0
+while IFS= read -r d; do
+  rm -rf "$d"; n_obj=$((n_obj + 1))
+done < <(find "$TREE/contrib" -type d -name obj -path '*vscodium*' 2>/dev/null)
+echo "purged $n_obj VSCodium obj/ directory(ies)"
+
+# ---------------------------------------------------------------------------
+# 1c. Windows: install the real launcher at <ISABELLE_HOME>\bin\isabelle.bat.
+#
+# bin/isabelle is a Cygwin bash script and cmd.exe cannot run it, so without this the
+# package has NO working entry point on Windows: $PREFIX\Scripts\isabelle.bat (written
+# by the recipe) forwards here and would resolve to nothing.
+#
+# Copied BYTE FOR BYTE from windows/isabelle.bat, which was verified on a real Windows
+# VM: it self-locates ISABELLE_HOME from %~dp0.. (so it survives being installed into an
+# arbitrary conda $PREFIX), does not recurse into itself, and detaches a GUI `jedit` into
+# its own hidden console.  Do not "improve" it here.
+#
+# Cygwin needs no help from us: build_release strips the symlinks and leaves an
+# `uninitialized` marker, but the FIRST `isabelle` call restores them by itself --
+# lib/scripts/getsettings:118 runs isabelle.setup.Setup on every invocation, which calls
+# Environment.init -> cygwin_init.  Measured on the VM: 947 symlinks missing before,
+# all present after one `isabelle version` (88s, rc=0), marker gone.  No post-link needed.
+# ---------------------------------------------------------------------------
+if [ "$SUBDIR" = win-64 ]; then
+  BAT="$HERE/../windows/isabelle.bat"
+  [ -f "$BAT" ] || { echo "::error::$BAT is missing -- the win-64 package would have no entry point"; exit 1; }
+  cp "$BAT" "$TREE/bin/isabelle.bat"
+  cmp -s "$BAT" "$TREE/bin/isabelle.bat" || { echo "::error::isabelle.bat was altered in transit"; exit 1; }
+  echo "installed bin/isabelle.bat ($(stat -c %s "$TREE/bin/isabelle.bat") bytes, sha256 $(sha256sum "$TREE/bin/isabelle.bat" | cut -c1-16))"
 fi
 
 # ---------------------------------------------------------------------------
@@ -143,11 +216,95 @@ for hd in "$TREE"/heaps/*/; do
 done
 
 # ---------------------------------------------------------------------------
-# 3. conda package
+# 5. Put the empty directories back (see 1a).
+#
+# conda only creates a directory as the parent of a file it unpacks, so the only way to
+# ship an empty one is to make it non-empty.  A single marker file does that, and unlike
+# a post-link `mkdir` it is TRACKED: it shows up in `conda list --explicit`, and
+# `conda remove` takes it away again (PACKAGING_DESIGN.md §3.1).
+#
+# The markers are dotfiles, and every directory that gets one merely ignores them:
+# Cygwin's /tmp, /home, /dev/shm and /var/tmp are scratch; /etc/fstab.d is looked up by
+# user name; /etc/ssl, /etc/sasl2, /lib/security and /usr/share/pkgconfig are matched by
+# extension or exact name.
+#
+# !! EXCEPT var/lib/rebase/*.d -- do NOT mark those. !!
+# rebaselst builds its work list with
+#     dynPaths="$( find ${db} ${lb} ${ub} -type f | sort -u )"   (cygwin/bin/rebaselst:45)
+# and then `cat`s every file it finds, treating each line as a path to rebase.  `find
+# -type f` matches dotfiles, so a marker there would be read as a DLL list and feed this
+# sentence to rebaseall -- during cygwin_init, on the user's first `isabelle` call.
+# They also do not need us: rebaselst re-creates its own directories if they are absent
+# (`mkdir -p`, rebaselst:12-17), which is exactly why rebaseall succeeded on the Windows
+# VM with all of them missing.
 # ---------------------------------------------------------------------------
-# etc/ISABELLE_ID is the hg changeset of OUR patch commit -- the provenance that
-# goes into the build string (the conda version cannot carry it: '-' is the field
-# separator in name-version-build, and the id is not a version anyway).
+n_dirs=0 n_skip=0
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  case "$d" in
+    */var/lib/rebase/*) n_skip=$((n_skip + 1)); continue ;;
+  esac
+  mkdir -p "$TREE/$d"
+  # only mark it if it is STILL empty -- some of these get filled in by the heap
+  # injection or by the launcher above, and those need no marker.
+  if [ -z "$(ls -A "$TREE/$d" 2>/dev/null)" ]; then
+    printf 'This file exists so that conda ships this otherwise-empty directory.\n' \
+      > "$TREE/$d/.conda-keep"
+    n_dirs=$((n_dirs + 1))
+  fi
+done < "$EMPTY_DIRS"
+echo "restored $n_dirs empty directory(ies) via .conda-keep markers"
+echo "  (skipped $n_skip rebase state dir(s) -- rebaselst re-creates those itself, and a"
+echo "   marker there would be cat'd into rebaseall's DLL list)"
+
+# ---------------------------------------------------------------------------
+# 6. MAX_PATH.  Assert, do not assume.
+#
+# Windows' MAX_PATH is 259 usable characters, LongPathsEnabled is 0 by default on
+# Windows 11, and turning it on needs admin + a reboot.  It cannot be worked around from
+# inside the package either: `conda create` fails while unpacking into the pkgs cache,
+# long before any post-link script could run.  Measured, before the fixes above:
+#     InvalidArchiveError ... node_addon_api_except.lastbuildstate   (262 chars)
+#
+# conda lays the payload down at   <pkgs>\<name>-<version>-<build>\<path-in-package>
+# so what we control is the length of <path-in-package>.  180 leaves room for
+#     C:\Users\<name>\AppData\Local\miniconda3\pkgs\isabelle-2025.2-0\
+# with a user name of up to ~21 characters -- and a Windows local account name maxes out
+# at 20.  So: every normal user installs without touching the registry.
+#
+# This is checked on EVERY platform, not just win-64: the packages are built from one
+# recipe and one script, and a regression that only bites Windows is exactly the kind we
+# would not notice until a user reported it.
+# ---------------------------------------------------------------------------
+# NB: `sed -n 1p`, never `head -1`.  Under `set -o pipefail`, `head` closes the pipe
+# after one line, `sort` (28k lines) dies of SIGPIPE=141, and the whole script exits --
+# silently, right here, with the package never built.  `sed -n` reads its input to the end.
+MAX_REL=180
+path_lengths() {
+  ( cd "$TREE" && find . -mindepth 1 | sed 's|^\./||' \
+      | awk -v p="isa/" '{ print length(p $0), p $0 }' | sort -rn )
+}
+longest=$(path_lengths | sed -n 1p)
+longest_len=${longest%% *}
+longest_path=${longest#* }
+echo "longest path in the package: $longest_len chars (budget $MAX_REL)"
+echo "  $longest_path"
+if [ "$longest_len" -gt "$MAX_REL" ]; then
+  echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit."
+  echo "          Windows (MAX_PATH=259, long paths off by default) will fail to unpack this."
+  echo "          The ten longest:"
+  path_lengths | sed -n 1,10p | while read -r l q; do echo "::error::  $l  $q"; done
+  exit 1
+fi
+echo "  OK: within the $MAX_REL-character budget"
+
+# ---------------------------------------------------------------------------
+# 7. conda package
+# ---------------------------------------------------------------------------
+# etc/ISABELLE_ID is the hg changeset of OUR patch commit.  It no longer goes into the
+# build string (every character there costs us MAX_PATH on Windows -- see recipe.yaml);
+# it is carried in the package's about.description instead, and lives authoritatively
+# in the tree itself at isa/etc/ISABELLE_ID.
 ISA_ID="$(cat "$TREE/etc/ISABELLE_ID" 2>/dev/null || echo unknown)"
 echo "ISABELLE_ID = $ISA_ID"
 

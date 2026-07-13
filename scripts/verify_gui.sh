@@ -51,8 +51,14 @@ export HOME="$GUI_HOME"
 # package went completely unused.  A false pass, and exactly the one this whole step
 # exists to prevent.  Derive the preference from the artifact instead of assuming.
 # ---------------------------------------------------------------------------------
-REL=$(basename "$(ls -d "$ENV_PREFIX"/opt/*/ | head -1)")
-HEAP_ID=$(basename "$(ls -d "$ENV_PREFIX/opt/$REL/heaps/"*/ | head -1)")
+# The tree lives at $PREFIX/isa (NOT $PREFIX/opt/<release>: those 15 characters are
+# charged against Windows' MAX_PATH on every file -- see conda/recipe.yaml).  So the
+# release name can no longer be read off the directory name; take it from the tree,
+# which is where Isabelle itself gets it.  ISABELLE_HOME_USER is ~/.isabelle/$REL.
+ISA_TREE="$ENV_PREFIX/isa"
+[ -d "$ISA_TREE" ] || { echo "::error::no Isabelle tree at $ISA_TREE"; exit 1; }
+REL=$(cat "$ISA_TREE/etc/ISABELLE_IDENTIFIER")
+HEAP_ID=$(basename "$(ls -d "$ISA_TREE/heaps/"*/ | head -1)")
 case "$HEAP_ID" in
   *_32-*) ML64=false ;;
   *)      ML64=true  ;;

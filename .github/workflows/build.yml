@@ -995,16 +995,20 @@ jobs:
           echo "--- conda sees it ---"
           $CONDA/bin/conda list -p "$ENV" isabelle
 
-          echo "--- bin/isabelle is the relative symlink into opt/ ---"
+          echo "--- bin/isabelle is the relative symlink into isa/ ---"
           ls -l "$ENV/bin/isabelle"
 
           echo "--- isabelle version ---"
           isabelle version
 
           echo "--- ISABELLE_HOME must resolve INTO the conda prefix ---"
+          # $PREFIX/isa, not $PREFIX/opt/<release>: those 15 characters are charged
+          # against Windows' MAX_PATH on every file in the package (see conda/recipe.yaml).
+          # Isabelle does not care -- ISABELLE_HOME is derived from bin/isabelle's own
+          # location, never from this directory's name.
           home=$(isabelle getenv -b ISABELLE_HOME)
           echo "ISABELLE_HOME = $home"
-          [ "$home" = "$ENV/opt/$RELEASE" ] || { echo "::error::ISABELLE_HOME is $home, expected $ENV/opt/$RELEASE"; exit 1; }
+          [ "$home" = "$ENV/isa" ] || { echo "::error::ISABELLE_HOME is $home, expected $ENV/isa"; exit 1; }
 
           echo "--- the prebuilt heaps shipped INSIDE the package ---"
           ls -l "$home"/heaps/*/ "$home"/heaps/*/log/

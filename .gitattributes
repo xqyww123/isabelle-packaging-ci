@@ -1,0 +1,3 @@
+# The Windows launcher must ship BYTE FOR BYTE: it is CRLF and was verified as-is
+# on a real Windows VM.  Never let git normalise it.
+*.bat -text

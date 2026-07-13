@@ -27,11 +27,20 @@ package:
 build:
   number: ${{ build_number }}
 
-  # The build string carries the provenance that cannot go into the version:
-  # the exact hg changeset of the patched tree this package was cut from.
-  # Same content twice => same string; CHANGED content => bump ISA_BUILD_NUMBER,
-  # never overwrite a published file (PACKAGING_DESIGN.md §3.3).
-  string: ${{ isabelle_id }}_${{ build_number }}
+  # The build string is JUST the build number -- deliberately.
+  #
+  # It used to be "<hg-changeset>_<number>", which reads better but costs 12 characters
+  # in EVERY installed path, because conda extracts into  pkgs\<name>-<version>-<string>\.
+  # On Windows that is charged against MAX_PATH (259 usable), and the package did not fit:
+  # `conda create` died with InvalidArchiveError on a 262-character path.  LongPathsEnabled
+  # is 0 by default on Windows 11 and needs admin + reboot, and no conda script can help --
+  # the failure happens while unpacking into the pkgs cache, before any post-link runs.
+  #
+  # The changeset is NOT lost: it is in about.description below, and authoritatively in
+  # the tree itself at isa/etc/ISABELLE_ID.
+  #
+  # CHANGED content => bump ISA_BUILD_NUMBER, never overwrite a published file (§3.3).
+  string: ${{ build_number }}
 
   # ---------------------------------------------------------------------------
   # Hands off the payload.  Both of these are load-bearing, not tuning knobs.
@@ -63,18 +72,29 @@ build:
       test -d "$ISA_STAGE"          || { echo "ISA_STAGE=$ISA_STAGE is not a directory"; exit 1; }
       test -d "$ISA_STAGE/heaps"    || { echo "no heaps/ in $ISA_STAGE -- heap injection did not happen"; exit 1; }
 
-      # The whole distribution goes to $PREFIX/opt/<release>/, exactly as a user
-      # would untar the official bundle.  It is self-contained and self-locating.
-      mkdir -p "$PREFIX/opt"
-      cp -a "$ISA_STAGE" "$PREFIX/opt/$ISA_RELEASE"
+      # The whole distribution goes to $PREFIX/isa/ -- NOT $PREFIX/opt/<release>/.
+      #
+      # "opt/Isabelle2025-2/" is 19 characters; "isa/" is 4.  Those 15 characters are
+      # charged against Windows' MAX_PATH on every single file in the package, and we
+      # need them: with the old layout the longest path was 212 characters and
+      # `conda create` could not even unpack the package on a default Windows box.
+      #
+      # This changes nothing for Isabelle or for the user: ISABELLE_HOME is derived at
+      # run time from the location of bin/isabelle (via the symlink below), never from
+      # this directory's name.  It is not a rename of anything INSIDE the Isabelle tree
+      # -- that tree is untouched -- only a choice of where we park it in $PREFIX.
+      mkdir -p "$PREFIX"
+      cp -a "$ISA_STAGE" "$PREFIX/isa"
 
       case "$target_platform" in
         win-*)
           # Windows: conda puts %PREFIX%\Scripts on PATH.  Forward to the real launcher
           # inside the tree.  (bin/isabelle itself is a Cygwin bash script; cmd.exe
-          # cannot run it -- PACKAGING_DESIGN.md §3.6.)
+          # cannot run it -- PACKAGING_DESIGN.md §3.6.)  pack.sh installs that launcher
+          # at isa\bin\isabelle.bat; it is self-locating, so this forwarder is the only
+          # thing that needs to know where the tree lives.
           mkdir -p "$PREFIX/Scripts"
-          printf '@echo off\r\n"%%~dp0..\\opt\\%s\\bin\\isabelle.bat" %%*\r\n' "$ISA_RELEASE" \
+          printf '@echo off\r\n"%%~dp0..\\isa\\bin\\isabelle.bat" %%*\r\n' \
             > "$PREFIX/Scripts/isabelle.bat"
 
           # !! TWO KNOWN GAPS, both tracked in PACKAGING_DESIGN.md §8 (items J and
@@ -102,10 +122,10 @@ build:
         *)
           # Linux/macOS: a RELATIVE symlink is all that is needed.  bin/isabelle has
           # an explicit `if [ -L "$0" ]` branch that resolves the link and re-execs
-          # through it, so ISABELLE_HOME still comes out as $PREFIX/opt/<release>.
+          # through it, so ISABELLE_HOME still comes out as $PREFIX/isa.
           # This is the same hookup the Isabelle docs tell users to make by hand.
           mkdir -p "$PREFIX/bin"
-          ln -s "../opt/$ISA_RELEASE/bin/isabelle" "$PREFIX/bin/isabelle"
+          ln -s "../isa/bin/isabelle" "$PREFIX/bin/isabelle"
           ;;
       esac
 
@@ -120,8 +140,8 @@ tests:
           - isabelle version
           - isabelle getenv -b ISABELLE_HOME
           # the heaps must be IN the package, at the place Isabelle looks for them
-          - test -d "$PREFIX/opt/${{ release }}/heaps"
-          - ls "$PREFIX/opt/${{ release }}"/heaps/*/HOL
+          - test -d "$PREFIX/isa/heaps"
+          - ls "$PREFIX/isa"/heaps/*/HOL
         else:
           - isabelle.bat version
 
@@ -133,6 +153,12 @@ about:
     my-better-isabelle-prover `user` patch category applied, bundled exactly like an
     official release (vendored Poly/ML, JDK, E, Z3, ...) and shipping prebuilt
     Pure/HOL/Main heaps for this platform.
+
+    Upstream release: ${{ release }}
+    Built from hg changeset: ${{ isabelle_id }}
+      (this is the changeset of OUR patch commit; it used to live in the conda build
+       string, but every character there is charged against Windows' MAX_PATH.  It is
+       also recorded authoritatively inside the package, at isa/etc/ISABELLE_ID.)
   license: BSD-3-Clause
   license_family: BSD
   repository: https://github.com/xqyww123/isabelle-packaging-ci

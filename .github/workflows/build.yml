@@ -1165,7 +1165,18 @@ jobs:
           "$HOME/mf/bin/python" -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
             --channel-name conda.qiyuan.me
           echo "===== what the channel advertises ====="
-          grep -o '"subdir": "[^"]*"' "$CH"/osx-64/repodata.json "$CH"/osx-arm64/repodata.json | sort -u
+          # Informational only -- must not be able to fail the step.  (conda-index writes
+          # "subdir":"..." with NO space; an earlier grep for '"subdir": "' matched nothing,
+          # and under `set -e` a no-match grep is exit 1 and killed the job AFTER the
+          # channel was already built correctly.)
+          "$HOME/mf/bin/python" - "$CH" <<'PY' || true
+          import json, sys, pathlib
+          ch = pathlib.Path(sys.argv[1])
+          for sub in ("osx-64", "osx-arm64"):
+              rd = ch / sub / "repodata.json"
+              for fn, m in json.load(rd.open()).get("packages.conda", {}).items():
+                  print(f"  {m['subdir']:10s} {m['name']}-{m['version']}-{m['build']}")
+          PY
 
       - name: "osx-arm64 (native): install and RUN"
         run: |

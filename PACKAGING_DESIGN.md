@@ -899,6 +899,36 @@ AoA 用户需自己 `patch --category all`。
 
 **⇒ 待用户确认:这是否是本意?** 若是,发布定位要相应调整(本文 §1「目标」写的是"让用户能 `by aoa`",与之矛盾)。
 
+---
+
+## 7.11 🔴 补丁工具**必须 pin**,以及**更新补丁集的完整流程**
+
+**曾经的写法(错的)**:`pip install "git+https://github.com/xqyww123/my_better_isabelle_prover"`
+—— **无 pin,取的是 HEAD**。后果:那个 repo 有人一推,**我们发布的 Isabelle 就悄悄变了**,
+而包**还叫同一个名字**(见下)。构建不可复现。
+
+**现在**:`build.yml` 里 `MBI_VERSION="0.3.0"`,装 **PyPI 的固定版本** —— PyPI 的版本**不可变**,
+这正是发布需要的。(注意 `MLML` 里那个 submodule pin **CI 不看**;它是给本地开发用的。)
+
+### 🔴 为什么"改补丁集"必须**同时** bump `build_number`
+
+为了 MAX_PATH,conda 的 build string 从 `<hg-changeset>_<n>` 缩成了**纯 build number**
+(`recipe.yaml:30-43`,省 12 字符)。⇒ **补丁集变了,包名仍然是 `isabelle-2025.2-0`。**
+conda **看不出这是个新包**。
+
+**兜底**:`release.yml` **拒绝覆盖已发布的文件名** ⇒ 忘了 bump 的话,**发布会大声失败**,
+而不是静默给用户发旧字节。**这是设计,不是巧合。**
+
+### 更新补丁集的完整流程 → **见 `RELEASE.md`**
+
+一句话版:改补丁 → **发 PyPI 新版** → bump `MBI_VERSION` → bump `ISA_BUILD_NUMBER` → 触发 `release.yml`。
+
+**唯一真正会咬人的失误:补丁只在本地改了,没发到 PyPI。**
+CI 装的是 PyPI 的固定版本,**不看** MLML 的 submodule ⇒ 你本地好用的补丁,
+**用户根本拿不到**,而 CI 全绿、包也照常发出去。经典的 "works on my machine"。
+`RELEASE.md` 的第一条就是挡这个的。
+(反过来"本地落后于已发布版本"**不是问题** —— 你是改动的源头。)
+
 ## 8. 待办清单
 
 | # | 事项 | 状态 |

@@ -200,11 +200,18 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/venv"
-          # ---- install from GIT, not PyPI -------------------------------------
-          # PyPI is stuck at 0.2.0, which has NEITHER --category NOR expose_foreign
-          # (one of the three `user` features).  Git HEAD is 0.3.0: it ships
-          # patches/categories.toml and `patch --category {user,dev,all}`.
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet "git+https://github.com/xqyww123/my_better_isabelle_prover"
+          # ---- PIN the patch tool.  This decides what we ship. -----------------
+          # An unpinned `git+https://...` takes whatever is on that repo's HEAD at
+          # build time, so someone else's push would silently change the Isabelle we
+          # publish -- and the package would still be called isabelle-2025.2-<number>,
+          # because the build string is just the build number now (recipe.yaml:30).
+          # A PyPI version is immutable, which is exactly what a release needs.
+          #
+          # TO SHIP A NEW PATCH SET:  publish it to PyPI, bump MBI_VERSION here, and
+          # bump ISA_BUILD_NUMBER (release.yml input) -- the content changed, so the
+          # package must not reuse a published filename.
+          MBI_VERSION="0.3.0"   # ships patches/categories.toml + `patch --category {user,dev,all}`
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet "my-better-isabelle-prover==${MBI_VERSION}"
           "$RUNNER_TEMP/venv/bin/pip" show my-better-isabelle-prover | sed -n '1,2p'
           MBI="$RUNNER_TEMP/venv/bin/my-better-isabelle"
 

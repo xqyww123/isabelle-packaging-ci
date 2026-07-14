@@ -15,7 +15,8 @@ is simply not the one you tested. **Nothing else catches this.**
 
 1. Publish a new version to **PyPI**.
 2. Bump **`MBI_VERSION`** in `build.yml`.
-3. Bump **`build_number`** (the `-f build_number=` below).
+3. Bump **`build_number`** — one higher than the last release. It is just a monotonic integer;
+   it needs no meaning beyond "newer". The current channel is at build **0**, so the next is **1**.
 
 Step 3 is not a formality. The build string *is* that number — the hg changeset was dropped from it
 to fit Windows' MAX_PATH (`conda/recipe.yaml:30`). So a changed patch set produces an
@@ -28,8 +29,10 @@ the safety net, not a fault.
 
 ```bash
 gh workflow run release.yml --repo xqyww123/isabelle-packaging-ci -f build_number=<N>
-# or:  git tag v2025.2 && git push origin v2025.2
 ```
+
+(A `git tag v2025.2` also triggers a release, but it takes the **default build_number 0** — fine for
+the very first release, wrong for any re-release. When in doubt, use the dispatch above and pass N.)
 
 ---
 

@@ -674,6 +674,26 @@ TMPDIR="$(cygpath -u "$LOCALAPPDATA")/Temp"     # ← 你设的 TMPDIR 被直接
 - 实操坑:下载 dist **必须带 `?token=Isabelle`**(否则 403);**`isabelle getenv -o` 不存在**
   (照 build_release 的做法写 `$ISABELLE_HOME_USER/etc/preferences`);**`isabelle process` 在发行包里不存在**。
 
+#### ❌ **macOS 的 GUI 在 CI 里测不了**(2026-07-15 定案,不是"没做",是"做不到")
+
+**已验证的**:macOS 的 CLI、两套 heap、真 build(断言 HOL 不重建)—— Job G 都验过。
+**未验证、且 CI 里无法验证的:jEdit / VSCode 的 GUI。**
+
+两条独立的原因,任何一条都足以否掉:
+
+1. **GitHub 托管的 macOS runner 默认无头** ——
+   [官方文档](https://docs.github.com/en/actions/reference/runners/github-hosted-runners):
+   *"By default, runners operate in headless mode — without access to the GUI"*。
+   已知问题 [actions/runner-images#8951](https://github.com/actions/runner-images/issues/8951):
+   **截图全黑、GUI 交互静默失败**,因为 runner 跑在没有登录会话的后台服务里。
+2. **Linux 那招搬不过去。** 我们在 Linux 上靠 **Xvfb**(假 X server);但 **jEdit 在 macOS 上走 Quartz**,
+   而现代 JDK 在 macOS 上**没有 X11 的 AWT 后端** —— **不存在"macOS 版的 Xvfb"。** 装 XQuartz 也没用。
+
+**⇒ 对策:Job G 里放一个探针**(`launchctl print gui/$(id -u)` + `screencapture -x`),
+把"这台 runner 到底有没有桌面"**实测**出来并打印,**但永远不让 job 变红** ——
+把"未知"变成"已测量",而不是伪造一个绿勾。
+**GUI 要验的话,只能在真 Mac 上手动验一次。**(为一个绿勾去自建带登录会话的 macOS runner,不值。)
+
 ### 5.4 CI vs 发布:架构定案(**方案 A**)
 
 **原则:发布近乎不可逆**(包一旦上了 channel,用户可能已拉走;不能删、不能覆盖)

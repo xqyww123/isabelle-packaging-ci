@@ -160,3 +160,59 @@ jobs:
           echo "--- and the channel resolves the package ---"
           $CONDA/bin/conda search -c https://conda.qiyuan.me --override-channels isabelle || fail=1
           exit $fail
+
+  # ---------------------------------------------------------------------------
+  # The user's command, on a clean machine, on every platform.
+  #
+  # This is NOT a repeat of Jobs F/G/H.  Those install from a LOCAL channel
+  # (file://) and prove the PACKAGES work.  This installs from the real URL and
+  # proves the CHANNEL works -- that the bytes reached R2, that conda-index wrote
+  # a repodata that names them correctly, and that conda's solver can act on it.
+  # Those two can fail independently: a package can be perfect while `rclone sync`
+  # drops a file or repodata points at a filename that isn't there.  Job F would
+  # still be green and the user still could not install.
+  #
+  # Running it immediately after publishing is safe, and that is measured, not
+  # assumed: repodata.json comes back `cf-cache-status: DYNAMIC` (Cloudflare does
+  # not cache .json by default) and we index with --no-zst, so the .zst that IS
+  # cached for 4h never exists.  There is no propagation window to wait out.
+  # ---------------------------------------------------------------------------
+  smoke:
+    name: "Smoke: conda install from conda.qiyuan.me (${{ matrix.runner }})"
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false          # one platform's failure must not hide the others
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-activate-base: true
+          activate-environment: ""
+
+      - name: "conda install -c https://conda.qiyuan.me isabelle"
+        run: |
+          set -euo pipefail
+          conda create -y -p "$RUNNER_TEMP/isa" \
+            -c https://conda.qiyuan.me --override-channels isabelle
+          conda list -p "$RUNNER_TEMP/isa" isabelle
+
+      - name: "...and it runs"
+        run: |
+          set -euo pipefail
+          # Windows puts the entry point in Scripts/, everyone else in bin/.
+          if [ -x "$RUNNER_TEMP/isa/bin/isabelle" ]; then
+            BIN="$RUNNER_TEMP/isa/bin/isabelle"
+          else
+            BIN="$RUNNER_TEMP/isa/Scripts/isabelle.bat"
+          fi
+          echo "entry point: $BIN"
+          v=$("$BIN" version)
+          echo "isabelle version -> $v"
+          [ -n "$v" ] || { echo "::error::isabelle version printed nothing"; exit 1; }

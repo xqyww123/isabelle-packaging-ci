@@ -1,0 +1,120 @@
+name: probe-macos-install
+
+# Run ONLY Job G's work -- install and RUN the macOS packages -- against a
+# conda-packages artifact that ALREADY EXISTS from a prior run.  Fixing a
+# one-line bug in Job G should not cost a 3-hour rebuild of five platforms'
+# heaps; the packages Job F produced are byte-identical whether or not Job G's
+# grep had a space in it.
+#
+#   gh workflow run probe-macos-install.yml -f source_run_id=<run with conda-packages>
+#
+# This is a throwaway harness for iterating on the macOS install path.  The
+# real gate stays in build.yml Job G, which runs on the freshly built packages.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Run ID whose conda-packages artifact to install (must not be expired)"
+        required: true
+        type: string
+
+permissions:
+  actions: read        # download-artifact from another run needs this
+  contents: read
+
+jobs:
+  install-macos:
+    name: "Probe: install + run macOS packages (osx-arm64 & osx-64)"
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Free up disk (drop the extra Xcodes)
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /Applications/Xcode_*.app || true
+          df -h /
+
+      - name: "Download conda-packages from run ${{ inputs.source_run_id }}"
+        uses: actions/download-artifact@v4
+        with:
+          name: conda-packages
+          path: ${{ runner.temp }}/pkgs
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Build a local channel with just the macOS packages
+        run: |
+          set -euo pipefail
+          CH="$RUNNER_TEMP/channel"
+          mkdir -p "$CH/noarch"
+          for s in osx-64 osx-arm64; do
+            [ -d "$RUNNER_TEMP/pkgs/$s" ] || { echo "::error::source run produced no $s package"; exit 1; }
+            mkdir -p "$CH/$s"
+            cp "$RUNNER_TEMP/pkgs/$s"/isabelle-*.conda "$CH/$s/"
+          done
+          rm -rf "$RUNNER_TEMP/pkgs"
+          find "$CH" -name '*.conda' -exec ls -lh {} \;
+          echo "CH=$CH" >> "$GITHUB_ENV"
+
+          curl -fsSL -o "$RUNNER_TEMP/mf.sh" \
+            https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh
+          bash "$RUNNER_TEMP/mf.sh" -b -p "$HOME/mf"
+          "$HOME/mf/bin/conda" install -y -q -c conda-forge conda-index
+          "$HOME/mf/bin/python" -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
+            --channel-name conda.qiyuan.me
+          echo "===== what the channel advertises ====="
+          "$HOME/mf/bin/python" - "$CH" <<'PY' || true
+          import json, sys, pathlib
+          ch = pathlib.Path(sys.argv[1])
+          for sub in ("osx-64", "osx-arm64"):
+              rd = ch / sub / "repodata.json"
+              for fn, m in json.load(rd.open()).get("packages.conda", {}).items():
+                  print(f"  {m['subdir']:10s} {m['name']}-{m['version']}-{m['build']}")
+          PY
+
+      - name: "osx-arm64 (native): install and RUN"
+        run: |
+          set -euo pipefail
+          ENV="$RUNNER_TEMP/isa-arm"
+          "$HOME/mf/bin/conda" create -y -p "$ENV" -c "file://$CH" --override-channels isabelle
+          scripts/verify_install.sh "$ENV"
+
+      - name: "osx-64 (through Rosetta): install and RUN"
+        run: |
+          set -euo pipefail
+          arch -x86_64 /usr/bin/true || { echo "::error::Rosetta is not usable on this runner"; exit 1; }
+          ENV="$RUNNER_TEMP/isa-x86"
+          CONDA_SUBDIR=osx-64 "$HOME/mf/bin/conda" create -y -p "$ENV" \
+            -c "file://$CH" --override-channels isabelle
+          ARCH_PREFIX="arch -x86_64" scripts/verify_install.sh "$ENV"
+
+      - name: "PROBE (advisory): does this runner have a window server?"
+        continue-on-error: true
+        run: |
+          set +e
+          echo "--- GUI session according to launchd ---"
+          launchctl print "gui/$(id -u)" 2>&1 | head -5
+          echo "--- can we actually capture the screen? ---"
+          screencapture -x "$RUNNER_TEMP/probe.png" 2>&1
+          rc=$?
+          if [ $rc -eq 0 ] && [ -s "$RUNNER_TEMP/probe.png" ]; then
+            echo "RESULT: screencapture SUCCEEDED -> $(file -b "$RUNNER_TEMP/probe.png")"
+            echo "::warning::macOS runner HAS a usable window server - a real jEdit GUI check is feasible here."
+          else
+            echo "RESULT: screencapture failed (rc=$rc) - no window server reachable."
+            echo "::warning::macOS GUI is NOT verified: this runner has no usable window server."
+          fi
+
+      - name: Upload the macOS GUI probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-gui-probe
+          path: ${{ runner.temp }}/probe.png
+          if-no-files-found: ignore
+          retention-days: 7

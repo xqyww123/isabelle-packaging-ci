@@ -272,9 +272,18 @@ echo "   marker there would be cat'd into rebaseall's DLL list)"
 # with a user name of up to ~21 characters -- and a Windows local account name maxes out
 # at 20.  So: every normal user installs without touching the registry.
 #
-# This is checked on EVERY platform, not just win-64: the packages are built from one
-# recipe and one script, and a regression that only bites Windows is exactly the kind we
-# would not notice until a user reported it.
+# ENFORCED FOR win-64 ONLY.  Measured and printed for every platform, but only Windows
+# can fail on it, because only Windows has the limit: PATH_MAX is 1024 on macOS and 4096
+# on Linux.
+#
+# An earlier revision of this script enforced 180 everywhere, on the theory that "a
+# regression that only bites Windows is one we would not notice".  That reasoning is
+# wrong, and it broke the build: the macOS bundle nests VSCodium inside an app bundle
+#     isa/contrib/vscodium-.../x86_64-darwin/VSCodium.app/Contents/Resources/vscodium/...
+# which is ~20 characters deeper than the Windows layout's .../resources/vscodium/...,
+# so osx-64 measured 201 and Job F went red on a package that is perfectly fine on macOS.
+# The premise was false anyway: win-64 is built and asserted in this very same job, so a
+# Windows regression is caught on win-64 itself.  Do not "restore" the global check.
 # ---------------------------------------------------------------------------
 # NB: `sed -n 1p`, never `head -1`.  Under `set -o pipefail`, `head` closes the pipe
 # after one line, `sort` (28k lines) dies of SIGPIPE=141, and the whole script exits --
@@ -287,16 +296,23 @@ path_lengths() {
 longest=$(path_lengths | sed -n 1p)
 longest_len=${longest%% *}
 longest_path=${longest#* }
-echo "longest path in the package: $longest_len chars (budget $MAX_REL)"
-echo "  $longest_path"
-if [ "$longest_len" -gt "$MAX_REL" ]; then
-  echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit."
-  echo "          Windows (MAX_PATH=259, long paths off by default) will fail to unpack this."
-  echo "          The ten longest:"
-  path_lengths | sed -n 1,10p | while read -r l q; do echo "::error::  $l  $q"; done
-  exit 1
+
+if [ "$SUBDIR" = win-64 ]; then
+  echo "longest path in the package: $longest_len chars (budget $MAX_REL, ENFORCED for win-64)"
+  echo "  $longest_path"
+  if [ "$longest_len" -gt "$MAX_REL" ]; then
+    echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit."
+    echo "          Windows (MAX_PATH=259, long paths off by default) will fail to unpack this."
+    echo "          The ten longest:"
+    path_lengths | sed -n 1,10p | while read -r l q; do echo "::error::  $l  $q"; done
+    exit 1
+  fi
+  echo "  OK: within the $MAX_REL-character budget"
+else
+  # Informational only.  There is no path-length limit worth enforcing on this platform.
+  echo "longest path in the package: $longest_len chars (not enforced -- $SUBDIR has no MAX_PATH)"
+  echo "  $longest_path"
 fi
-echo "  OK: within the $MAX_REL-character budget"
 
 # ---------------------------------------------------------------------------
 # 7. conda package

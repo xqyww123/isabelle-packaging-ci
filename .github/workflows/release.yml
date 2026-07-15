@@ -40,6 +40,9 @@ jobs:
     with:
       release: Isabelle2025-2
       platforms: linux,linux_arm,windows,macos
+      # A tag push has no input, so default to 0 -- correct for a first release, and a
+      # re-release then collides on the filename rather than silently reusing build 0.
+      build_number: ${{ inputs.build_number || '0' }}
     # the GUI check in Job F needs CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
     # receives NO secrets unless the caller passes them.
     secrets: inherit

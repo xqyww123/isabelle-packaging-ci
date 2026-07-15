@@ -60,6 +60,10 @@ on:
         description: "abort-free disk threshold on / (GB); below this we run cleanup"
         type: number
         default: 60
+      build_number:
+        description: "conda build number -- becomes the package's build string (isabelle-2025.2-<N>)"
+        type: string
+        default: "0"
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: >-
@@ -839,6 +843,11 @@ jobs:
       RELEASE: ${{ inputs.release }}
       CH: ${{ github.workspace }}/channel      # local channel, for verification only
       OUT: ${{ github.workspace }}/out
+      # pack.sh reads ISA_BUILD_NUMBER (defaulting to 0) and it becomes the conda build
+      # string.  Without this line the build_number input is inert: every publish is
+      # isabelle-<ver>-0, and a re-release with changed content collides with the
+      # already-published filename.  (release.yml passes its build_number input here.)
+      ISA_BUILD_NUMBER: ${{ inputs.build_number }}
     steps:
       - name: Checkout CI repo
         uses: actions/checkout@v4

@@ -1204,38 +1204,32 @@ jobs:
           ARCH_PREFIX="arch -x86_64" scripts/verify_install.sh "$ENV"
 
       # ---------------------------------------------------------------------
-      # Is there a usable window server on a macOS runner at all?  I do not know, and
-      # I am not going to pretend either way -- so PROBE it and print the answer.
-      # This step can never fail the job; it exists to turn "unknown" into "measured",
-      # so we can decide whether a macOS GUI check is even possible.
+      # The real macOS GUI check: start jEdit from the osx-arm64 package on the runner's
+      # own window server (its existence was confirmed by an earlier advisory probe, and
+      # verified end to end on the probe workflow) and let Claude Code judge the
+      # screenshot.  Same criteria as Linux -- both call the shared scripts/gui_judge.sh
+      # -- only the launch is macOS-specific (Quartz + screencapture, no Xvfb).
       #
-      # (verify_gui.sh cannot be reused as-is here regardless: it drives Xvfb, and macOS
-      # jEdit renders through Quartz, not X11.)
-      # ---------------------------------------------------------------------
-      - name: "PROBE (advisory): does this runner have a window server?"
-        continue-on-error: true
-        run: |
-          set +e
-          echo "--- GUI session according to launchd ---"
-          launchctl print "gui/$(id -u)" 2>&1 | head -5
-          echo "--- can we actually capture the screen? ---"
-          screencapture -x "$RUNNER_TEMP/probe.png" 2>&1
-          rc=$?
-          if [ $rc -eq 0 ] && [ -s "$RUNNER_TEMP/probe.png" ]; then
-            echo "RESULT: screencapture SUCCEEDED -> $(file -b "$RUNNER_TEMP/probe.png")"
-            echo "::warning::macOS runner HAS a usable window server - a real jEdit GUI check is feasible here."
-          else
-            echo "RESULT: screencapture failed (rc=$rc) - no window server reachable."
-            echo "::warning::macOS GUI is NOT verified: this runner has no usable window server."
-          fi
+      # arm64 only, on purpose: jEdit is the same Quartz code on both Mac architectures,
+      # and osx-64's CLI + heap + x86 platform resolution are already covered by its own
+      # install-and-run step above.  Running the GUI twice would only make Job G slower.
+      - name: "GUI verification (osx-arm64): jEdit + Claude Code judge"
+        env:
+          # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: scripts/verify_gui_macos.sh "$RUNNER_TEMP/isa-arm" "$RUNNER_TEMP/gui"
 
-      - name: Upload the macOS GUI probe
+      - name: Upload the macOS GUI screenshot + verdict
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-gui-probe
-          path: ${{ runner.temp }}/probe.png
-          if-no-files-found: ignore
+          name: macos-gui
+          path: |
+            ${{ runner.temp }}/gui/jedit.png
+            ${{ runner.temp }}/gui/verdict.json
+            ${{ runner.temp }}/gui/jedit.log
+            ${{ runner.temp }}/gui/claude.err
+          if-no-files-found: warn
           retention-days: 7
 
   install-linux-arm:

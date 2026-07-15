@@ -93,28 +93,23 @@ jobs:
             -c "file://$CH" --override-channels isabelle
           ARCH_PREFIX="arch -x86_64" scripts/verify_install.sh "$ENV"
 
-      - name: "PROBE (advisory): does this runner have a window server?"
-        continue-on-error: true
-        run: |
-          set +e
-          echo "--- GUI session according to launchd ---"
-          launchctl print "gui/$(id -u)" 2>&1 | head -5
-          echo "--- can we actually capture the screen? ---"
-          screencapture -x "$RUNNER_TEMP/probe.png" 2>&1
-          rc=$?
-          if [ $rc -eq 0 ] && [ -s "$RUNNER_TEMP/probe.png" ]; then
-            echo "RESULT: screencapture SUCCEEDED -> $(file -b "$RUNNER_TEMP/probe.png")"
-            echo "::warning::macOS runner HAS a usable window server - a real jEdit GUI check is feasible here."
-          else
-            echo "RESULT: screencapture failed (rc=$rc) - no window server reachable."
-            echo "::warning::macOS GUI is NOT verified: this runner has no usable window server."
-          fi
+      # The real thing: start jEdit from the osx-arm64 package on the runner's own window
+      # server and have Claude Code judge the screenshot.  Same criteria as Linux (shared
+      # scripts/gui_judge.sh); only the launch is macOS-specific.
+      - name: "GUI verification (osx-arm64): jEdit + Claude Code judge"
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: scripts/verify_gui_macos.sh "$RUNNER_TEMP/isa-arm" "$RUNNER_TEMP/gui"
 
-      - name: Upload the macOS GUI probe
+      - name: Upload the macOS GUI screenshot + verdict
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: macos-gui-probe
-          path: ${{ runner.temp }}/probe.png
-          if-no-files-found: ignore
+          name: macos-gui
+          path: |
+            ${{ runner.temp }}/gui/jedit.png
+            ${{ runner.temp }}/gui/verdict.json
+            ${{ runner.temp }}/gui/jedit.log
+            ${{ runner.temp }}/gui/claude.err
+          if-no-files-found: warn
           retention-days: 7

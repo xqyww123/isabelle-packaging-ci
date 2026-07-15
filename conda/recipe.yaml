@@ -97,27 +97,16 @@ build:
           printf '@echo off\r\n"%%~dp0..\\isa\\bin\\isabelle.bat" %%*\r\n' \
             > "$PREFIX/Scripts/isabelle.bat"
 
-          # !! TWO KNOWN GAPS, both tracked in PACKAGING_DESIGN.md §8 (items J and
-          # !! "Windows one-time -init").  The win-64 package therefore installs and
-          # !! carries every file, but its `isabelle` command is NOT expected to work yet:
-          #
-          #  (1) <ISABELLE_HOME>\bin\isabelle.bat -- the target of the forwarder above --
-          #      DOES NOT EXIST in the tree yet.  The working, GUI-detaching isabelle.bat
-          #      still hard-codes an absolute ISABELLE_HOME (§3.6); it has to be made
-          #      self-locating and moved into bin/ before it can go in a package that
-          #      lands in an arbitrary $PREFIX.  That work is item J, in flight elsewhere.
-          #
-          #  (2) Cygwin is left UNINITIALIZED.  build_release strips every symlink out of
-          #      the tree and records them in contrib/cygwin/isabelle/symlinks, leaving an
-          #      `uninitialized` marker; the official installer runs cygwin_init at install
-          #      time to restore them + rebaseall.  Extracting the .exe on Linux (as we do)
-          #      reproduces the stripped tree, so something must run cygwin_init on the
-          #      target machine.  It cannot be done here, and doing it from a post-link
-          #      script means files conda does not track (§3.1) -- so it needs a decision,
-          #      not a quiet workaround.
-          #
-          # We still BUILD this package: it proves the .exe -> tree -> heap -> .conda path
-          # end to end, and it is what items J/(2) will slot into.
+          # The two gaps that used to make win-64 non-functional are both CLOSED and
+          # verified on a real Windows VM (PACKAGING_DESIGN.md §3.6):
+          #  (1) isa\bin\isabelle.bat -- the forwarder's target -- is now installed by
+          #      pack.sh (self-locating, byte-identical to windows/isabelle.bat, cmp-checked).
+          #  (2) Cygwin heals itself on the FIRST `isabelle` call: getsettings runs
+          #      Setup.classpath, which runs cygwin_init (restores symlinks + rebaseall).
+          #      No post-link, no untracked files.
+          # So the win-64 command line works end to end: `isabelle version`, a real build
+          # with the prebuilt heap, jEdit and vscode all verified on the VM, and the
+          # windows smoke leg (release.yml) runs `isabelle.bat version` from the real channel.
           ;;
         *)
           # Linux/macOS: a RELATIVE symlink is all that is needed.  bin/isabelle has

@@ -138,9 +138,14 @@ sleep 60
 import -window root -display "$DISP" "$SHOT"
 echo "=== screenshot: $(du -h "$SHOT" | cut -f1) ==="
 echo "=== window titles ==="
-xdotool search --onlyvisible --name '.' 2>/dev/null | while read -r w; do
-  echo "  - $(xdotool getwindowname "$w" 2>/dev/null)"
-done
+# Diagnostic only -- must never fail the step.  Under `set -euo pipefail` a zero-match
+# `xdotool search` exits 1 and would red a run whose screenshot was already taken and
+# whose AI verdict has not run yet.  (It should not zero-match on a healthy run -- the
+# Scratch.thy window was mapped 60s ago and bare Xvfb has no WM to unmap it -- but a
+# print has no business gating the job either way.)
+{ xdotool search --onlyvisible --name '.' 2>/dev/null | while read -r w; do
+    echo "  - $(xdotool getwindowname "$w" 2>/dev/null)"
+  done; } || true
 
 # ---------------------------------------------------------------------------------
 # The AI judgement.

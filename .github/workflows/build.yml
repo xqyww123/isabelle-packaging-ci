@@ -979,14 +979,18 @@ jobs:
             --channel-name conda.qiyuan.me
 
           echo "===== what the channel advertises ====="
-          $CONDA/bin/python - <<'PY'
+          # Informational only -- must not be able to fail the step.  Uses .get() and a
+          # trailing `|| true`, matching its hardened macOS twin (the "what the channel
+          # advertises" block in Job G): a diagnostic print of channel contents must never
+          # red a job whose packages are already built and indexed correctly.
+          $CONDA/bin/python - <<'PY' || true
           import json, pathlib, os
           ch = pathlib.Path(os.environ["CH"])
           for sub in sorted(p.name for p in ch.iterdir() if p.is_dir()):
               rd = ch / sub / "repodata.json"
               if not rd.exists(): continue
-              for fn, m in json.load(rd.open())["packages.conda"].items():
-                  print(f"  {sub:14s} {m['name']}-{m['version']}-{m['build']}  depends={m['depends']}")
+              for fn, m in json.load(rd.open()).get("packages.conda", {}).items():
+                  print(f"  {sub:14s} {m['name']}-{m['version']}-{m['build']}  depends={m.get('depends')}")
           PY
 
           echo "===== conda create from the local channel ====="

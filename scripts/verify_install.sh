@@ -42,6 +42,30 @@ echo "isabelle version -> $ver"
 [ -n "$ver" ] || { echo "::error::isabelle version printed nothing"; exit 1; }
 
 echo
+echo "########## 2b. the run resolves to the INTENDED architecture ##########"
+# Without this, the osx-64 leg is a false pass waiting to happen.  The osx-64 package
+# ships BOTH heaps (arm64_32-darwin AND x86_64_32-darwin), so "HOL not rebuilt" (step 5)
+# passes even if the run silently loaded the arm heap -- i.e. executed zero x86 code.
+# The only thing that catches that is asserting the runtime-resolved platform, not the
+# arch we *asked* for.  So when ARCH_PREFIX forces x86_64, ISABELLE_PLATFORM64 must
+# come back x86_64-*; if `arch -x86_64` ever silently stops taking effect, this reddens.
+case "$ARCH_PREFIX" in
+  *x86_64*)
+    plat="$(isa getenv -b ISABELLE_PLATFORM64)"
+    echo "forced x86_64 -> ISABELLE_PLATFORM64 = $plat"
+    case "$plat" in
+      x86_64-*) echo "  OK: the run really is x86_64 (Rosetta took effect)" ;;
+      *) echo "::error::ARCH_PREFIX forces x86_64 but ISABELLE_PLATFORM64 is '$plat' --"
+         echo "::error::the run is NOT executing x86 code; osx-64 would be a false pass."
+         exit 1 ;;
+    esac
+    ;;
+  *)
+    echo "native install -- no architecture is being forced, nothing to assert"
+    ;;
+esac
+
+echo
 echo "########## 3. ISABELLE_HOME resolves INSIDE the conda prefix ##########"
 # $PREFIX/isa, not $PREFIX/opt/<release> -- those 15 characters are charged against
 # Windows' MAX_PATH on every path in the package (see conda/recipe.yaml).  Isabelle does

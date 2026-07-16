@@ -165,6 +165,30 @@ if [ "$SUBDIR" = win-64 ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 1d. Isolate ISABELLE_HOME_USER per conda environment.
+#
+# Stock etc/settings puts USER state -- config and on-demand-built session heaps --
+# in ~/.isabelle/Isabelle2025-2, which is SHARED with any stock Isabelle2025-2 the user
+# also has.  Our Pure is patched (pide_control, expose_foreign, ...), so a heap built
+# here is not interchangeable with a stock one; sharing the directory makes the two
+# clobber each other and churn.  We append `-conda-<env>` so each conda env gets its own
+# ~/.isabelle/Isabelle2025-2-conda-<env>.  The env is derived from the install prefix
+# ($ISABELLE_HOME = <prefix>/isa), so it is correct even without `conda activate`.
+#
+# Only ISABELLE_HOME_USER is touched: ISABELLE_HEAPS and everything else keyed off it are
+# set AFTER it in etc/settings and follow along (the 15 lines between are ISABELLE_TOOLS
+# and ISABELLE_TMP_PREFIX, neither of which reads it -- verified).  ISABELLE_NAME and the
+# rest of the identity stay "Isabelle2025-2".  The base pre-unlink (recipe.yaml) removes
+# this directory on `conda remove`.
+# ---------------------------------------------------------------------------
+SETTINGS="$TREE/etc/settings"
+grep -q 'conda-\$(basename' "$SETTINGS" && { echo "::error::etc/settings already carries the conda HOME_USER patch"; exit 1; }
+grep -q '^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$' "$SETTINGS" || {
+  echo "::error::etc/settings anchor 'ISABELLE_HEAPS=\$ISABELLE_HOME_USER/heaps' not found -- upstream layout changed, re-check the patch"; exit 1; }
+sed -i 's#^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$#ISABELLE_HOME_USER="${ISABELLE_HOME_USER}-conda-$(basename "$(dirname "$ISABELLE_HOME")")"\n&#' "$SETTINGS"
+echo "patched etc/settings: ISABELLE_HOME_USER -> ~/.isabelle/${RELEASE}-conda-<env>"
+
+# ---------------------------------------------------------------------------
 # 2. inject the heaps
 # ---------------------------------------------------------------------------
 mkdir -p "$TREE/heaps"

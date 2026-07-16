@@ -135,6 +135,38 @@ build:
             '>>"%PREFIX%\.messages.txt" echo   isabelle vscode     VSCode / VSCodium GUI' \
             'exit /b 0' \
             > "$PREFIX/Scripts/.isabelle-post-link.bat"
+
+          # Pre-unlink cleanup (Windows).  Same job as the unix branch -- delete this
+          # env's ~/.isabelle/Isabelle2025-2-conda-<env> on `conda remove` -- but every
+          # step here was VERIFIED on a real windows-latest runner (preunlink-probe.yml),
+          # because none of it can be tested off Windows:
+          #   * conda DOES run Scripts/.<name>-pre-unlink.bat on remove, with %PREFIX% set.
+          #   * `isabelle.bat getenv` returns a Cygwin path (/cygdrive/c/...); for/f
+          #     captures it regardless of isabelle's exit code (a broken user .bash_profile
+          #     can make it nonzero).
+          #   * cygpath.exe printed NOTHING on the runner, so we convert /cygdrive/X/... ->
+          #     X:\... by hand with plain string substitution (sequential set, no block, so
+          #     immediate %VAR% expansion sees each update).
+          #   * TWO guards: only a path carrying -conda- AND of /cygdrive/ form is touched,
+          #     so a stock ~/.isabelle/Isabelle2025-2 can never be deleted.
+          #   * exit /b 0 unconditionally -- cleanup must never fail `conda remove`.
+          printf '%s\r\n' \
+            '@echo off' \
+            'set "ISA=%PREFIX%\isa"' \
+            'call "%ISA%\bin\isabelle.bat" version >nul 2>&1' \
+            'set "ISAU="' \
+            'for /f "delims=" %%d in ('"'"'call "%ISA%\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul'"'"') do set "ISAU=%%d"' \
+            'if not defined ISAU exit /b 0' \
+            'echo %ISAU%| findstr /C:"-conda-" >nul || exit /b 0' \
+            'echo %ISAU%| findstr /B /C:"/cygdrive/" >nul || exit /b 0' \
+            'set "P=%ISAU:/cygdrive/=%"' \
+            'set "DL=%P:~0,1%"' \
+            'set "REST=%P:~1%"' \
+            'set "ISAUW=%DL%:%REST%"' \
+            'set "ISAUW=%ISAUW:/=\%"' \
+            'if exist "%ISAUW%" rmdir /s /q "%ISAUW%"' \
+            'exit /b 0' \
+            > "$PREFIX/Scripts/.isabelle-pre-unlink.bat"
           ;;
         *)
           # Linux/macOS: a RELATIVE symlink is all that is needed.  bin/isabelle has
@@ -176,6 +208,27 @@ build:
             'exit 0' \
             > "$PREFIX/bin/.isabelle-post-link.sh"
           chmod +x "$PREFIX/bin/.isabelle-post-link.sh"
+
+          # Pre-unlink cleanup.  This env's Isabelle user dir
+          # (~/.isabelle/Isabelle2025-2-conda-<env>: config + on-demand-built heaps) lives
+          # OUTSIDE the prefix -- the pack.sh etc/settings patch put it there to keep our
+          # patched build from sharing ~/.isabelle/Isabelle2025-2 with a stock Isabelle --
+          # so conda does not track it.  On `conda remove` delete the WHOLE dir (verified:
+          # conda runs bin/.<name>-pre-unlink.sh with $PREFIX set).  The path is resolved
+          # from isabelle itself (its files are still present at pre-unlink time), and the
+          # case guard is a HARD safety: only ever rm a path under .isabelle that carries
+          # the -conda- namespace, so a stock ~/.isabelle/Isabelle2025-2 or a bare
+          # ~/.isabelle can never be touched.  exit 0 unconditionally: a cleanup that
+          # cannot resolve the dir must never fail `conda remove`.
+          printf '%s\n' \
+            '#!/bin/bash' \
+            'd="$("$PREFIX/isa/bin/isabelle" getenv -b ISABELLE_HOME_USER 2>/dev/null)" || exit 0' \
+            'case "$d" in' \
+            '  */.isabelle/*-conda-*) rm -rf "$d" ;;' \
+            'esac' \
+            'exit 0' \
+            > "$PREFIX/bin/.isabelle-pre-unlink.sh"
+          chmod +x "$PREFIX/bin/.isabelle-pre-unlink.sh"
           ;;
       esac
 

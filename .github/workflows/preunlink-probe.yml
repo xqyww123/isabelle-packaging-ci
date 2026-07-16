@@ -1,0 +1,112 @@
+name: preunlink-probe
+
+# Prove the WINDOWS pre-unlink cleanup on real Windows BEFORE spending a 3.5h base
+# release on it.  Two independent checks:
+#   A. does conda actually run a Scripts/.<name>-pre-unlink.bat on `conda remove`,
+#      with %PREFIX% set?  (verified on Linux; Windows is a separate question)
+#   B. does the candidate cleanup LOGIC work against a real installed isabelle --
+#      resolve ISABELLE_HOME_USER, convert the Cygwin path to Windows, delete the
+#      namespaced dir, and REFUSE a stock ~/.isabelle/Isabelle2025-2?
+#
+# B installs the CURRENT channel isabelle (no HOME_USER patch yet) and applies the
+# same etc/settings sed pack.sh will, so we test the exact runtime the release produces.
+# Manual trigger only.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-activate-base: true
+          activate-environment: ""
+
+      # ---------------- Part A: mechanism ----------------
+      - name: "A. build a tiny win-64 package whose pre-unlink.bat writes a marker"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, json, hashlib, tarfile
+          os.makedirs("pkgA/Scripts", exist_ok=True); os.makedirs("pkgA/info", exist_ok=True)
+          rel = "Scripts/.testpu-pre-unlink.bat"
+          bat = "\r\n".join([
+              "@echo off",
+              'echo PRE-UNLINK-RAN PREFIX=%PREFIX% > "%RUNNER_TEMP%\\puA_marker.txt"',
+              "exit /b 0",
+          ]) + "\r\n"
+          open("pkgA/"+rel, "w", newline="").write(bat)
+          b = open("pkgA/"+rel, "rb").read()
+          json.dump({"name":"testpu","version":"0.0.1","build":"0","build_number":0,
+                     "subdir":"win-64","depends":[],"platform":"win","arch":"x86_64"},
+                    open("pkgA/info/index.json","w"))
+          json.dump({"paths_version":1,"paths":[{"_path":rel,"path_type":"hardlink",
+                     "sha256":hashlib.sha256(b).hexdigest(),"size_in_bytes":len(b)}]},
+                    open("pkgA/info/paths.json","w"))
+          open("pkgA/info/files","w").write(rel+"\n")
+          with tarfile.open("testpu-0.0.1-0.tar.bz2","w:bz2") as t:
+              for root,_,files in os.walk("pkgA"):
+                  for fn in files:
+                      full=os.path.join(root,fn); t.add(full,arcname=os.path.relpath(full,"pkgA"))
+          PY
+
+      - name: "A. install then remove -- the pre-unlink.bat must run"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          rm -f "$RUNNER_TEMP/puA_marker.txt"
+          conda create -y -p "$RUNNER_TEMP/eA" ./testpu-0.0.1-0.tar.bz2 >/dev/null
+          conda remove  -y -p "$RUNNER_TEMP/eA" testpu >/dev/null
+          if [ -f "$RUNNER_TEMP/puA_marker.txt" ]; then
+            echo "A PASS: conda ran the pre-unlink.bat:"; cat "$RUNNER_TEMP/puA_marker.txt"
+          else
+            echo "::error::A FAIL: conda did NOT run Scripts/.<name>-pre-unlink.bat on Windows"; exit 1
+          fi
+
+      # ---------------- Part B: logic against real isabelle ----------------
+      - name: "B. install channel isabelle + apply the HOME_USER etc/settings patch"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          conda create -y -p "$RUNNER_TEMP/isa" \
+            -c https://conda.qiyuan.me --override-channels isabelle >/dev/null
+          S="$RUNNER_TEMP/isa/isa/etc/settings"
+          grep -q '^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$' "$S" \
+            || { echo "::error::anchor missing"; exit 1; }
+          sed -i 's#^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$#ISABELLE_HOME_USER="${ISABELLE_HOME_USER}-conda-$(basename "$(dirname "$ISABELLE_HOME")")"\n&#' "$S"
+          echo "patched etc/settings:"; grep -n 'conda-' "$S"
+
+      - name: "B. diagnose the path formats"
+        shell: cmd
+        run: |
+          call "%RUNNER_TEMP%\isa\isa\bin\isabelle.bat" version
+          echo === getenv -b ISABELLE_HOME_USER ===
+          call "%RUNNER_TEMP%\isa\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER
+          echo === guard on a stock path (must NOT match -conda-) ===
+          echo C:\Users\x\.isabelle\Isabelle2025-2| findstr /C:"-conda-" && echo MATCHED-BAD || echo no-match-good
+
+      - name: "B. run candidate cleanup, verify deletion + guard"
+        shell: cmd
+        run: |
+          set "PREFIX=%RUNNER_TEMP%\isa"
+          set "ISA=%PREFIX%\isa"
+          set "ISAU="
+          for /f "delims=" %%d in ('call "%ISA%\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER') do set "ISAU=%%d"
+          echo ISAU=[%ISAU%]
+          if not defined ISAU ( echo ::error::could not resolve ISABELLE_HOME_USER & exit /b 1 )
+          set "ISAUW="
+          for /f "delims=" %%w in ('"%ISA%\contrib\cygwin\bin\cygpath.exe" -w "%ISAU%"') do set "ISAUW=%%w"
+          echo ISAUW=[%ISAUW%]
+          if not defined ISAUW ( echo ::error::cygpath produced nothing & exit /b 1 )
+          rem create the namespaced dir that SHOULD be deleted
+          mkdir "%ISAUW%\heaps" 2>nul
+          echo marker > "%ISAUW%\marker.txt"
+          rem guard + delete
+          echo %ISAU%| findstr /C:"-conda-" >nul && ( if exist "%ISAUW%" rmdir /s /q "%ISAUW%" )
+          if exist "%ISAUW%" ( echo ::error::B FAIL: namespaced dir was NOT deleted & exit /b 1 )
+          echo B PASS: namespaced dir deleted, guard logic exercised
+          exit /b 0

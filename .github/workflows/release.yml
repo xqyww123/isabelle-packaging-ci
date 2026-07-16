@@ -191,7 +191,12 @@ jobs:
         runner: [ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest]
     defaults:
       run:
-        shell: bash
+        # bash -l (LOGIN shell), not plain bash: setup-miniconda only puts `conda` on
+        # PATH via the profile a login shell sources.  The first Windows smoke ran under
+        # Git-Bash `bash --noprofile --norc` and died with `conda: command not found`
+        # before the install even started -- the package was never the problem.  `-l`
+        # is the documented setup-miniconda shell and is correct on every OS.
+        shell: bash -l {0}
     steps:
       - uses: conda-incubator/setup-miniconda@v3
         with:
@@ -202,8 +207,13 @@ jobs:
       - name: "conda install -c https://conda.qiyuan.me isabelle"
         run: |
           set -euo pipefail
+          # Capture the install output: conda prints the package's post-link message
+          # (its .messages.txt) here, and we assert it appeared -- so this smoke also
+          # verifies the post-install hint on every platform, including the Windows .bat.
           conda create -y -p "$RUNNER_TEMP/isa" \
-            -c https://conda.qiyuan.me --override-channels isabelle
+            -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tee "$RUNNER_TEMP/create.log"
+          grep -q "Isabelle is installed" "$RUNNER_TEMP/create.log" \
+            || { echo "::error::post-install hint (.messages.txt) did not print"; exit 1; }
           conda list -p "$RUNNER_TEMP/isa" isabelle
 
       - name: "...and it runs"

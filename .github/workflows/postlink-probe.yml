@@ -1,0 +1,79 @@
+name: postlink-probe
+
+# Fast Windows check for the post-link .bat, so we do NOT spend a 3.5h release to
+# discover a one-line packaging bug.  It hand-builds a tiny win-64 conda package
+# carrying ONLY a post-link .bat with the exact shape of the real one -- a `findstr`
+# that leaves errorlevel 1, then the message echoes, then `exit /b 0` -- and installs
+# it on a real windows-latest runner.
+#
+# The bug it guards: conda treats a NONZERO post-link exit as a LinkError and rolls
+# back the whole install.  Without the trailing `exit /b 0` the findstr's errorlevel
+# leaks and every Windows `conda install` fails (the message still prints first, which
+# is what made it look harmless).  Manual trigger only.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash -l {0}          # login shell -- same reason the smoke needs it
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-activate-base: true
+          activate-environment: ""
+
+      - name: Build a tiny win-64 package carrying the fixed post-link.bat
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, hashlib, os, tarfile
+          os.makedirs("pkg/Scripts", exist_ok=True)
+          os.makedirs("pkg/info", exist_ok=True)
+          rel = "Scripts/.plprobe-post-link.bat"
+          bat = "\r\n".join([
+              "@echo off",
+              'for %%i in ("%PREFIX%") do set "ENV_REF=%%~ni"',
+              # this findstr leaves errorlevel 1 on a -p env (no \envs\) -- the exact
+              # condition that used to leak out and fail the install
+              'echo "%PREFIX%" | findstr /C:"\\envs\\" >nul || set "ENV_REF=%PREFIX%"',
+              '>>"%PREFIX%\\.messages.txt" echo Isabelle is installed.',
+              '>>"%PREFIX%\\.messages.txt" echo   conda activate %ENV_REF%',
+              "exit /b 0",
+          ]) + "\r\n"
+          with open("pkg/" + rel, "w", newline="") as f:
+              f.write(bat)
+          b = open("pkg/" + rel, "rb").read()
+          json.dump({"name": "plprobe", "version": "0.0.1", "build": "0",
+                     "build_number": 0, "subdir": "win-64", "depends": [],
+                     "platform": "win", "arch": "x86_64"},
+                    open("pkg/info/index.json", "w"))
+          json.dump({"paths_version": 1, "paths": [
+                     {"_path": rel, "path_type": "hardlink",
+                      "sha256": hashlib.sha256(b).hexdigest(),
+                      "size_in_bytes": len(b)}]},
+                    open("pkg/info/paths.json", "w"))
+          open("pkg/info/files", "w").write(rel + "\n")
+          with tarfile.open("plprobe-0.0.1-0.tar.bz2", "w:bz2") as t:
+              for root, _, files in os.walk("pkg"):
+                  for fn in files:
+                      full = os.path.join(root, fn)
+                      t.add(full, arcname=os.path.relpath(full, "pkg"))
+          print("built plprobe-0.0.1-0.tar.bz2")
+          PY
+          ls -l plprobe-0.0.1-0.tar.bz2
+
+      - name: "conda install it -- must SUCCEED, print the message, and NOT LinkError"
+        run: |
+          set -euo pipefail
+          conda create -y -p "$RUNNER_TEMP/e" ./plprobe-0.0.1-0.tar.bz2 2>&1 | tee out.log
+          if grep -qi "LinkError\|post-link script failed" out.log; then
+            echo "::error::post-link STILL fails the install"; exit 1
+          fi
+          grep -q "Isabelle is installed" out.log \
+            || { echo "::error::post-link did not print its message"; exit 1; }
+          echo "PROBE PASSED: install succeeded, message printed, no LinkError"

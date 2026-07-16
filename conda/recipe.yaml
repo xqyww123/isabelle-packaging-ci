@@ -114,6 +114,12 @@ build:
           # where conda is not on PATH (exactly what broke the first Windows smoke run).
           # ENV_REF: %%~ni is the env's basename; if the prefix is not under envs\ (base,
           # or a `-p <path>` env) fall back to the full %PREFIX% path.
+          #
+          # CRITICAL: end with `exit /b 0`.  conda treats a NONZERO post-link exit as a
+          # LinkError and ROLLS BACK the whole install -- and the `findstr` above leaves
+          # errorlevel 1 whenever the prefix is not under envs\, which broke every
+          # Windows `conda install` (the message still printed, then the install failed).
+          # A cosmetic hint must never be able to fail the install.
           printf '%s\r\n' \
             '@echo off' \
             'for %%i in ("%PREFIX%") do set "ENV_REF=%%~ni"' \
@@ -127,6 +133,7 @@ build:
             '>>"%PREFIX%\.messages.txt" echo   conda activate %ENV_REF%' \
             '>>"%PREFIX%\.messages.txt" echo   isabelle jedit      GUI jEdit' \
             '>>"%PREFIX%\.messages.txt" echo   isabelle vscode     VSCode / VSCodium GUI' \
+            'exit /b 0' \
             > "$PREFIX/Scripts/.isabelle-post-link.bat"
           ;;
         *)
@@ -166,6 +173,7 @@ build:
             '  isabelle build -b HOL   # headless build' \
             '  isabelle vscode         # VSCode / VSCodium GUI' \
             'MSG' \
+            'exit 0' \
             > "$PREFIX/bin/.isabelle-post-link.sh"
           chmod +x "$PREFIX/bin/.isabelle-post-link.sh"
           ;;

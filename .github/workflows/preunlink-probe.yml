@@ -80,33 +80,33 @@ jobs:
           sed -i 's#^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$#ISABELLE_HOME_USER="${ISABELLE_HOME_USER}-conda-$(basename "$(dirname "$ISABELLE_HOME")")"\n&#' "$S"
           echo "patched etc/settings:"; grep -n 'conda-' "$S"
 
-      - name: "B. diagnose the path formats"
-        shell: cmd
-        run: |
-          call "%RUNNER_TEMP%\isa\isa\bin\isabelle.bat" version
-          echo === getenv -b ISABELLE_HOME_USER ===
-          call "%RUNNER_TEMP%\isa\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER
-          echo === guard on a stock path (must NOT match -conda-) ===
-          echo C:\Users\x\.isabelle\Isabelle2025-2| findstr /C:"-conda-" && echo MATCHED-BAD || echo no-match-good
-
-      - name: "B. run candidate cleanup, verify deletion + guard"
+      - name: "B. diagnose + run candidate cleanup + verify (tolerant of isabelle exit code)"
         shell: cmd
         run: |
           set "PREFIX=%RUNNER_TEMP%\isa"
           set "ISA=%PREFIX%\isa"
+          rem warm Cygwin once; the runner's ~/.bash_profile is broken so isabelle.bat may
+          rem return nonzero -- ignore it, for/f below captures stdout regardless of exit code
+          call "%ISA%\bin\isabelle.bat" version >nul 2>&1
+          rem --- resolve ISABELLE_HOME_USER (a Cygwin /cygdrive/... path) ---
           set "ISAU="
-          for /f "delims=" %%d in ('call "%ISA%\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER') do set "ISAU=%%d"
+          for /f "delims=" %%d in ('call "%ISA%\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul') do set "ISAU=%%d"
           echo ISAU=[%ISAU%]
           if not defined ISAU ( echo ::error::could not resolve ISABELLE_HOME_USER & exit /b 1 )
+          rem --- guard: a stock path must NOT match -conda- ---
+          echo C:\Users\x\.isabelle\Isabelle2025-2| findstr /C:"-conda-" >nul && ( echo ::error::guard matched a STOCK path & exit /b 1 )
+          echo guard-ok: stock path rejected
+          rem --- convert Cygwin path -> Windows path for rmdir ---
           set "ISAUW="
-          for /f "delims=" %%w in ('"%ISA%\contrib\cygwin\bin\cygpath.exe" -w "%ISAU%"') do set "ISAUW=%%w"
+          for /f "delims=" %%w in ('"%ISA%\contrib\cygwin\bin\cygpath.exe" -w "%ISAU%" 2^>nul') do set "ISAUW=%%w"
           echo ISAUW=[%ISAUW%]
           if not defined ISAUW ( echo ::error::cygpath produced nothing & exit /b 1 )
-          rem create the namespaced dir that SHOULD be deleted
+          rem --- create the namespaced dir that MUST be deleted ---
           mkdir "%ISAUW%\heaps" 2>nul
-          echo marker > "%ISAUW%\marker.txt"
-          rem guard + delete
-          echo %ISAU%| findstr /C:"-conda-" >nul && ( if exist "%ISAUW%" rmdir /s /q "%ISAUW%" )
-          if exist "%ISAUW%" ( echo ::error::B FAIL: namespaced dir was NOT deleted & exit /b 1 )
-          echo B PASS: namespaced dir deleted, guard logic exercised
+          echo marker> "%ISAUW%\marker.txt"
+          if not exist "%ISAUW%" ( echo ::error::could not create the test dir at %ISAUW% & exit /b 1 )
+          rem --- guard + delete ---
+          echo %ISAU%| findstr /C:"-conda-" >nul && rmdir /s /q "%ISAUW%"
+          if exist "%ISAUW%" ( echo ::error::B FAIL: namespaced dir NOT deleted & exit /b 1 )
+          echo B PASS: getenv resolved, cygpath converted, namespaced dir deleted, stock rejected
           exit /b 0

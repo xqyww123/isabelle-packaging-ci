@@ -96,11 +96,22 @@ jobs:
           rem --- guard: a stock path must NOT match -conda- ---
           echo C:\Users\x\.isabelle\Isabelle2025-2| findstr /C:"-conda-" >nul && ( echo ::error::guard matched a STOCK path & exit /b 1 )
           echo guard-ok: stock path rejected
-          rem --- convert Cygwin path -> Windows path for rmdir ---
+          rem --- diagnose cygpath (why was it empty?) ---
+          if exist "%ISA%\contrib\cygwin\bin\cygpath.exe" (echo cygpath: present) else (echo cygpath: MISSING)
+          echo cygpath raw:
+          "%ISA%\contrib\cygwin\bin\cygpath.exe" -w "%ISAU%"
+          echo (end cygpath)
+          rem --- convert /cygdrive/X/... -> X:\... by hand (no external dep, sequential
+          rem     statements so immediate %VAR% expansion sees each update) ---
           set "ISAUW="
-          for /f "delims=" %%w in ('"%ISA%\contrib\cygwin\bin\cygpath.exe" -w "%ISAU%" 2^>nul') do set "ISAUW=%%w"
+          echo %ISAU%| findstr /B /C:"/cygdrive/" >nul || ( echo ::error::path is not /cygdrive/ form: %ISAU% & exit /b 1 )
+          set "P=%ISAU:/cygdrive/=%"
+          set "DL=%P:~0,1%"
+          set "REST=%P:~1%"
+          set "ISAUW=%DL%:%REST%"
+          set "ISAUW=%ISAUW:/=\%"
           echo ISAUW=[%ISAUW%]
-          if not defined ISAUW ( echo ::error::cygpath produced nothing & exit /b 1 )
+          if not defined ISAUW ( echo ::error::manual conversion produced nothing & exit /b 1 )
           rem --- create the namespaced dir that MUST be deleted ---
           mkdir "%ISAUW%\heaps" 2>nul
           echo marker> "%ISAUW%\marker.txt"

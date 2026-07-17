@@ -189,6 +189,28 @@ sed -i 's#^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$#ISABELLE_HOME_USER="${IS
 echo "patched etc/settings: ISABELLE_HOME_USER -> ~/.isabelle/${RELEASE}-conda-<env>"
 
 # ---------------------------------------------------------------------------
+# 1e. Default to 64-bit Poly/ML words (ML_system_64 = true).
+#
+# Stock Isabelle defaults ML_system_64 to false, i.e. the 31-bit-word Poly/ML
+# (x86_64_32).  The AoA stack is developed and run on 64-bit words -- the user's own
+# dev profile sets ML_system_64 = true in $ISABELLE_HOME_USER/etc/preferences -- and
+# some of its ML does not fit 31-bit words (e.g. Performant_Isabelle_ML's Knuth hash
+# constant 0x9E3779B9 overflowed there).
+#
+# This flip must move IN LOCKSTEP with the heap jobs: build.yml now builds the heaps with
+# `-o ML_system_64=true` (the x86_64-* variant), and this patch makes the runtime default
+# select that variant.  Only ONE word-size heap ships per (platform, apple) -- flipping
+# this default WITHOUT the matching 64-bit heap would point Isabelle at an absent dir and
+# rebuild HOL on first use.  Covers `isabelle build` and jEdit alike.
+# ---------------------------------------------------------------------------
+OPTIONS="$TREE/etc/options"
+grep -q '^public option ML_system_64 : bool = true' "$OPTIONS" && { echo "::error::etc/options ML_system_64 already true"; exit 1; }
+grep -q '^public option ML_system_64 : bool = false' "$OPTIONS" || {
+  echo "::error::etc/options anchor 'option ML_system_64 : bool = false' not found -- upstream layout changed"; exit 1; }
+sed -i 's/^public option ML_system_64 : bool = false/public option ML_system_64 : bool = true/' "$OPTIONS"
+echo "patched etc/options: ML_system_64 default -> true (64-bit words)"
+
+# ---------------------------------------------------------------------------
 # 2. inject the heaps
 # ---------------------------------------------------------------------------
 mkdir -p "$TREE/heaps"

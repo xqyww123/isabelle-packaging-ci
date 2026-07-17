@@ -44,7 +44,7 @@ echo "isabelle version -> $ver"
 echo
 echo "########## 2b. the run resolves to the INTENDED architecture ##########"
 # Without this, the osx-64 leg is a false pass waiting to happen.  The osx-64 package
-# ships BOTH heaps (arm64_32-darwin AND x86_64_32-darwin), so "HOL not rebuilt" (step 5)
+# ships BOTH heaps (arm64-darwin AND x86_64-darwin, 64-bit words), so "HOL not rebuilt" (step 5)
 # passes even if the run silently loaded the arm heap -- i.e. executed zero x86 code.
 # The only thing that catches that is asserting the runtime-resolved platform, not the
 # arch we *asked* for.  So when ARCH_PREFIX forces x86_64, ISABELLE_PLATFORM64 must

@@ -478,9 +478,13 @@ jobs:
   # The platform bundles, by contrast, already carry a fully activated contrib/ for
   # their platform -- they are exactly what a user downloads.  So: unpack, build.
   #
-  # The build command is copied verbatim from what build_release itself runs on its
-  # build_host (build_release.scala:245-258), including `-o parallel_proofs=0`:
-  #     bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main
+  # The build command is build_release's own (build_release.scala:245-258, `-o
+  # parallel_proofs=0`) PLUS `-o ML_system_64=true`.  The AoA stack needs 64-bit Poly/ML
+  # words, so the shipped heap must be the x86_64-* variant (not x86_64_32-*) and pack.sh
+  # flips the runtime default to match (§1e).  Without the flag here, this job would build
+  # a 31-bit heap that the patched default never selects -> HOL silently rebuilds on first
+  # use.  Word size does not add heap dirs, so the `n -eq 1`/`n -eq 2` asserts still hold.
+  #     bin/isabelle build -o parallel_proofs=0 -o system_heaps -o ML_system_64=true -b -- HOL Main
   # `Main` is a real session (src/Doc/ROOT:310, `session Main (doc) in "Main" = HOL +`)
   # and the default session of our toolchain; a heap is a delta over its parent, so
   # Main costs a few MB on top of HOL.
@@ -533,7 +537,7 @@ jobs:
           set -euo pipefail
           nproc; free -g || true
           t0=$(date +%s)
-          bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main
+          bin/isabelle build -o parallel_proofs=0 -o system_heaps -o ML_system_64=true -b -- HOL Main
           echo "heap build took $(( ($(date +%s) - t0) / 60 )) min"
           df -h /
 
@@ -626,7 +630,7 @@ jobs:
             echo "===================== ML_system_apple = $apple ====================="
             echo "ML_system_apple = $apple" > "$HOME_USER/etc/preferences"
             t0=$(date +%s)
-            bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main
+            bin/isabelle build -o parallel_proofs=0 -o system_heaps -o ML_system_64=true -b -- HOL Main
             echo "--- pass ML_system_apple=$apple took $(( ($(date +%s) - t0) / 60 )) min"
             ls heaps
             df -h /
@@ -778,7 +782,7 @@ jobs:
             *) echo "::error::ISABELLE_TMP_PREFIX is not on D: ($tmp) - C: will fill up"; exit 1 ;;
           esac
           t0=$(date +%s)
-          "$BASH_CYG" -c "$PRE"' cd '"$ISA_CYG"' && bin/isabelle build -o parallel_proofs=0 -o system_heaps -b -- HOL Main'
+          "$BASH_CYG" -c "$PRE"' cd '"$ISA_CYG"' && bin/isabelle build -o parallel_proofs=0 -o system_heaps -o ML_system_64=true -b -- HOL Main'
           echo "heap build took $(( ($(date +%s) - t0) / 60 )) min"
           df -h | grep -Ei '^(Filesystem|[CD]:)' || true
 

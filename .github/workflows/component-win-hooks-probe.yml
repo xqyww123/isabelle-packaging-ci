@@ -530,3 +530,51 @@ jobs:
           if exist "%CFW%" (type "%CFW%") else (echo ^(no components file^))
           findstr /C:"isabelle-performant-ml" "%CFW%" >nul 2>&1 && (echo E2 PASS: the shipped .bat itself registers correctly) || (echo E2 FAIL: the shipped .bat does not register even by hand)
           exit /b 0
+
+      # F: E1 confounds two explanations -- in env w, isabelle was BOTH linked in an
+      # earlier transaction AND already run once by us (Cygwin self-heals on the first
+      # `isabelle` call).  Env y separates them: isabelle installed in its own
+      # transaction but NEVER invoked, then the component added.
+      #   registers  => the cause is purely conda LINK ORDER inside one transaction
+      #   fails      => the cause is the COLD first-ever isabelle run (Cygwin init)
+      #                 happening inside conda's post-link subprocess
+      - name: "F: conda's LINK ORDER for a one-shot install (dry run)"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
+          conda create --dry-run --json -n zz -c "file:///$CH" -c https://conda.qiyuan.me \
+            --override-channels isabelle-performant-ml > dry.json 2>/dev/null
+          python -c "import json;d=json.load(open('dry.json'));print('LINK order:');[print('  %2d %s' % (i,p.get('name'))) for i,p in enumerate(d['actions']['LINK'])]"
+
+      - name: "F: install isabelle alone into env y and NEVER run it"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          conda create -y -n y -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tail -3
+          echo "PREFIX_Y=$CONDA\\envs\\y" >> "$GITHUB_ENV"
+          # do NOT invoke isabelle here: Cygwin must stay cold
+
+      - name: "F: add the component to the cold env y"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
+          conda install -y -n y -c "file:///$CH" -c https://conda.qiyuan.me \
+            --override-channels isabelle-performant-ml 2>&1 | tail -10
+
+      - name: "F verdict"
+        shell: cmd
+        run: |
+          set "ISAU="
+          for /f "delims=" %%d in ('call "%PREFIX_Y%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul') do set "ISAU=%%d"
+          set "P=%ISAU:/cygdrive/=%"
+          set "DL2=%P:~0,1%"
+          set "REST2=%P:~1%"
+          set "CFY=%DL2%:%REST2%"
+          set "CFY=%CFY:/=\%"
+          set "CFY=%CFY%\etc\components"
+          echo CFY=[%CFY%]
+          if exist "%CFY%" (type "%CFY%") else (echo ^(no components file^))
+          findstr /C:"isabelle-performant-ml" "%CFY%" >nul 2>&1 && (echo F PASS: registered into a COLD but already-linked isabelle -- cause is conda LINK ORDER) || (echo F FAIL: not registered even though isabelle was already linked -- cause is the COLD first isabelle run)
+          exit /b 0

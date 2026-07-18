@@ -1,0 +1,115 @@
+# Probe: validate the ENHANCED smoke logic before embedding it in three release
+# workflows.
+#
+# Two gaps this exists to close, both found by asking what had actually been executed
+# rather than what looked right:
+#
+#   1. pre-unlink (`isabelle components -x`) has never run on Linux in any release job --
+#      no workflow ever did `conda remove`.
+#   2. the Windows hooks of auto-sledgehammer and isabelle-rpc have never run on Windows
+#      at all; the release smoke jobs are ubuntu-only.  Windows registration failure is
+#      SILENT (install succeeds, conda list shows it, nothing is registered), which is
+#      exactly how the Cygwin cold-start bug hid, so inferring it from "same code shape"
+#      is the reasoning that let that bug through.
+#
+# This probe targets the ALREADY-PUBLISHED isabelle-performant-ml on the live channel.
+# It publishes nothing and touches nothing on R2 -- it only installs and removes in a
+# throwaway environment.
+name: smoke-logic-probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "conda package to probe (must already be on the channel)"
+        type: string
+        default: isabelle-performant-ml
+      session:
+        description: "Isabelle session that package registers"
+        type: string
+        default: Performant_Isabelle_ML
+
+jobs:
+  probe:
+    name: "smoke logic on ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        # Windows: without a login shell the runner's Git-Bash starts --noprofile --norc
+        # and conda is not on PATH at all.
+        shell: bash -l {0}
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+
+      - name: "conda install from the live channel"
+        run: |
+          set -euo pipefail
+          conda create -y -n t \
+            -c https://conda.qiyuan.me -c conda-forge --override-channels \
+            "${{ inputs.package }}"
+          conda activate t
+          conda list "${{ inputs.package }}"
+
+      - name: "the post-link REGISTERED the component"
+        run: |
+          set -euo pipefail
+          conda activate t
+          # `isabelle getenv` returns a CYGWIN path on Windows (/cygdrive/c/...), which
+          # Git-Bash cannot open -- it wants /c/...  Convert, or this reads nothing and
+          # the grep below fails for the wrong reason.
+          raw="$(isabelle getenv -b ISABELLE_HOME_USER)"
+          case "$raw" in
+            /cygdrive/*) home="/${raw#/cygdrive/}" ;;
+            *)           home="$raw" ;;
+          esac
+          echo "ISABELLE_HOME_USER = $raw"
+          echo "readable as        = $home"
+          comp="$home/etc/components"
+          [ -f "$comp" ] || { echo "::error::no etc/components at all -- nothing registered"; exit 1; }
+          echo "----- etc/components -----"; cat "$comp"
+          grep -q "${{ inputs.package }}" "$comp" \
+            || { echo "::error::post-link did NOT register ${{ inputs.package }}"; exit 1; }
+          echo "  OK  registered"
+
+      - name: "the registered session builds (linux only -- expensive on Windows)"
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          conda activate t
+          isabelle build -v "${{ inputs.session }}"
+
+      - name: "the pre-unlink UNREGISTERED it"
+        run: |
+          set -euo pipefail
+          conda activate t
+          raw="$(isabelle getenv -b ISABELLE_HOME_USER)"
+          case "$raw" in
+            /cygdrive/*) home="/${raw#/cygdrive/}" ;;
+            *)           home="$raw" ;;
+          esac
+          comp="$home/etc/components"
+
+          # --force removes ONLY this package.  A plain `conda remove` would take the base
+          # `isabelle` with it (nothing else depends on it), and isabelle's OWN pre-unlink
+          # deletes the whole namespaced ISABELLE_HOME_USER -- so etc/components would
+          # vanish wholesale and the assertion below would pass without proving anything.
+          # That exact confound made an earlier "PASS" vacuous.
+          conda remove -y --force "${{ inputs.package }}"
+
+          [ -f "$comp" ] || { echo "::error::etc/components disappeared entirely --"
+                              echo "::error::the removal took isabelle with it; assertion is vacuous"
+                              exit 1; }
+          echo "----- etc/components after removal -----"; cat "$comp"
+          if grep -q "${{ inputs.package }}" "$comp"; then
+            echo "::error::pre-unlink did NOT unregister ${{ inputs.package }}"
+            exit 1
+          fi
+          echo "  OK  unregistered, and isabelle is still installed"
+          isabelle version

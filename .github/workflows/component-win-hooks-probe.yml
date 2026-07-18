@@ -1,0 +1,381 @@
+name: component-win-hooks-probe
+
+# Settle the "UNVERIFIED" note in Performant_Isabelle_ML/conda/recipe.yaml on a REAL
+# windows-latest runner.  Four questions, each answered with echoed evidence:
+#
+#   Q1  does conda run Scripts/.<name>-post-link.bat for a **noarch: generic** package
+#       on Windows, with %PREFIX% set?  (the base package's probes covered only a
+#       platform-specific package)
+#   Q2  does the recipe's pure-batch native->Cygwin conversion produce the intended
+#       string?  Stressed with a %PREFIX% containing SPACES and with a non-C: drive.
+#   Q3  THE SHARP ONE: does `isabelle.bat components -u` accept /cygdrive/C/... with an
+#       UPPERCASE drive letter?  If not, does /cygdrive/c/... work (=> the recipe needs
+#       a lowercasing step)?  Run in ISOLATION and BEFORE the full install, so the
+#       answer survives any later breakage.
+#   Q4  end to end: conda install -> component registered + `isabelle build` works;
+#       conda remove -> entry gone (pre-unlink -x).
+#
+# Strictly read-only w.r.t. conda.qiyuan.me: the package under test is built here and
+# served from a local channel; nothing is ever uploaded.  Manual trigger only.
+on:
+  workflow_dispatch:
+
+jobs:
+  # The recipe's build script is `interpreter: bash`, so build it on Linux and hand the
+  # artifact (already indexed as a channel) to the Windows job.
+  build:
+    name: "Build the noarch package + index a local channel"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: xqyww123/Performant_Isabelle_ML
+          path: pml
+
+      - name: Install rattler-build
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/rattler-build \
+            https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/rattler-build-x86_64-unknown-linux-musl
+          chmod +x /tmp/rattler-build
+          /tmp/rattler-build --version
+
+      - name: Build isabelle-performant-ml (noarch)
+        env:
+          ISA_COMPONENT_VERSION: 0.1.0
+        run: |
+          set -euo pipefail
+          /tmp/rattler-build build \
+            --recipe pml/conda/recipe.yaml \
+            --output-dir "$GITHUB_WORKSPACE/out" \
+            --build-num 0 \
+            --no-test
+          find "$GITHUB_WORKSPACE/out" -name '*.conda' -printf '  %10s  %p\n'
+
+      - name: "Show the generated .bat hooks (byte-exact) for the record"
+        run: |
+          set -euo pipefail
+          pkg=$(find "$GITHUB_WORKSPACE/out" -name 'isabelle-performant-ml-*.conda' | head -1)
+          pip install --quiet zstandard
+          work=$(mktemp -d)
+          python3 -c "import sys,zipfile,tarfile,io,zstandard; z=zipfile.ZipFile(sys.argv[1]); b=next(n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')); r=zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(b))); tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])" "$pkg" "$work"
+          for f in Scripts/.isabelle-performant-ml-post-link.bat \
+                   Scripts/.isabelle-performant-ml-pre-unlink.bat ; do
+            echo "===== $f ====="
+            cat -A "$work/$f"
+          done
+
+      - name: "Index it into a local channel (done here: conda-forge TLS is flaky on win)"
+        run: |
+          set -euo pipefail
+          pip install --quiet conda-index
+          CH="$GITHUB_WORKSPACE/local-channel"
+          mkdir -p "$CH/noarch"
+          find "$GITHUB_WORKSPACE/out" -name '*.conda' -exec cp {} "$CH/noarch/" \;
+          python3 -m conda_index "$CH" --no-zst --no-bz2 --channeldata --channel-name local
+          find "$CH" -type f | sort
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: local-channel
+          path: local-channel/**
+          if-no-files-found: error
+
+  probe:
+    name: "Windows: answer Q1-Q4"
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-activate-base: true
+          activate-environment: ""
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: local-channel
+          path: ${{ runner.temp }}/local-channel
+
+      - name: "Runner facts: drives, RUNNER_TEMP, channel layout"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          echo "RUNNER_TEMP=[$RUNNER_TEMP]"
+          echo "USERPROFILE=[${USERPROFILE:-}]"
+          wmic logicaldisk get name 2>/dev/null || true
+          ls -R "$RUNNER_TEMP/local-channel" | head -50
+
+      # ---------------------------------------------------------------------------
+      # Q3 FIRST, in isolation: install ONLY the base isabelle and hit
+      # `isabelle.bat components -u` with an uppercase and a lowercase cygdrive path.
+      # ---------------------------------------------------------------------------
+      - name: "Q3 setup: install the base isabelle alone"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          conda create -y -p "$RUNNER_TEMP/isa" \
+            -c https://conda.qiyuan.me --override-channels isabelle
+          ls "$RUNNER_TEMP/isa/isa/bin/"
+
+      - name: "Q3: does isabelle.bat components -u accept /cygdrive/C vs /cygdrive/c?"
+        shell: cmd
+        run: |
+          set "ISA=%RUNNER_TEMP%\isa\isa"
+          rem a minimal but VALID component: a directory containing a ROOT
+          mkdir C:\q3comp 2>nul
+          echo session Q3 = Pure> C:\q3comp\ROOT
+          echo ---- built the test component at C:\q3comp ----
+          dir C:\q3comp
+
+          rem warm Cygwin once; the runner's ~/.bash_profile is broken so the first
+          rem isabelle.bat invocation may return nonzero for unrelated reasons
+          call "%ISA%\bin\isabelle.bat" version
+          echo WARMUP_EXIT=%ERRORLEVEL%
+
+          rem locate ISABELLE_HOME_USER (Cygwin form) and convert it back to native
+          set "ISAU="
+          for /f "delims=" %%d in ('call "%ISA%\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul') do set "ISAU=%%d"
+          echo ISABELLE_HOME_USER=[%ISAU%]
+          set "P=%ISAU:/cygdrive/=%"
+          set "DL=%P:~0,1%"
+          set "REST=%P:~1%"
+          set "ISAUW=%DL%:%REST%"
+          set "ISAUW=%ISAUW:/=\%"
+          echo ISABELLE_HOME_USER_NATIVE=[%ISAUW%]
+          set "COMPFILE=%ISAUW%\etc\components"
+
+          rem ---------------- UPPERCASE drive letter ----------------
+          echo ================ Q3-UPPER ================
+          echo RUNNING: isabelle.bat components -u "/cygdrive/C/q3comp"
+          call "%ISA%\bin\isabelle.bat" components -u "/cygdrive/C/q3comp"
+          echo Q3_UPPER_EXIT=%ERRORLEVEL%
+          echo ---- %COMPFILE% after UPPER ----
+          if exist "%COMPFILE%" (type "%COMPFILE%") else (echo ^(components file does not exist^))
+          echo ---- end ----
+
+          rem ---------------- lowercase drive letter ----------------
+          echo ================ Q3-LOWER ================
+          echo RUNNING: isabelle.bat components -u "/cygdrive/c/q3comp"
+          call "%ISA%\bin\isabelle.bat" components -u "/cygdrive/c/q3comp"
+          echo Q3_LOWER_EXIT=%ERRORLEVEL%
+          echo ---- %COMPFILE% after LOWER ----
+          if exist "%COMPFILE%" (type "%COMPFILE%") else (echo ^(components file does not exist^))
+          echo ---- end ----
+
+          rem ---------------- for contrast: the NATIVE path the recipe avoids -------
+          echo ================ Q3-NATIVE (expected to fail) ================
+          echo RUNNING: isabelle.bat components -u "C:\q3comp"
+          call "%ISA%\bin\isabelle.bat" components -u "C:\q3comp"
+          echo Q3_NATIVE_EXIT=%ERRORLEVEL%
+          echo ---- %COMPFILE% after NATIVE ----
+          if exist "%COMPFILE%" (type "%COMPFILE%") else (echo ^(components file does not exist^))
+          echo ---- end ----
+
+          rem ---------------- and -x removes again ----------------
+          echo ================ Q3-REMOVE ================
+          call "%ISA%\bin\isabelle.bat" components -x "/cygdrive/C/q3comp"
+          echo Q3_XU_EXIT=%ERRORLEVEL%
+          call "%ISA%\bin\isabelle.bat" components -x "/cygdrive/c/q3comp"
+          echo Q3_XL_EXIT=%ERRORLEVEL%
+          echo ---- %COMPFILE% after -x ----
+          if exist "%COMPFILE%" (type "%COMPFILE%") else (echo ^(components file does not exist^))
+          exit /b 0
+
+      - name: "Q3b: does isabelle SEE a component registered with the UPPERCASE path?"
+        shell: cmd
+        run: |
+          set "ISA=%RUNNER_TEMP%\isa\isa"
+          call "%ISA%\bin\isabelle.bat" components -u "/cygdrive/C/q3comp" >nul 2>&1
+          echo ---- isabelle components (dump) ----
+          call "%ISA%\bin\isabelle.bat" getenv -b ISABELLE_COMPONENTS
+          echo GETENV_EXIT=%ERRORLEVEL%
+          echo ---- can isabelle resolve the session defined there? ----
+          call "%ISA%\bin\isabelle.bat" build -n -l Q3
+          echo BUILD_N_EXIT=%ERRORLEVEL%
+          call "%ISA%\bin\isabelle.bat" components -x "/cygdrive/C/q3comp" >nul 2>&1
+          exit /b 0
+
+      # ---------------------------------------------------------------------------
+      # Q1: does conda run a noarch package's Scripts/*.bat hooks on Windows?
+      # A hand-built noarch: generic package that writes a marker naming %PREFIX%.
+      # ---------------------------------------------------------------------------
+      - name: "Q1: build a tiny NOARCH package whose post-link/pre-unlink .bat marks"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, json, hashlib, tarfile
+          os.makedirs("pkgN/Scripts", exist_ok=True); os.makedirs("pkgN/info", exist_ok=True)
+          rels = []
+          for action, tag in (("post-link", "POST-LINK"), ("pre-unlink", "PRE-UNLINK")):
+              rel = "Scripts/.noarchprobe-%s.bat" % action
+              rels.append(rel)
+              bat = "\r\n".join([
+                  "@echo off",
+                  'echo %s-RAN PREFIX=[%%PREFIX%%] > "%%RUNNER_TEMP%%\\noarch_%s.txt"' % (tag, action),
+                  "exit /b 0",
+              ]) + "\r\n"
+              open("pkgN/" + rel, "w", newline="").write(bat)
+          json.dump({"name": "noarchprobe", "version": "0.0.1", "build": "0",
+                     "build_number": 0, "subdir": "noarch", "depends": [],
+                     "noarch": "generic", "platform": None, "arch": None},
+                    open("pkgN/info/index.json", "w"))
+          json.dump({"noarch": {"type": "generic"}}, open("pkgN/info/link.json", "w"))
+          paths = []
+          for rel in rels:
+              b = open("pkgN/" + rel, "rb").read()
+              paths.append({"_path": rel, "path_type": "hardlink",
+                            "sha256": hashlib.sha256(b).hexdigest(),
+                            "size_in_bytes": len(b)})
+          json.dump({"paths_version": 1, "paths": paths}, open("pkgN/info/paths.json", "w"))
+          open("pkgN/info/files", "w").write("".join(r + "\n" for r in rels))
+          with tarfile.open("noarchprobe-0.0.1-0.tar.bz2", "w:bz2") as t:
+              for root, _, files in os.walk("pkgN"):
+                  for fn in files:
+                      full = os.path.join(root, fn)
+                      t.add(full, arcname=os.path.relpath(full, "pkgN"))
+          print("built noarchprobe-0.0.1-0.tar.bz2")
+          PY
+
+      - name: "Q1: install then remove the noarch package -- both hooks must run"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          rm -f "$RUNNER_TEMP/noarch_post-link.txt" "$RUNNER_TEMP/noarch_pre-unlink.txt"
+          conda create -y -p "$RUNNER_TEMP/eN" ./noarchprobe-0.0.1-0.tar.bz2 2>&1 | tail -20
+          if [ -f "$RUNNER_TEMP/noarch_post-link.txt" ]; then
+            echo "Q1 POST-LINK PASS:"; cat "$RUNNER_TEMP/noarch_post-link.txt"
+          else
+            echo "Q1 POST-LINK FAIL: conda did NOT run Scripts/.<name>-post-link.bat for noarch"
+          fi
+          conda remove -y -p "$RUNNER_TEMP/eN" noarchprobe 2>&1 | tail -20
+          if [ -f "$RUNNER_TEMP/noarch_pre-unlink.txt" ]; then
+            echo "Q1 PRE-UNLINK PASS:"; cat "$RUNNER_TEMP/noarch_pre-unlink.txt"
+          else
+            echo "Q1 PRE-UNLINK FAIL: conda did NOT run Scripts/.<name>-pre-unlink.bat for noarch"
+          fi
+
+      # ---------------------------------------------------------------------------
+      # Q2: run the recipe's OWN conversion lines, verbatim, against hostile prefixes.
+      # ---------------------------------------------------------------------------
+      - name: "Q2: the recipe's conversion, verbatim, on hostile %PREFIX% values"
+        shell: cmd
+        run: |
+          echo ================ Q2: plain C: prefix ================
+          set "PREFIX=C:\Users\runneradmin\envs\t"
+          call :conv
+          echo ================ Q2: prefix WITH SPACES ================
+          set "PREFIX=C:\Program Files\my env\t"
+          call :conv
+          echo ================ Q2: non-C: drive ================
+          set "PREFIX=D:\a\_temp\e"
+          call :conv
+          echo ================ Q2: RUNNER_TEMP-based prefix (real) ================
+          set "PREFIX=%RUNNER_TEMP%\isa"
+          call :conv
+          exit /b 0
+
+          :conv
+          rem --- these six lines are copied verbatim from conda/recipe.yaml ---
+          set "COMP=%PREFIX%\share\isabelle-performant-ml"
+          set "DL=%COMP:~0,1%"
+          set "REST=%COMP:~2%"
+          set "REST=%REST:\=/%"
+          set "CYG=/cygdrive/%DL%%REST%"
+          echo   PREFIX=[%PREFIX%]
+          echo   COMP=[%COMP%]
+          echo   DL=[%DL%]
+          echo   CYG=[%CYG%]
+          goto :eof
+
+      # ---------------------------------------------------------------------------
+      # Q4 (and Q1/Q2 for the REAL package): install it for real.
+      # ---------------------------------------------------------------------------
+      - name: "Q4: conda install isabelle-performant-ml from the local channel"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
+          echo "channel dir = $CH"
+          conda create -y -n t -c "file:///$CH" -c https://conda.qiyuan.me \
+            --override-channels isabelle-performant-ml 2>&1 | tee inst.log
+          if grep -qi "LinkError\|post-link script failed" inst.log; then
+            echo "::warning::the install reported a link failure"
+          fi
+          conda activate t
+          conda list | grep -i isabelle
+
+      - name: "Q2-real: what the SHIPPED post-link.bat computes (logic copy, echoed)"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          conda activate t
+          # hand the REAL env prefix (native form) to the cmd step below
+          echo "REAL_PREFIX=$(cygpath -w "$CONDA_PREFIX" 2>/dev/null || echo "$CONDA_PREFIX")" >> "$GITHUB_ENV"
+          echo "===== shipped Scripts/.isabelle-performant-ml-post-link.bat ====="
+          cat -A "$CONDA_PREFIX/Scripts/.isabelle-performant-ml-post-link.bat" || true
+          echo "===== shipped Scripts/.isabelle-performant-ml-pre-unlink.bat ====="
+          cat -A "$CONDA_PREFIX/Scripts/.isabelle-performant-ml-pre-unlink.bat" || true
+          # Same file with the `call` line replaced by echoes: the conversion lines are
+          # byte-identical, so the printed CYG is what the real hook passed to isabelle.
+          sed -e 's#^call .*#echo COMP=[%COMP%]\r\necho CYG=[%CYG%]#' \
+            "$CONDA_PREFIX/Scripts/.isabelle-performant-ml-post-link.bat" \
+            > "$RUNNER_TEMP/echo-hook.bat"
+          echo "===== derived echo-only hook ====="
+          cat "$RUNNER_TEMP/echo-hook.bat"
+
+      - name: "Q2-real: run the derived echo-only hook with the real %PREFIX%"
+        shell: cmd
+        run: |
+          set "PREFIX=%REAL_PREFIX%"
+          echo REAL_PREFIX=[%PREFIX%]
+          call "%RUNNER_TEMP%\echo-hook.bat"
+          exit /b 0
+
+      - name: "Q4: is the component registered in ISABELLE_HOME_USER/etc/components?"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          conda activate t
+          hu="$(isabelle getenv -b ISABELLE_HOME_USER || true)"
+          echo "ISABELLE_HOME_USER=[$hu]"
+          # convert /cygdrive/X/... -> X:/...
+          nat="$(echo "$hu" | sed -e 's#^/cygdrive/\(.\)/#\1:/#')"
+          echo "native=[$nat]"
+          echo "----- etc/components -----"
+          cat "$nat/etc/components" || echo "(no components file)"
+          echo "--------------------------"
+          if grep -qi 'isabelle-performant-ml' "$nat/etc/components" 2>/dev/null; then
+            echo "Q4-REGISTER PASS"
+          else
+            echo "Q4-REGISTER FAIL: the post-link did not register the component"
+          fi
+
+      - name: "Q4: isabelle build Performant_Isabelle_ML"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          conda activate t
+          isabelle build -v Performant_Isabelle_ML
+          echo "BUILD_EXIT=$?"
+
+      - name: "Q4: conda remove -- the pre-unlink must unregister it"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          conda activate t
+          hu="$(isabelle getenv -b ISABELLE_HOME_USER || true)"
+          nat="$(echo "$hu" | sed -e 's#^/cygdrive/\(.\)/#\1:/#')"
+          conda deactivate
+          conda remove -y -n t isabelle-performant-ml 2>&1 | tail -20
+          echo "----- etc/components after conda remove -----"
+          cat "$nat/etc/components" || echo "(no components file)"
+          echo "---------------------------------------------"
+          if grep -qi 'isabelle-performant-ml' "$nat/etc/components" 2>/dev/null; then
+            echo "Q4-UNREGISTER FAIL: entry still present after conda remove"
+          else
+            echo "Q4-UNREGISTER PASS: entry gone"
+          fi

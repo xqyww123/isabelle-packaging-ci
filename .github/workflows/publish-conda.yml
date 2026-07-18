@@ -289,11 +289,28 @@ jobs:
           # bound on how long until some unrelated publish repairs it.  Auditing the WHOLE
           # channel is what turns that silent loss into a red run -- and because a re-run
           # re-pulls and re-indexes, the repair is one click.
+          # Walk $CH, NOT R2.  The pull step above already fetched the whole channel
+          # under `set -e` with a bare rclone call, so a listing failure cannot reach
+          # here silently -- whereas `for sub in $(rclone lsf ...)` puts the status in
+          # a for-loop word list, where NEITHER errexit NOR pipefail observes it:
+          #
+          #   set -euo pipefail; fail=0; for s in $(false); do fail=1; done; exit $fail
+          #
+          # exits 0.  The loop body never runs, nothing is printed, and the step goes
+          # green having audited nothing -- indistinguishable from a clean channel, in
+          # the one step whose entire job is to catch a lost release.  (The
+          # immutability guard above branches on rclone's exit code for exactly this
+          # reason; this step used to be the only rclone consumer here that did not.)
+          #
+          # Auditing the pulled snapshot is also the MORE meaningful comparison: it is
+          # precisely what conda-index consumed and what was pushed.
           fail=0
-          for sub in $(rclone lsf "R2:$R2_BUCKET/" --dirs-only --s3-no-check-bucket | tr -d '/'); do
-            files=$(rclone lsf "R2:$R2_BUCKET/$sub/" --files-only --s3-no-check-bucket \
-                    | grep '\.conda$' || true)
+          audited=0
+          for dir in "$CH"/*/; do
+            sub=$(basename "$dir")
+            files=$(cd "$dir" && ls -1 *.conda 2>/dev/null || true)
             [ -n "$files" ] || continue          # not a package subdir (e.g. .cache)
+            audited=$((audited + 1))
             rd="$RUNNER_TEMP/audit-$sub.json"
             curl -fsSL "https://conda.qiyuan.me/$sub/repodata.json" -o "$rd" || {
               echo "::error::$sub holds packages but has no repodata.json"; fail=1; continue; }
@@ -311,4 +328,9 @@ jobs:
               printf '  %-14s all %s package(s) indexed\n' "$sub" "$(printf '%s\n' "$files" | wc -l)"
             fi
           done
+          # A no-op audit must not pass as a clean one.
+          [ "$audited" -gt 0 ] || {
+            echo "::error::the audit inspected NO subdir -- it cannot have verified anything"
+            exit 1; }
+          echo "audited $audited subdir(s)"
           exit $fail

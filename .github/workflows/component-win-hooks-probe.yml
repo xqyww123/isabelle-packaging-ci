@@ -93,11 +93,12 @@ jobs:
       - name: "Index it into a local channel (done here: conda-forge TLS is flaky on win)"
         run: |
           set -euo pipefail
-          pip install --quiet conda-index
+          # into the runner's preinstalled miniconda, so conda_index finds `conda` itself
+          sudo "$CONDA/bin/python" -m pip install --quiet conda-index
           CH="$GITHUB_WORKSPACE/local-channel"
           mkdir -p "$CH/noarch"
           find "$GITHUB_WORKSPACE/out" -name '*.conda' -exec cp {} "$CH/noarch/" \;
-          python3 -m conda_index "$CH" --no-zst --no-bz2 --channeldata --channel-name local
+          "$CONDA/bin/python" -m conda_index "$CH" --no-zst --no-bz2 --channeldata --channel-name local
           find "$CH" -type f | sort
 
       - uses: actions/upload-artifact@v4

@@ -61,10 +61,18 @@ jobs:
         run: |
           set -euo pipefail
           conda activate t
+          # Windows puts the entry point in Scripts/ as a .bat; everyone else in bin/.
+          # Git-Bash resolves neither `isabelle` nor `isabelle.bat` from PATH here, so
+          # address it through the env prefix, exactly as the base package's smoke does.
+          if [ -x "$CONDA_PREFIX/isa/bin/isabelle" ]; then
+            ISA="$CONDA_PREFIX/isa/bin/isabelle"
+          else
+            ISA="$CONDA_PREFIX/isa/Scripts/isabelle.bat"
+          fi
           # `isabelle getenv` returns a CYGWIN path on Windows (/cygdrive/c/...), which
           # Git-Bash cannot open -- it wants /c/...  Convert, or this reads nothing and
           # the grep below fails for the wrong reason.
-          raw="$(isabelle getenv -b ISABELLE_HOME_USER)"
+          raw="$("$ISA" getenv -b ISABELLE_HOME_USER)"
           case "$raw" in
             /cygdrive/*) home="/${raw#/cygdrive/}" ;;
             *)           home="$raw" ;;

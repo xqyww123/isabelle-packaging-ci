@@ -412,3 +412,72 @@ jobs:
           echo ---------------------------------------------
           findstr /C:"isabelle-performant-ml" "%COMPFILE%" >nul 2>&1 && (echo Q4-UNREGISTER FAIL: entry still present after conda remove) || (echo Q4-UNREGISTER PASS: entry gone)
           exit /b 0
+
+      # ---------------------------------------------------------------------------
+      # Diagnostics for a FAILED Q4 registration.  The hook swallows every message
+      # (`>nul 2>&1`), so replay its logic by hand, unredirected, and separately test
+      # whether a WARMED isabelle (one that has already run once in that prefix)
+      # changes the outcome -- i.e. whether the first-ever isabelle.bat run, which
+      # initialises Cygwin, is what fails inside conda's link step.
+      # ---------------------------------------------------------------------------
+      - name: "D1: fresh single-shot install into env u"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
+          conda create -y -n u -c "file:///$CH" -c https://conda.qiyuan.me \
+            --override-channels isabelle-performant-ml 2>&1 | tail -25
+          echo "PREFIX_U=$CONDA\\envs\\u" >> "$GITHUB_ENV"
+
+      - name: "D2: what the hook WOULD have said, unredirected"
+        shell: cmd
+        run: |
+          set "PREFIX=%PREFIX_U%"
+          echo PREFIX=[%PREFIX%]
+          echo ---- does the component dir exist? ----
+          dir "%PREFIX%\share"
+          echo ---- is isabelle.bat there? ----
+          if exist "%PREFIX%\isa\bin\isabelle.bat" (echo isabelle.bat: present) else (echo isabelle.bat: MISSING)
+          echo ---- the shipped hooks ----
+          dir "%PREFIX%\Scripts\.isabelle-performant-ml-*"
+          echo ---- components file BEFORE the manual run ----
+          set "ISAU="
+          for /f "delims=" %%d in ('call "%PREFIX%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul') do set "ISAU=%%d"
+          set "P=%ISAU:/cygdrive/=%"
+          set "DL2=%P:~0,1%"
+          set "REST2=%P:~1%"
+          set "ISAUW=%DL2%:%REST2%"
+          set "ISAUW=%ISAUW:/=\%"
+          set "CF=%ISAUW%\etc\components"
+          echo CF=[%CF%]
+          echo CF=%CF%>> "%GITHUB_ENV%"
+          if exist "%CF%" (type "%CF%") else (echo ^(no components file^))
+          echo ---- replay the hook's own lines, UNREDIRECTED ----
+          set "COMP=%PREFIX%\share\isabelle-performant-ml"
+          set "DL=%COMP:~0,1%"
+          set "REST=%COMP:~2%"
+          set "REST=%REST:\=/%"
+          set "CYG=/cygdrive/%DL%%REST%"
+          echo COMP=[%COMP%]
+          echo CYG=[%CYG%]
+          call "%PREFIX%\isa\bin\isabelle.bat" components -u "%CYG%"
+          echo D2_MANUAL_EXIT=%ERRORLEVEL%
+          echo ---- components file AFTER the manual run ----
+          if exist "%CF%" (type "%CF%") else (echo ^(no components file^))
+          exit /b 0
+
+      - name: "D3: with isabelle already warm, does a re-install register?"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
+          conda remove -y -n u isabelle-performant-ml 2>&1 | tail -5
+          conda install -y -n u -c "file:///$CH" -c https://conda.qiyuan.me \
+            --override-channels isabelle-performant-ml 2>&1 | tail -15
+
+      - name: "D3: components after the warm re-install"
+        shell: cmd
+        run: |
+          if exist "%CF%" (type "%CF%") else (echo ^(no components file^))
+          findstr /C:"isabelle-performant-ml" "%CF%" >nul 2>&1 && (echo D3 PASS: warm re-install DID register) || (echo D3 FAIL: warm re-install did NOT register either)
+          exit /b 0

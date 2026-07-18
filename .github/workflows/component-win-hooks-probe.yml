@@ -364,47 +364,51 @@ jobs:
           call "%RUNNER_TEMP%\echo-hook.bat"
           exit /b 0
 
+      # cmd, NOT Git-Bash: the base package's own post-link says so -- conda is not on
+      # PATH under Git-Bash, so `isabelle` is `command not found` there.  We call
+      # isabelle.bat out of the env prefix directly and skip activation entirely.
       - name: "Q4: is the component registered in ISABELLE_HOME_USER/etc/components?"
-        shell: bash -l {0}
+        shell: cmd
         run: |
-          set -euo pipefail
-          conda activate t
-          hu="$(isabelle getenv -b ISABELLE_HOME_USER || true)"
-          echo "ISABELLE_HOME_USER=[$hu]"
-          # convert /cygdrive/X/... -> X:/...
-          nat="$(echo "$hu" | sed -e 's#^/cygdrive/\(.\)/#\1:/#')"
-          echo "native=[$nat]"
-          echo "----- etc/components -----"
-          cat "$nat/etc/components" || echo "(no components file)"
-          echo "--------------------------"
-          if grep -qi 'isabelle-performant-ml' "$nat/etc/components" 2>/dev/null; then
-            echo "Q4-REGISTER PASS"
-          else
-            echo "Q4-REGISTER FAIL: the post-link did not register the component"
-          fi
+          set "ISA=%REAL_PREFIX%\isa"
+          call "%ISA%\bin\isabelle.bat" version
+          set "ISAU="
+          for /f "delims=" %%d in ('call "%ISA%\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul') do set "ISAU=%%d"
+          echo ISABELLE_HOME_USER=[%ISAU%]
+          set "P=%ISAU:/cygdrive/=%"
+          set "DL=%P:~0,1%"
+          set "REST=%P:~1%"
+          set "ISAUW=%DL%:%REST%"
+          set "ISAUW=%ISAUW:/=\%"
+          set "COMPFILE=%ISAUW%\etc\components"
+          echo COMPFILE=[%COMPFILE%]
+          echo COMPFILE=%COMPFILE%>> "%GITHUB_ENV%"
+          echo ----- etc/components -----
+          if exist "%COMPFILE%" (type "%COMPFILE%") else (echo ^(no components file^))
+          echo --------------------------
+          findstr /C:"isabelle-performant-ml" "%COMPFILE%" >nul 2>&1 && (echo Q4-REGISTER PASS) || (echo Q4-REGISTER FAIL: the post-link did not register the component)
+          exit /b 0
 
       - name: "Q4: isabelle build Performant_Isabelle_ML"
-        shell: bash -l {0}
+        shell: cmd
         run: |
-          set -uo pipefail
-          conda activate t
-          isabelle build -v Performant_Isabelle_ML
-          echo "BUILD_EXIT=$?"
+          set "ISA=%REAL_PREFIX%\isa"
+          call "%ISA%\bin\isabelle.bat" build -v Performant_Isabelle_ML
+          echo Q4_BUILD_EXIT=%ERRORLEVEL%
+          exit /b 0
 
       - name: "Q4: conda remove -- the pre-unlink must unregister it"
         shell: bash -l {0}
         run: |
           set -uo pipefail
-          conda activate t
-          hu="$(isabelle getenv -b ISABELLE_HOME_USER || true)"
-          nat="$(echo "$hu" | sed -e 's#^/cygdrive/\(.\)/#\1:/#')"
-          conda deactivate
           conda remove -y -n t isabelle-performant-ml 2>&1 | tail -20
-          echo "----- etc/components after conda remove -----"
-          cat "$nat/etc/components" || echo "(no components file)"
-          echo "---------------------------------------------"
-          if grep -qi 'isabelle-performant-ml' "$nat/etc/components" 2>/dev/null; then
-            echo "Q4-UNREGISTER FAIL: entry still present after conda remove"
-          else
-            echo "Q4-UNREGISTER PASS: entry gone"
-          fi
+          echo "removal exit=$?"
+
+      - name: "Q4: etc/components after conda remove"
+        shell: cmd
+        run: |
+          echo ----- etc/components after conda remove -----
+          if exist "%COMPFILE%" (type "%COMPFILE%") else (echo ^(no components file^))
+          echo ---------------------------------------------
+          findstr /C:"isabelle-performant-ml" "%COMPFILE%" >nul 2>&1 && (echo Q4-UNREGISTER FAIL: entry still present after conda remove) || (echo Q4-UNREGISTER PASS: entry gone)
+          exit /b 0

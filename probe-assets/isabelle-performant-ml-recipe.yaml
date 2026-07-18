@@ -1,0 +1,136 @@
+schema_version: 1
+
+# isabelle-performant-ml: the Performant_Isabelle_ML Isabelle session (mutable hash
+# tables + the improved discrimination net `iNet`), as a conda add-on to the base
+# `isabelle` package.  noarch: it ships only source (ROOT + theories + ML) and registers
+# itself with `isabelle components -u`; Isabelle loads/builds the heap on demand.
+#
+# The recipe lives IN this repo, so the source is the repo itself (`source: path: ../`).
+# The build script then copies exactly the files the session needs -- not Test/, not .git,
+# not editor backups.
+#
+# The version is NOT duplicated here: CI reads ./VERSION and exports it.  Releasing is
+# therefore "bump VERSION, tag" and nothing in this file changes.
+
+context:
+  version: ${{ env.get("ISA_COMPONENT_VERSION", default="0.0.0") }}
+
+source:
+  - path: ../
+
+package:
+  name: isabelle-performant-ml
+  version: ${{ version }}
+
+build:
+  number: 0
+  noarch: generic
+  script:
+    interpreter: bash
+    content: |
+      set -euo pipefail
+
+      # ONE definition of where the component lives.  It used to be repeated inside the
+      # generated hook scripts, where nothing checked the two against each other: a
+      # divergence would build green, install green, and surface only as an unknown
+      # session at use time.
+      name=isabelle-performant-ml
+      dest="$PREFIX/share/$name"
+
+      mkdir -p "$dest"
+      cp -a "$SRC_DIR/ROOT"                       "$dest/"
+      cp -a "$SRC_DIR/Performant_Isabelle_ML.thy" "$dest/"
+      cp -a "$SRC_DIR/library"                    "$dest/"
+      cp -a "$SRC_DIR/contrib"                    "$dest/"
+      find "$dest" -name '*~' -delete          # editor backups must not ship
+
+      test -f "$dest/ROOT"                     # a valid component has a ROOT
+
+      # ---------------------------------------------------------------------------
+      # Link hooks.  BOTH the unix and the Windows set are written UNCONDITIONALLY.
+      #
+      # This is `noarch: generic`, so one artifact installs on every platform including
+      # win-64 (and `isabelle` is built for Windows).  conda picks the hook by the RUNNING
+      # platform -- Scripts/*.bat there, bin/*.sh elsewhere -- and returns success in
+      # silence when the file is absent.  Shipping only .sh therefore means: installs
+      # cleanly on Windows, shows up in `conda list`, and is never registered.
+      #
+      # Do NOT guard these with `case "$target_platform" in win-*)`: for noarch,
+      # target_platform is `noarch`, so that branch can never match -- a fix that looks
+      # applied and isn't.
+      #
+      # Every hook exits 0 unconditionally.  A nonzero post-link makes conda roll the
+      # whole install back (verified on Windows); a failed registration merely surfaces
+      # later as a clear "unknown session".
+      # ---------------------------------------------------------------------------
+      mkdir -p "$PREFIX/bin" "$PREFIX/Scripts"
+
+      # printf, one argument per line -- NOT a heredoc.  A heredoc body would have to sit
+      # at column 0 to keep its terminator recognisable, and column 0 ends this YAML block
+      # scalar.  (The base recipe emits its hooks the same way, for the same reason.)
+      for spec in post-link:-u pre-unlink:-x; do
+        action=${spec%%:*}
+        verb=${spec##*:}
+
+        # \$PREFIX stays literal: conda expands it at link time, not now.
+        printf '%s\n' \
+          '#!/bin/bash' \
+          "\"\$PREFIX/isa/bin/isabelle\" components $verb \"\$PREFIX/share/$name\" 2>/dev/null \\" \
+          "  || echo \"warning: 'isabelle components $verb $name' failed; the session may be unavailable\"" \
+          'exit 0' \
+          > "$PREFIX/bin/.$name-$action.sh"
+        chmod +x "$PREFIX/bin/.$name-$action.sh"
+
+        # Windows.  CRLF (printf '%s\r\n'), and `exit /b 0` on every path.
+        #
+        # The path may NOT be handed over in native form: `isabelle components` parses it
+        # with Path.explode, whose Path.check_elem rejects the characters `/\$:"'<>|?*`,
+        # so `%PREFIX%\share\...` raises "Illegal character" -- and with the mandatory
+        # `exit /b 0` that failure is invisible, i.e. exactly as broken as shipping no
+        # .bat at all.  So convert to Cygwin form: strip `C:`, flip \ to /, prepend
+        # /cygdrive/<drive>.  Pure batch substring/substitution, because cygpath.exe
+        # printed NOTHING on a windows-latest runner (measured by this project's
+        # preunlink-probe) and PowerShell would need quoting that cannot survive here.
+        #
+        # UNVERIFIED, on two counts: this conversion has never run on a real
+        # windows-latest runner, and it leaves the drive letter in its original case
+        # (/cygdrive/C/...), which is assumed -- not known -- to be accepted.  Probe both
+        # before trusting this; see the release workflow's Windows smoke leg.
+        printf '%s\r\n' \
+          '@echo off' \
+          "set \"COMP=%PREFIX%\\share\\$name\"" \
+          'set "DL=%COMP:~0,1%"' \
+          'set "REST=%COMP:~2%"' \
+          'set "REST=%REST:\=/%"' \
+          'set "CYG=/cygdrive/%DL%%REST%"' \
+          "call \"%PREFIX%\\isa\\bin\\isabelle.bat\" components $verb \"%CYG%\" >nul 2>&1" \
+          'exit /b 0' \
+          > "$PREFIX/Scripts/.$name-$action.bat"
+      done
+
+      # The hooks reference the install path as a literal; assert it still equals $dest.
+      grep -qF "share/$name" "$PREFIX/bin/.$name-post-link.sh"
+      test "$dest" = "$PREFIX/share/$name"
+
+requirements:
+  run:
+    # Bounded to the Isabelle SERIES this session is written against.  The base package
+    # keeps a constant name at a per-release version (Isabelle2025-2 -> 2025.2), so
+    # without a bound conda's newest-wins resolution pairs this component with a future
+    # Isabelle it was never built for: it installs cleanly, registers, and then fails in
+    # `isabelle build` on Isabelle/ML API drift.  Bumping this bound is part of porting to
+    # a new series -- the same commit that touches the .thy/.ML sources.
+    #
+    # Deliberately NOT derived from ISA_COMPONENT_VERSION: that is this COMPONENT's own
+    # semver (0.1.0), a different axis entirely.
+    - isabelle >=2025.2,<2025.3
+
+about:
+  homepage: https://github.com/xqyww123/Performant_Isabelle_ML
+  summary: "Performant Isabelle/ML: mutable hash tables and an improved discrimination net (iNet)"
+  description: |
+    The Performant_Isabelle_ML Isabelle session, packaged as a conda add-on to the
+    patched `isabelle` distribution.  Ships source only and registers itself as an
+    Isabelle component; the heap is built on demand.
+  license: BSD-3-Clause
+  repository: https://github.com/xqyww123/Performant_Isabelle_ML

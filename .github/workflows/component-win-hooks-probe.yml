@@ -33,6 +33,30 @@ jobs:
           repository: xqyww123/Performant_Isabelle_ML
           path: pml
 
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+
+      # The recipe under test is NOT yet on xqyww123/Performant_Isabelle_ML's main (it
+      # exists only as a local commit).  So the probe carries a byte-exact copy --
+      # sha256 e15b18b728ddd095e9eb50f552ff546b891bfb224daa351685d36d2e9a01034f -- and
+      # drops it into the checked-out source tree at the path the recipe expects
+      # (`source: - path: ../`).  It is printed below so the log shows exactly what was
+      # built.  DELETE this step once the recipe is pushed, and check out the repo alone.
+      - name: "Place the recipe under test (vendored copy; not yet on PML main)"
+        run: |
+          set -euo pipefail
+          if [ -f pml/conda/recipe.yaml ]; then
+            echo "PML main now ships conda/recipe.yaml -- using THAT, ignoring the copy"
+          else
+            mkdir -p pml/conda
+            cp ci/probe-assets/isabelle-performant-ml-recipe.yaml pml/conda/recipe.yaml
+            echo "used the vendored copy"
+          fi
+          sha256sum pml/conda/recipe.yaml
+          echo "===== recipe under test ====="
+          cat pml/conda/recipe.yaml
+
       - name: Install rattler-build
         run: |
           set -euo pipefail

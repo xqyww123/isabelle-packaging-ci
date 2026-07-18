@@ -1,3 +1,19 @@
+# ============================================================================
+# VENDORED PROBE COPY -- NOT AUTHORITATIVE.  DO NOT EDIT.  DO NOT BUILD A REAL
+# PACKAGE FROM THIS FILE.
+#
+# The authoritative file is  Performant_Isabelle_ML/conda/recipe.yaml.  This copy
+# exists only so that .github/workflows/component-win-hooks-probe.yml can build the
+# package on a runner while that recipe is still an unpushed local commit in the
+# Performant_Isabelle_ML repo; actions/checkout of that repo yields no recipe.
+#
+# Everything below this header is byte-identical to the authoritative file at the
+# commit probed (sha256 of the file WITHOUT this header:
+# e15b18b728ddd095e9eb50f552ff546b891bfb224daa351685d36d2e9a01034f).  The probe
+# prefers pml/conda/recipe.yaml whenever the repo ships one, so the moment the
+# recipe lands upstream this copy stops being used -- and should then be DELETED
+# along with the step that installs it.
+# ============================================================================
 schema_version: 1
 
 # isabelle-performant-ml: the Performant_Isabelle_ML Isabelle session (mutable hash

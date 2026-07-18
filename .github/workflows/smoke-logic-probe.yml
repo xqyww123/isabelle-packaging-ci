@@ -61,14 +61,17 @@ jobs:
         run: |
           set -euo pipefail
           conda activate t
-          # Windows puts the entry point in Scripts/ as a .bat; everyone else in bin/.
-          # Git-Bash resolves neither `isabelle` nor `isabelle.bat` from PATH here, so
-          # address it through the env prefix, exactly as the base package's smoke does.
-          if [ -x "$CONDA_PREFIX/isa/bin/isabelle" ]; then
-            ISA="$CONDA_PREFIX/isa/bin/isabelle"
+          # The ENV entry point, <prefix>/bin/isabelle or <prefix>/Scripts/isabelle.bat --
+          # NOT <prefix>/isa/bin/isabelle, which is the distribution's own unix launcher.
+          # That file exists on Windows too and Git-Bash calls it executable, so a
+          # `-x` test picks it and Isabelle dies with "Failed to determine hardware and
+          # operating system type!".  Dispatch on the OS, not on a file mode.
+          if [ "${RUNNER_OS:-}" = "Windows" ]; then
+            ISA="$CONDA_PREFIX/Scripts/isabelle.bat"
           else
-            ISA="$CONDA_PREFIX/isa/Scripts/isabelle.bat"
+            ISA="$CONDA_PREFIX/bin/isabelle"
           fi
+          ls -l "$ISA" || { echo "::error::no entry point at $ISA"; ls -l "$CONDA_PREFIX/bin" "$CONDA_PREFIX/Scripts" 2>/dev/null | head -30; exit 1; }
           # `isabelle getenv` returns a CYGWIN path on Windows (/cygdrive/c/...), which
           # Git-Bash cannot open -- it wants /c/...  Convert, or this reads nothing and
           # the grep below fails for the wrong reason.
@@ -91,28 +94,34 @@ jobs:
         run: |
           set -euo pipefail
           conda activate t
-          # Windows puts the entry point in Scripts/ as a .bat; everyone else in bin/.
-          # Git-Bash resolves neither `isabelle` nor `isabelle.bat` from PATH here, so
-          # address it through the env prefix, exactly as the base package's smoke does.
-          if [ -x "$CONDA_PREFIX/isa/bin/isabelle" ]; then
-            ISA="$CONDA_PREFIX/isa/bin/isabelle"
+          # The ENV entry point, <prefix>/bin/isabelle or <prefix>/Scripts/isabelle.bat --
+          # NOT <prefix>/isa/bin/isabelle, which is the distribution's own unix launcher.
+          # That file exists on Windows too and Git-Bash calls it executable, so a
+          # `-x` test picks it and Isabelle dies with "Failed to determine hardware and
+          # operating system type!".  Dispatch on the OS, not on a file mode.
+          if [ "${RUNNER_OS:-}" = "Windows" ]; then
+            ISA="$CONDA_PREFIX/Scripts/isabelle.bat"
           else
-            ISA="$CONDA_PREFIX/isa/Scripts/isabelle.bat"
+            ISA="$CONDA_PREFIX/bin/isabelle"
           fi
+          ls -l "$ISA" || { echo "::error::no entry point at $ISA"; ls -l "$CONDA_PREFIX/bin" "$CONDA_PREFIX/Scripts" 2>/dev/null | head -30; exit 1; }
           "$ISA" build -v "${{ inputs.session }}"
 
       - name: "the pre-unlink UNREGISTERED it"
         run: |
           set -euo pipefail
           conda activate t
-          # Windows puts the entry point in Scripts/ as a .bat; everyone else in bin/.
-          # Git-Bash resolves neither `isabelle` nor `isabelle.bat` from PATH here, so
-          # address it through the env prefix, exactly as the base package's smoke does.
-          if [ -x "$CONDA_PREFIX/isa/bin/isabelle" ]; then
-            ISA="$CONDA_PREFIX/isa/bin/isabelle"
+          # The ENV entry point, <prefix>/bin/isabelle or <prefix>/Scripts/isabelle.bat --
+          # NOT <prefix>/isa/bin/isabelle, which is the distribution's own unix launcher.
+          # That file exists on Windows too and Git-Bash calls it executable, so a
+          # `-x` test picks it and Isabelle dies with "Failed to determine hardware and
+          # operating system type!".  Dispatch on the OS, not on a file mode.
+          if [ "${RUNNER_OS:-}" = "Windows" ]; then
+            ISA="$CONDA_PREFIX/Scripts/isabelle.bat"
           else
-            ISA="$CONDA_PREFIX/isa/Scripts/isabelle.bat"
+            ISA="$CONDA_PREFIX/bin/isabelle"
           fi
+          ls -l "$ISA" || { echo "::error::no entry point at $ISA"; ls -l "$CONDA_PREFIX/bin" "$CONDA_PREFIX/Scripts" 2>/dev/null | head -30; exit 1; }
           raw="$("$ISA" getenv -b ISABELLE_HOME_USER)"
           case "$raw" in
             /cygdrive/*) home="/${raw#/cygdrive/}" ;;

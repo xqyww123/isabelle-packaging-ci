@@ -728,4 +728,69 @@ jobs:
           set "CFQ=%CFQ%\etc\components"
           if exist "%CFQ%" (type "%CFQ%") else (echo ^(no components file^))
           findstr /C:"isabelle-performant-ml" "%CFQ%" >nul 2>&1 && (echo H PASS: a throwaway isabelle call BEFORE components -u fixes it) || (echo H FAIL: warm-up did not help)
+          echo CFQ=%CFQ%>> "%GITHUB_ENV%"
+          exit /b 0
+
+      # I: the pre-unlink `-x` was never really tested -- in Q4 there was no entry to
+      # remove, and in D3 the entry vanished only because `conda remove` also pruned the
+      # isabelle package, whose own pre-unlink deletes the whole namespaced
+      # ISABELLE_HOME_USER.  Do it properly: env r keeps a REGISTERED component, and only
+      # the component is removed (--force, so isabelle is not pruned with it).
+      - name: "I: env r -- install, register by hand, then remove ONLY the component"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
+          conda create -y -n r -c "file:///$CH" -c https://conda.qiyuan.me \
+            --override-channels isabelle-performant-ml 2>&1 | tail -3
+          echo "PREFIX_R=$CONDA\\envs\\r" >> "$GITHUB_ENV"
+
+      - name: "I: register it by hand (warm isabelle first), then show it is registered"
+        shell: cmd
+        run: |
+          set "PREFIX=%PREFIX_R%"
+          call "%PREFIX%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME >nul 2>&1
+          set "COMP=%PREFIX%\share\isabelle-performant-ml"
+          set "DL=%COMP:~0,1%"
+          set "REST=%COMP:~2%"
+          set "REST=%REST:\=/%"
+          set "CYG=/cygdrive/%DL%%REST%"
+          call "%PREFIX%\isa\bin\isabelle.bat" components -u "%CYG%"
+          echo I_REGISTER_EXIT=%ERRORLEVEL%
+          set "ISAU="
+          for /f "delims=" %%d in ('call "%PREFIX%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul') do set "ISAU=%%d"
+          set "P=%ISAU:/cygdrive/=%"
+          set "DL2=%P:~0,1%"
+          set "REST2=%P:~1%"
+          set "CFR=%DL2%:%REST2%"
+          set "CFR=%CFR:/=\%"
+          set "CFR=%CFR%\etc\components"
+          echo CFR=[%CFR%]
+          echo CFR=%CFR%>> "%GITHUB_ENV%"
+          echo ---- components BEFORE conda remove ----
+          if exist "%CFR%" (type "%CFR%") else (echo ^(no components file^))
+          exit /b 0
+
+      - name: "I: does the session build now that it IS registered? (Q4 second half)"
+        shell: cmd
+        run: |
+          call "%PREFIX_R%\isa\bin\isabelle.bat" build -v Performant_Isabelle_ML
+          echo I_BUILD_EXIT=%ERRORLEVEL%
+          exit /b 0
+
+      - name: "I: remove ONLY the component (isabelle stays)"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          conda remove -y -n r --force isabelle-performant-ml 2>&1 | tail -10
+          echo "remove exit=$?"
+
+      - name: "I verdict: did the pre-unlink -x unregister it?"
+        shell: cmd
+        run: |
+          echo ---- components AFTER conda remove ----
+          if exist "%CFR%" (type "%CFR%") else (echo ^(no components file^))
+          echo ---------------------------------------
+          if not exist "%PREFIX_R%\isa\bin\isabelle.bat" (echo NOTE: isabelle was pruned too -- this test is inconclusive)
+          findstr /C:"isabelle-performant-ml" "%CFR%" >nul 2>&1 && (echo I FAIL: pre-unlink did NOT unregister) || (echo I PASS: pre-unlink -x removed the entry)
           exit /b 0

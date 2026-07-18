@@ -1,0 +1,314 @@
+# Publish .conda packages to https://conda.qiyuan.me (Cloudflare R2).
+#
+# This is a REUSABLE workflow.  Every repo that ships a conda package -- this one (the
+# base `isabelle`) and each AoA component repo -- calls it instead of copying the R2
+# logic.  Each component repo owns its own build; only the publish step is shared, so the
+# channel-indexing rules live in exactly one place.
+#
+# The CREDENTIALS do not, and cannot: a reusable workflow never sees the secrets of the
+# repo that DEFINES it, only those of the repo that CALLS it, and org-level secrets are
+# not available on a personal account.  So both R2 secrets must be set on every calling
+# repo, and passed explicitly -- `secrets: inherit` would silently forward empty strings
+# and disable the `required: true` checks below.
+#
+#   gh secret set CONDA_R2_ACCESS_KEY_ID     -R xqyww123/<repo>
+#   gh secret set CONDA_R2_SECRET_ACCESS_KEY -R xqyww123/<repo>
+#
+#   jobs:
+#     publish:
+#       needs: build
+#       uses: xqyww123/isabelle-packaging-ci/.github/workflows/publish-conda.yml@main
+#       with:
+#         artifact: conda-packages     # laid out as <subdir>/<pkg>.conda
+#         package_name: isabelle-performant-ml
+#       secrets:
+#         CONDA_R2_ACCESS_KEY_ID:     ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
+#         CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
+#
+# ---------------------------------------------------------------------------
+# WHY THIS COPIES INSTEAD OF SYNCS
+#
+# Publishing is a read-modify-write of a SHARED channel: pull it, add a file, re-index,
+# push it back.  With one publisher that is safe.  With one publisher PER REPO, two
+# releases can overlap -- and `rclone sync` deletes whatever is not in the local copy,
+# so the run that pulled first would erase the package the other one just published.
+# GitHub's `concurrency:` cannot prevent this: it serialises within a repo, never across
+# repos.
+#
+# So we never let a push delete: `rclone copy`, not `rclone sync`.  A published .conda
+# is then unreachable by any other run.  The only thing two overlapping runs can still
+# race on is repodata.json, and the worst outcome there is a repodata that is missing
+# the very newest package -- the FILE is safely on the channel, the next publish (or a
+# re-run of this one) puts it back in the index, and the verify step below fails loudly
+# rather than silently.  That is a self-healing stale index instead of data loss.
+# ---------------------------------------------------------------------------
+name: publish-conda
+
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: "Artifact holding the packages, laid out as <subdir>/*.conda"
+        type: string
+        default: conda-packages
+      package_name:
+        description: "conda package name, asserted to be resolvable on the channel afterwards"
+        type: string
+        required: true
+    secrets:
+      CONDA_R2_ACCESS_KEY_ID:
+        required: true
+      CONDA_R2_SECRET_ACCESS_KEY:
+        required: true
+
+jobs:
+  publish:
+    name: "Publish ${{ inputs.package_name }} to conda.qiyuan.me"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # No `permissions:` block, deliberately.  A called workflow's permissions can only be
+    # narrowed, never widened: requesting a scope the CALLER does not hold makes the job
+    # fail at resolution time, before any step runs.  Both calling repos are on the
+    # restricted default (`default_workflow_permissions: read`, i.e. `actions: none`), so
+    # asking for `actions: read` here would red-line every release.  The artifact download
+    # below therefore stays on the run-scoped token path, which needs no extra scope.
+    env:
+      CH: ${{ github.workspace }}/channel
+      R2_BUCKET: conda
+      PKG: ${{ inputs.package_name }}
+    steps:
+      - name: Download the built packages
+        uses: actions/download-artifact@v4
+        with:
+          # name+path only: this is the run-scoped download path (ACTIONS_RUNTIME_TOKEN).
+          # Adding `run-id`/`github-token` would switch it to the REST API, which requires
+          # an `actions: read` scope the callers cannot grant -- see the note above.
+          name: ${{ inputs.artifact }}
+          path: ${{ runner.temp }}/pkgs
+
+      - name: Install rclone (>= 1.74) and conda-index
+        run: |
+          set -euo pipefail
+          # Ubuntu ships rclone 1.60, which is BROKEN against R2: without
+          # --s3-no-check-bucket it 403s, and every object's first PUT fails.
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone version | head -1
+          # the runner's preinstalled Miniconda is ROOT-owned -- conda install would EACCES
+          sudo chown -R "$(id -u):$(id -g)" "$CONDA"
+          $CONDA/bin/conda install -y -n base -c conda-forge conda-index -q
+
+      - name: Configure the R2 remote (credentials never touch the disk)
+        env:
+          CONDA_R2_ACCESS_KEY_ID: ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
+          CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          # rclone reads a remote called "R2" straight out of the environment; nothing
+          # is written to a config file.
+          {
+            echo "RCLONE_CONFIG_R2_TYPE=s3"
+            echo "RCLONE_CONFIG_R2_PROVIDER=Cloudflare"
+            echo "RCLONE_CONFIG_R2_REGION=auto"
+            echo "RCLONE_CONFIG_R2_ENDPOINT=https://532d99283b5aa1e02486ee3fdcb163d5.r2.cloudflarestorage.com"
+            echo "RCLONE_CONFIG_R2_ACCESS_KEY_ID=$CONDA_R2_ACCESS_KEY_ID"
+            echo "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=$CONDA_R2_SECRET_ACCESS_KEY"
+          } >> "$GITHUB_ENV"
+
+          # Fail here, with a message that names the actual cause, rather than 20 minutes
+          # later on an opaque S3 auth error.  A caller using `secrets: inherit` passes ITS
+          # OWN repo's secrets and silently supplies empty strings when that repo has none
+          # -- and `inherit` also disables the `required: true` declarations above, so
+          # nothing else catches it.  Callers should pass the two secrets explicitly.
+          [ -n "${CONDA_R2_ACCESS_KEY_ID:-}" ] && [ -n "${CONDA_R2_SECRET_ACCESS_KEY:-}" ] || {
+            echo "::error::R2 credentials are empty.  A reusable workflow receives the"
+            echo "          CALLING repo's secrets -- set CONDA_R2_ACCESS_KEY_ID and"
+            echo "          CONDA_R2_SECRET_ACCESS_KEY on the repo that triggered this run:"
+            echo "          gh secret set CONDA_R2_ACCESS_KEY_ID -R $GITHUB_REPOSITORY"
+            exit 1; }
+
+      - name: "Refuse to overwrite anything already published (but allow a re-run to resume)"
+        run: |
+          set -euo pipefail
+          # A published package is immutable: users and the CDN cache it by name, so
+          # republishing CHANGED content under the same name hands people a stale copy
+          # forever.  What is NOT a violation is finding our own bytes already up there:
+          # the upload below is the first mutating step and four fallible steps follow it
+          # (the multi-GB pull, conda-index, the index push, verify -- and verify is
+          # DESIGNED to redden when a concurrent publisher wins the repodata race).  A
+          # re-run must be able to finish the index instead of dead-ending here, so the
+          # test is on CONTENT, not on the filename.
+          #
+          # The digest comes from an https GET, not `rclone hashsum`: R2's S3 API exposes
+          # only the ETag, and --s3-chunk-size 64M guarantees GB-scale packages are
+          # multipart, whose ETag is not a content digest.
+          fail=0
+          for d in "$RUNNER_TEMP/pkgs"/*/; do
+            sub=$(basename "$d")
+            for f in "$d"*.conda; do
+              [ -e "$f" ] || continue
+              fn=$(basename "$f")
+
+              # Branch on rclone's EXIT CODE, never on `if rclone ... 2>/dev/null`: that
+              # form suspends errexit and discards stderr, so a 5xx/throttle/DNS failure
+              # would be indistinguishable from "not published" -- the guard would fail
+              # OPEN and silently overwrite a released package.
+              set +e
+              out=$(rclone lsf "R2:$R2_BUCKET/$sub/$fn" --s3-no-check-bucket 2>"$RUNNER_TEMP/lsf.err")
+              rc=$?
+              set -e
+              case "$rc" in
+                0)   ;;                     # queried fine; $out decides
+                3|4) out="" ;;              # directory / file not found -> genuinely new
+                *)   echo "::error::cannot query the channel for $sub/$fn (rclone exit $rc)"
+                     cat "$RUNNER_TEMP/lsf.err"
+                     fail=1; continue ;;
+              esac
+
+              # rc=0 with empty output is a first publish into a prefix that does not
+              # exist yet -- new, not an error.
+              if [ -z "$out" ]; then
+                echo "  new     : $sub/$fn"
+                continue
+              fi
+
+              want=$(sha256sum "$f" | cut -d' ' -f1)
+              got=$(curl -fsSL "https://conda.qiyuan.me/$sub/$fn" | sha256sum | cut -d' ' -f1) || got="<unreadable>"
+              if [ "$want" = "$got" ]; then
+                echo "  resume  : $sub/$fn is already uploaded, byte-identical -- continuing"
+              else
+                echo "::error::$sub/$fn is ALREADY on the channel with DIFFERENT content."
+                echo "          published: $got"
+                echo "          built    : $want"
+                echo "          Never overwrite a published package -- release a higher"
+                echo "          version, or bump the build number, instead."
+                fail=1
+              fi
+            done
+          done
+          exit $fail
+
+      - name: "Upload the packages  (copy: can never delete a sibling's release)"
+        run: |
+          set -euo pipefail
+          # Push the .conda files FIRST and on their own.  From this moment the bytes
+          # are on the channel permanently; everything below only rebuilds the index.
+          for d in "$RUNNER_TEMP/pkgs"/*/; do
+            sub=$(basename "$d")
+            rclone copy "$d" "R2:$R2_BUCKET/$sub/" \
+              --s3-no-check-bucket --include '*.conda' \
+              --s3-chunk-size 64M --s3-upload-concurrency 4 --transfers 2 --progress
+          done
+
+      - name: "Pull the whole channel  <-- index must be built from ALL packages, not just ours"
+        run: |
+          set -euo pipefail
+          mkdir -p "$CH"
+          # Pulled AFTER our upload, so the local copy already contains our packages
+          # plus everything anyone else has published.
+          rclone copy "R2:$R2_BUCKET/" "$CH/" \
+            --s3-no-check-bucket --fast-list --transfers 8 --exclude '.cache/**'
+          echo "===== channel contents that will be indexed ====="
+          find "$CH" -name '*.conda' -printf '  %10s  %p\n' | sort -k2
+
+      - name: Re-index the channel
+        run: |
+          set -euo pipefail
+          mkdir -p "$CH/noarch"
+          $CONDA/bin/python -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
+            --channel-name conda.qiyuan.me
+
+      - name: Push the refreshed index
+        run: |
+          set -euo pipefail
+          # --exclude .cache: conda-index's sqlite incremental cache is local-only.
+          # Still `copy`, not `sync` -- an index push must never remove a package.
+          rclone copy "$CH/" "R2:$R2_BUCKET/" \
+            --s3-no-check-bucket --exclude '.cache/**' \
+            --s3-chunk-size 64M --s3-upload-concurrency 4 --transfers 2 --progress
+
+      - name: "Verify what actually landed on the channel"
+        run: |
+          set -euo pipefail
+          fail=0
+          # The .conda files are NOT cached by Cloudflare (only repodata.json.zst is,
+          # and we do not produce that) -> a plain GET is always the fresh bytes.
+          #
+          # Both halves matter.  The sha256 proves the BYTES arrived; it says nothing
+          # about the index, because the blob URL resolves whether or not repodata names
+          # it.  So we also assert the exact filename appears in repodata.json.  Do NOT
+          # go back to `conda search "$PKG"`: it matches on NAME only (and substring at
+          # that), so from the second release of any package onward it passes on the
+          # previously-indexed version and detects nothing -- measured, not assumed.
+          for d in "$RUNNER_TEMP/pkgs"/*/; do
+            sub=$(basename "$d")
+            rd="$RUNNER_TEMP/repodata-$sub.json"
+            curl -fsSL "https://conda.qiyuan.me/$sub/repodata.json" -o "$rd" || {
+              echo "::error::$sub has no repodata.json on the channel"; fail=1; continue; }
+            # One line on purpose: a multi-line `python -c` would put continuation
+            # lines at column 0, which ends this YAML block scalar.
+            $CONDA/bin/python -c "import json,sys; d=json.load(open(sys.argv[1])); print('\n'.join(sorted(set(d.get('packages.conda',{}))|set(d.get('packages',{})))))" \
+              "$rd" > "$RUNNER_TEMP/indexed-$sub.txt"
+
+            for f in "$d"*.conda; do
+              [ -e "$f" ] || continue
+              fn=$(basename "$f")
+              url="https://conda.qiyuan.me/$sub/$fn"
+              want=$(sha256sum "$f" | cut -d' ' -f1)
+              got=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1) || got="<unreadable>"
+              if [ "$want" = "$got" ]; then
+                printf '  bytes   OK  %-14s %s\n' "$sub" "$fn"
+              else
+                echo "::error::$url does not match the package we built"
+                echo "        built:  $want"
+                echo "        served: $got"
+                fail=1
+              fi
+              if grep -qxF "$fn" "$RUNNER_TEMP/indexed-$sub.txt"; then
+                printf '  indexed OK  %-14s %s\n' "$sub" "$fn"
+              else
+                echo "::error::$sub/$fn is ON the channel but NOT named in repodata.json."
+                echo "        An overlapping publish indexed the channel without it."
+                echo "        Re-run this job: it re-pulls, re-indexes and repairs."
+                fail=1
+              fi
+            done
+          done
+          exit $fail
+
+      - name: "Audit: every package on the channel is named in the index"
+        run: |
+          set -euo pipefail
+          # The step above can only see OUR packages, which is structurally blind to the
+          # race that costs someone ELSE their release:
+          #
+          #   A uploads -> A pulls (before B's upload) -> B uploads, pulls, indexes,
+          #   pushes, verifies GREEN -> A pushes its now-stale index over B's.
+          #
+          # A's own package is in A's index, so A's verification passes; B already
+          # finished green.  B's package is on R2 and invisible to the solver, with no
+          # bound on how long until some unrelated publish repairs it.  Auditing the WHOLE
+          # channel is what turns that silent loss into a red run -- and because a re-run
+          # re-pulls and re-indexes, the repair is one click.
+          fail=0
+          for sub in $(rclone lsf "R2:$R2_BUCKET/" --dirs-only --s3-no-check-bucket | tr -d '/'); do
+            files=$(rclone lsf "R2:$R2_BUCKET/$sub/" --files-only --s3-no-check-bucket \
+                    | grep '\.conda$' || true)
+            [ -n "$files" ] || continue          # not a package subdir (e.g. .cache)
+            rd="$RUNNER_TEMP/audit-$sub.json"
+            curl -fsSL "https://conda.qiyuan.me/$sub/repodata.json" -o "$rd" || {
+              echo "::error::$sub holds packages but has no repodata.json"; fail=1; continue; }
+            $CONDA/bin/python -c "import json,sys; d=json.load(open(sys.argv[1])); print('\n'.join(sorted(set(d.get('packages.conda',{}))|set(d.get('packages',{})))))" \
+              "$rd" > "$RUNNER_TEMP/audit-indexed-$sub.txt"
+            # grep -f against an EMPTY index file matches nothing, so -v reports every
+            # package as missing -- which is the correct reading of an empty index.
+            missing=$(printf '%s\n' "$files" \
+                      | grep -vxF -f "$RUNNER_TEMP/audit-indexed-$sub.txt" || true)
+            if [ -n "$missing" ]; then
+              echo "::error::$sub: on the channel but absent from repodata.json:"
+              printf '          %s\n' $missing
+              fail=1
+            else
+              printf '  %-14s all %s package(s) indexed\n' "$sub" "$(printf '%s\n' "$files" | wc -l)"
+            fi
+          done
+          exit $fail

@@ -47,122 +47,23 @@ jobs:
     # receives NO secrets unless the caller passes them.
     secrets: inherit
 
+  # The R2 publish path is shared with every component package (isabelle-performant-ml,
+  # isabelle-rpc, ...), each of which releases from its own repo.  Keeping it in one
+  # reusable workflow is what stops the credentials and the channel-indexing rules from
+  # being copied into seven repos and drifting apart.
   publish:
     name: "Publish to conda.qiyuan.me (R2)"
     needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      CH: ${{ github.workspace }}/channel
-      R2_BUCKET: conda
-    steps:
-      - name: Download the conda packages from Job F
-        uses: actions/download-artifact@v4
-        with:
-          name: conda-packages
-          path: ${{ runner.temp }}/pkgs
-
-      - name: Install rclone (>= 1.74) and conda-index
-        run: |
-          set -euo pipefail
-          # Ubuntu ships rclone 1.60, which is BROKEN against R2: without
-          # --s3-no-check-bucket it 403s, and every object's first PUT fails.
-          curl -fsSL https://rclone.org/install.sh | sudo bash
-          rclone version | head -1
-          # the runner's preinstalled Miniconda is ROOT-owned -- conda install would EACCES
-          sudo chown -R "$(id -u):$(id -g)" "$CONDA"
-          $CONDA/bin/conda install -y -n base -c conda-forge conda-index -q
-
-      - name: Configure the R2 remote (credentials never touch the disk)
-        env:
-          CONDA_R2_ACCESS_KEY_ID: ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
-          CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
-        run: |
-          set -euo pipefail
-          # rclone reads a remote called "R2" straight out of the environment; nothing
-          # is written to a config file.
-          {
-            echo "RCLONE_CONFIG_R2_TYPE=s3"
-            echo "RCLONE_CONFIG_R2_PROVIDER=Cloudflare"
-            echo "RCLONE_CONFIG_R2_REGION=auto"
-            echo "RCLONE_CONFIG_R2_ENDPOINT=https://532d99283b5aa1e02486ee3fdcb163d5.r2.cloudflarestorage.com"
-            echo "RCLONE_CONFIG_R2_ACCESS_KEY_ID=$CONDA_R2_ACCESS_KEY_ID"
-            echo "RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=$CONDA_R2_SECRET_ACCESS_KEY"
-          } >> "$GITHUB_ENV"
-
-      - name: "Pull the existing channel  <-- without this, the sync would DELETE it"
-        run: |
-          set -euo pipefail
-          mkdir -p "$CH"
-          rclone sync "R2:$R2_BUCKET/" "$CH/" --s3-no-check-bucket --fast-list --transfers 8
-          echo "===== channel as it stands today ====="
-          find "$CH" -name '*.conda' -printf '  %10s  %p\n' | sort -k2 || echo "  (channel is empty)"
-
-      - name: Add the new packages
-        run: |
-          set -euo pipefail
-          # The artifact preserves Job F's out/<subdir>/ layout.
-          for d in "$RUNNER_TEMP/pkgs"/*/; do
-            sub=$(basename "$d")
-            for f in "$d"isabelle-*.conda; do
-              [ -e "$f" ] || continue
-              if [ -e "$CH/$sub/$(basename "$f")" ]; then
-                # A published package is immutable: users and the CDN cache it by name.
-                # Republishing changed content under the same name hands people a stale
-                # copy forever.  Bump the build number instead.
-                echo "::error::$sub/$(basename "$f") is ALREADY on the channel."
-                echo "          Never overwrite a published package -- re-run with a"
-                echo "          higher build_number instead."
-                exit 1
-              fi
-              mkdir -p "$CH/$sub"
-              cp "$f" "$CH/$sub/"
-              echo "  + $sub/$(basename "$f")"
-            done
-          done
-
-      - name: Re-index the channel
-        run: |
-          set -euo pipefail
-          mkdir -p "$CH/noarch"
-          $CONDA/bin/python -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
-            --channel-name conda.qiyuan.me
-
-      - name: Sync to R2
-        run: |
-          set -euo pipefail
-          # --exclude .cache: conda-index's sqlite incremental cache is local-only.
-          rclone sync "$CH/" "R2:$R2_BUCKET/" \
-            --s3-no-check-bucket --exclude '.cache/**' \
-            --s3-chunk-size 64M --s3-upload-concurrency 4 --transfers 2 --progress
-
-      - name: "Verify what actually landed on the channel"
-        run: |
-          set -euo pipefail
-          fail=0
-          # The .conda files are NOT cached by Cloudflare (only repodata.json.zst is,
-          # and we do not produce that) -> a plain GET is always the fresh bytes.
-          for d in "$RUNNER_TEMP/pkgs"/*/; do
-            sub=$(basename "$d")
-            for f in "$d"isabelle-*.conda; do
-              [ -e "$f" ] || continue
-              fn=$(basename "$f")
-              url="https://conda.qiyuan.me/$sub/$fn"
-              want=$(sha256sum "$f" | cut -d' ' -f1)
-              got=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1)
-              if [ "$want" = "$got" ]; then
-                printf '  OK    %-14s %s\n' "$sub" "$fn"
-              else
-                echo "::error::$url does not match the package we built"
-                echo "        built:  $want"
-                echo "        served: $got"
-                fail=1
-              fi
-            done
-          done
-          echo "--- and the channel resolves the package ---"
-          $CONDA/bin/conda search -c https://conda.qiyuan.me --override-channels isabelle || fail=1
-          exit $fail
+    uses: ./.github/workflows/publish-conda.yml
+    with:
+      artifact: conda-packages
+      package_name: isabelle
+    # Passed explicitly, not `inherit`: naming them re-arms the `required: true`
+    # declarations in publish-conda.yml, so a repo missing a secret fails at
+    # workflow-resolution time instead of dying later on an opaque S3 auth error.
+    secrets:
+      CONDA_R2_ACCESS_KEY_ID:     ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
+      CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
 
   # ---------------------------------------------------------------------------
   # The user's command, on a clean machine, on every platform.
@@ -171,7 +72,7 @@ jobs:
   # (file://) and prove the PACKAGES work.  This installs from the real URL and
   # proves the CHANNEL works -- that the bytes reached R2, that conda-index wrote
   # a repodata that names them correctly, and that conda's solver can act on it.
-  # Those two can fail independently: a package can be perfect while `rclone sync`
+  # Those two can fail independently: a package can be perfect while the upload
   # drops a file or repodata points at a filename that isn't there.  Job F would
   # still be green and the user still could not install.
   #

@@ -481,3 +481,52 @@ jobs:
           if exist "%CF%" (type "%CF%") else (echo ^(no components file^))
           findstr /C:"isabelle-performant-ml" "%CF%" >nul 2>&1 && (echo D3 PASS: warm re-install DID register) || (echo D3 FAIL: warm re-install did NOT register either)
           exit /b 0
+
+      # E: is the cause LINK ORDER -- i.e. does the component's post-link run before the
+      # `isabelle` package has been linked, so that %PREFIX%\isa\bin\isabelle.bat does
+      # not exist yet and the `call` fails into the mandatory `exit /b 0`?
+      - name: "E1: install isabelle ALONE first"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          conda create -y -n w -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tail -5
+          echo "PREFIX_W=$CONDA\\envs\\w" >> "$GITHUB_ENV"
+
+      - name: "E1: record env w's components file (isabelle only)"
+        shell: cmd
+        run: |
+          set "ISAU="
+          for /f "delims=" %%d in ('call "%PREFIX_W%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME_USER 2^>nul') do set "ISAU=%%d"
+          set "P=%ISAU:/cygdrive/=%"
+          set "DL2=%P:~0,1%"
+          set "REST2=%P:~1%"
+          set "CFW=%DL2%:%REST2%"
+          set "CFW=%CFW:/=\%"
+          set "CFW=%CFW%\etc\components"
+          echo CFW=[%CFW%]
+          echo CFW=%CFW%>> "%GITHUB_ENV%"
+          if exist "%CFW%" (type "%CFW%") else (echo ^(no components file^))
+          exit /b 0
+
+      - name: "E1: NOW add the component to that existing env"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
+          conda install -y -n w -c "file:///$CH" -c https://conda.qiyuan.me \
+            --override-channels isabelle-performant-ml 2>&1 | tail -15
+
+      - name: "E1 verdict + E2: invoke the SHIPPED .bat exactly as conda would"
+        shell: cmd
+        run: |
+          echo ---- components after adding the component to a pre-existing isabelle ----
+          if exist "%CFW%" (type "%CFW%") else (echo ^(no components file^))
+          findstr /C:"isabelle-performant-ml" "%CFW%" >nul 2>&1 && (echo E1 PASS: registered when isabelle was ALREADY installed -- so the failure is LINK ORDER) || (echo E1 FAIL: still not registered even with isabelle pre-installed)
+          echo.
+          echo ================ E2: run the shipped post-link.bat by hand ================
+          set "PREFIX=%PREFIX_W%"
+          call "%PREFIX%\Scripts\.isabelle-performant-ml-post-link.bat"
+          echo E2_EXIT=%ERRORLEVEL%
+          if exist "%CFW%" (type "%CFW%") else (echo ^(no components file^))
+          findstr /C:"isabelle-performant-ml" "%CFW%" >nul 2>&1 && (echo E2 PASS: the shipped .bat itself registers correctly) || (echo E2 FAIL: the shipped .bat does not register even by hand)
+          exit /b 0

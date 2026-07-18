@@ -578,3 +578,72 @@ jobs:
           if exist "%CFY%" (type "%CFY%") else (echo ^(no components file^))
           findstr /C:"isabelle-performant-ml" "%CFY%" >nul 2>&1 && (echo F PASS: registered into a COLD but already-linked isabelle -- cause is conda LINK ORDER) || (echo F FAIL: not registered even though isabelle was already linked -- cause is the COLD first isabelle run)
           exit /b 0
+
+      # G: the real hook throws every message away (`>nul 2>&1`), so we never see WHY it
+      # fails.  Ship a probe-only noarch package whose post-link is byte-for-byte the
+      # recipe's, except that it logs to a file instead of nul -- and install it into a
+      # cold env with isabelle already linked, i.e. exactly the F scenario.
+      - name: "G: build a logging clone of the hook as a noarch package"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, json, hashlib, tarfile
+          root = "pkgG"
+          os.makedirs(root + "/Scripts", exist_ok=True)
+          os.makedirs(root + "/info", exist_ok=True)
+          os.makedirs(root + "/share/isabelle-performant-ml", exist_ok=True)
+          rels = ["share/isabelle-performant-ml/ROOT",
+                  "Scripts/.hooklogprobe-post-link.bat"]
+          open(root + "/" + rels[0], "w", newline="").write("session HookProbe = Pure\n")
+          bat = "\r\n".join([
+              "@echo off",
+              'set "COMP=%PREFIX%\\share\\isabelle-performant-ml"',
+              'set "DL=%COMP:~0,1%"',
+              'set "REST=%COMP:~2%"',
+              'set "REST=%REST:\\=/%"',
+              'set "CYG=/cygdrive/%DL%%REST%"',
+              '> "%PREFIX%\\hooklog.txt" echo PREFIX=[%PREFIX%] CYG=[%CYG%]',
+              'call "%PREFIX%\\isa\\bin\\isabelle.bat" components -u "%CYG%" >> "%PREFIX%\\hooklog.txt" 2>&1',
+              '>> "%PREFIX%\\hooklog.txt" echo ISABELLE_EXIT=%ERRORLEVEL%',
+              "exit /b 0",
+          ]) + "\r\n"
+          open(root + "/" + rels[1], "w", newline="").write(bat)
+          json.dump({"name": "hooklogprobe", "version": "0.0.1", "build": "0",
+                     "build_number": 0, "subdir": "noarch", "depends": [],
+                     "noarch": "generic", "platform": None, "arch": None},
+                    open(root + "/info/index.json", "w"))
+          json.dump({"package_metadata_version": 1, "noarch": {"type": "generic"}},
+                    open(root + "/info/link.json", "w"))
+          paths = []
+          for rel in rels:
+              b = open(root + "/" + rel, "rb").read()
+              paths.append({"_path": rel, "path_type": "hardlink",
+                            "sha256": hashlib.sha256(b).hexdigest(),
+                            "size_in_bytes": len(b)})
+          json.dump({"paths_version": 1, "paths": paths}, open(root + "/info/paths.json", "w"))
+          open(root + "/info/files", "w").write("".join(r + "\n" for r in rels))
+          with tarfile.open("hooklogprobe-0.0.1-0.tar.bz2", "w:bz2") as t:
+              for d, _, files in os.walk(root):
+                  for fn in files:
+                      full = os.path.join(d, fn)
+                      t.add(full, arcname=os.path.relpath(full, root))
+          print("built hooklogprobe-0.0.1-0.tar.bz2")
+          PY
+
+      - name: "G: cold env z with isabelle, then install the logging clone"
+        shell: bash -l {0}
+        run: |
+          set -uo pipefail
+          conda create -y -n z -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tail -3
+          # isabelle is NEVER invoked here -- Cygwin stays cold, as in F
+          conda install -y -n z ./hooklogprobe-0.0.1-0.tar.bz2 2>&1 | tail -10
+          echo "PREFIX_Z=$CONDA\\envs\\z" >> "$GITHUB_ENV"
+
+      - name: "G: WHAT DID THE HOOK ACTUALLY SAY?"
+        shell: cmd
+        run: |
+          echo ================ hooklog.txt ================
+          if exist "%PREFIX_Z%\hooklog.txt" (type "%PREFIX_Z%\hooklog.txt") else (echo ^(the hook never even created its log -- it did not run^))
+          echo =============================================
+          exit /b 0

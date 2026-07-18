@@ -248,7 +248,10 @@ jobs:
                      "build_number": 0, "subdir": "noarch", "depends": [],
                      "noarch": "generic", "platform": None, "arch": None},
                     open("pkgN/info/index.json", "w"))
-          json.dump({"noarch": {"type": "generic"}}, open("pkgN/info/link.json", "w"))
+          # package_metadata_version is MANDATORY: without it conda refuses the package
+          # with "The current version of conda is too old ... (link.json schema version 1)"
+          json.dump({"package_metadata_version": 1, "noarch": {"type": "generic"}},
+                    open("pkgN/info/link.json", "w"))
           paths = []
           for rel in rels:
               b = open("pkgN/" + rel, "rb").read()
@@ -268,7 +271,8 @@ jobs:
       - name: "Q1: install then remove the noarch package -- both hooks must run"
         shell: bash -l {0}
         run: |
-          set -euo pipefail
+          # deliberately NOT -e: Q1 is diagnostic, it must not abort Q2/Q4
+          set -uo pipefail
           rm -f "$RUNNER_TEMP/noarch_post-link.txt" "$RUNNER_TEMP/noarch_pre-unlink.txt"
           conda create -y -p "$RUNNER_TEMP/eN" ./noarchprobe-0.0.1-0.tar.bz2 2>&1 | tail -20
           if [ -f "$RUNNER_TEMP/noarch_post-link.txt" ]; then

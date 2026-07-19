@@ -112,6 +112,17 @@ the divergences are defects.
 - On Windows `isabelle getenv` returns `/cygdrive/c/…`; Git-Bash needs `/c/…`.
 - `conda remove` without `--force` takes base `isabelle` with it, whose own pre-unlink
   deletes the namespaced `ISABELLE_HOME_USER` — so an "entry is gone" check proves nothing.
+- `$CONDA/bin/python` is ubuntu-only. On Windows Miniconda is `%CONDA%\python.exe` with no
+  `bin/` at all. Dispatch on `$RUNNER_OS` the moment a matrix gains a Windows leg.
+- A **multi-line `python -c "…"` body must start at column 0**, which ends the enclosing
+  YAML block scalar and makes the whole workflow unparseable. GitHub then runs *nothing*
+  and says only "This run likely failed because of a workflow file issue". Keep such
+  snippets on one line.
+- Calling a reusable workflow whose job declares `id-token: write` requires the **caller**
+  to grant it, even when that job is skipped: permissions are validated while the run is
+  built, before any `if:`. Otherwise `startup_failure`, with no jobs and no annotation.
+  `actionlint` does not catch this — but it does catch most other structural errors, and
+  it is worth a run before every dispatch.
 
 ## 7b. rattler-build specifics
 
@@ -131,6 +142,16 @@ the divergences are defects.
   `--break-system-packages` there.
 - Map release-asset names from the **subdir you know**, not `uname -m`: macOS says `arm64`
   where assets say `aarch64`, and the same expression works on linux-aarch64 by coincidence.
+- `--render-only` is a free pre-flight: it catches schema errors and prints the variant
+  list, which is how you confirm `build.python.version_independent` actually took (one
+  variant, not one per python).
+- setuptools >= 77 **normalises the wheel filename to lowercase** (`isabelle_semantic_…`,
+  not `Isabelle_Semantic_…`), and so the `.dist-info` inside it. A glob or `find -name`
+  written in the PyPI casing matches nothing on POSIX and silently works on Windows, where
+  fnmatch normcases. Glob `*.whl` and assert the count; use `find -iname` for dist-info.
+- Adding a python to an **already-published** version: build only the new leg. A rebuilt
+  `.conda` is not guaranteed byte-identical to the published one, and the publish guard
+  refuses the run. Parameterise the matrix rather than re-running it whole.
 
 ## 8. Repackaging a third-party dependency
 
@@ -173,6 +194,12 @@ A green install proves very little. Each of these caught a real defect:
 
 When a test passes, ask what a broken implementation would have done. Several of ours
 passed for the wrong reason until a negative control was run against the pre-fix code.
+
+A recurring shape: **the code under test is not on the path the test takes.** A cold-cache
+check that only `import`ed the module proved nothing, because the risky open lives inside
+a coroutine — it never touched a directory, never read the env var it set, and would have
+stayed green against exactly the failure it was named for. Before trusting a check, find
+the line it is supposed to execute and confirm the test reaches it.
 
 ## 11. After publishing
 

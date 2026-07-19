@@ -1,0 +1,148 @@
+# Publish the `isabelle-ai` metapackage to https://conda.qiyuan.me.
+#
+# isabelle-ai binds the two halves of the AI-assisted stack -- isabelle-minilang and
+# isabelle-mcp -- which have no dependency edge between them and should not have one.  It
+# contains no files; its run requirements are the whole deliverable.
+#
+# It lives here rather than in a component repo because it has no source to sit beside.
+# See conda/metapackage/isabelle-ai/recipe.yaml for the reasoning.
+#
+# THE ONLY THING THAT CAN FAIL HERE is the solve.  There is no build, no script and no
+# payload, so a green run means exactly one thing: both halves resolve together from the
+# channel and import in the same environment.  That is why the build step passes our own
+# channel -- without `-c https://conda.qiyuan.me` the run requirements are unfindable and
+# the tests cannot run at all.
+name: release-isabelle-ai
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "isabelle-ai version to publish"
+        type: string
+        default: "0.1.0"
+      build_number:
+        description: "conda build number - BUMP if republishing the same version with changed deps"
+        type: string
+        default: "0"
+      dry_run:
+        description: "Build and test only -- do NOT publish to the channel"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-isabelle-ai
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rattler-build
+        run: |
+          set -euo pipefail
+          curl -fsSL -o rattler-build \
+            https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/rattler-build-x86_64-unknown-linux-musl
+          chmod +x rattler-build
+          ./rattler-build --version
+
+      - name: Build
+        env:
+          ISABELLE_AI_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          # Our channel FIRST: isabelle-minilang and isabelle-mcp exist nowhere else, and
+          # rattler-build resolves the test environment as well as the build one.
+          ./rattler-build build \
+            --recipe conda/metapackage/isabelle-ai/recipe.yaml \
+            --output-dir out \
+            --build-num "${{ inputs.build_number }}" \
+            -c https://conda.qiyuan.me -c conda-forge
+          find out -name '*.conda' -print
+
+      - name: "Sanity: the package is EMPTY and depends on exactly the two halves"
+        run: |
+          set -euo pipefail
+          pkg=$(find out -name 'isabelle-ai-*.conda' | head -1)
+          [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
+          python3 -m pip install --quiet zstandard
+          work=$(mktemp -d)
+          python3 - "$pkg" "$work" <<'PY'
+          import io, sys, tarfile, zipfile, zstandard
+          z = zipfile.ZipFile(sys.argv[1])
+          for member in z.namelist():
+              if member.startswith(("pkg-", "info-")) and member.endswith(".tar.zst"):
+                  r = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(member)))
+                  tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])
+          PY
+
+          # A metapackage that ships a file is a metapackage with a bug -- something was
+          # installed that nobody asked for.  info/ is metadata, not payload.
+          stray=$(find "$work" -type f -not -path "$work/info/*" | head -5)
+          [ -z "$stray" ] || { echo "::error::metapackage is not empty:"; echo "$stray"; exit 1; }
+
+          # The dependency list IS the deliverable, so assert it rather than trusting the
+          # recipe to have been read correctly.
+          python3 - "$work" <<'PY'
+          import json, pathlib, sys, re
+          idx = json.loads((pathlib.Path(sys.argv[1]) / "info" / "index.json").read_text())
+          deps = idx.get("depends", [])
+          print("depends =", deps)
+          names = sorted(re.split(r"[ <>=!]", d, 1)[0] for d in deps)
+          expected = ["isabelle-mcp", "isabelle-minilang"]
+          if names != expected:
+              raise SystemExit(f"::error::expected exactly {expected}, got {names}")
+          if idx.get("subdir") != "noarch":
+              raise SystemExit(f"::error::expected noarch, got {idx.get('subdir')}")
+          print("  OK  empty, noarch, exactly the two halves")
+          PY
+
+      - name: Lay the package out as <subdir>/*.conda for publish-conda.yml
+        run: |
+          set -euo pipefail
+          mkdir -p pkgs/noarch
+          find out -name '*.conda' -exec cp {} pkgs/noarch/ \;
+          n=$(find pkgs -name '*.conda' | wc -l)
+          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 package, found $n"; exit 1; }
+          ls -l pkgs/noarch/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conda-packages
+          path: pkgs/**/*.conda
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    uses: ./.github/workflows/publish-conda.yml
+    with:
+      artifact: conda-packages
+      package_name: isabelle-ai
+    secrets:
+      CONDA_R2_ACCESS_KEY_ID:     ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
+      CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
+
+  smoke:
+    name: "Smoke: conda install from conda.qiyuan.me"
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # The point of a metapackage is the one-line install, so that is what is tested --
+      # from the published channel, not from a local artifact.
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: "3.12"
+
+      - name: "conda install -c https://conda.qiyuan.me isabelle-ai"
+        shell: bash -l {0}
+        run: |
+          set -euo pipefail
+          conda install -y -c https://conda.qiyuan.me -c conda-forge isabelle-ai
+          python -c "import IsaMini, IsaMini.AoA, isabelle_mcp; print('both halves import')"
+          isabelle version

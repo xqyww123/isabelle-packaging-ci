@@ -1,0 +1,80 @@
+schema_version: 1
+
+# isabelle-ai -- the one package a user installs to get the AI-assisted Isabelle stack.
+#
+# WHY A METAPACKAGE AT ALL
+#
+# `isabelle-mcp` and `isabelle-minilang` are both endpoints of the same story -- an LLM
+# driving Isabelle -- but there is no dependency edge between them and there should not
+# be: MCP serves an editor/agent over a protocol, minilang is a proof language plus the
+# AoA agent, and each is genuinely useful without the other.  Nothing in either package
+# can name the pair, so only a metapackage can.  Hence `isabelle-ai`, not `isabelle-aoa`:
+# it is the union, not one of the halves.
+#
+# WHAT IT CONTAINS: nothing.  No source, no script, no files -- the run requirements ARE
+# the deliverable.  That is also why it lives here rather than in a component repo: the
+# rule is one repo = one conda package with its recipe beside its source, and this has no
+# source to sit beside.  Same reason conda/third-party/ recipes live here, though this is
+# not third-party, hence its own directory.
+#
+# WHY NOT PIN EXACT VERSIONS: a metapackage that pins `==` has to be republished for every
+# release of either half, and a stale pin silently holds users back.  The floors below are
+# the versions this combination was first shipped and tested with; the solver is free to
+# take newer ones.  Raise a floor only when the pair genuinely stops working below it.
+
+context:
+  version: ${{ env.get("ISABELLE_AI_VERSION", default="0.1.0") }}
+
+package:
+  name: isabelle-ai
+  version: ${{ version }}
+
+build:
+  number: ${{ env.get("ISABELLE_AI_BUILD_NUMBER", default="0") }}
+  # noarch: generic, NOT noarch: python.  There is no Python code here to relocate --
+  # nothing is installed at all.  `noarch: python` would additionally make the package
+  # claim a Python ABI story it does not have.
+  noarch: generic
+
+requirements:
+  run:
+    # The two halves.  Nothing else: adding `isabelle` or `isabelle-rpc` here would be
+    # restating what these two already require, and a metapackage that duplicates its
+    # children's dependency lists is a second place for them to drift.
+    - isabelle-minilang >=0.4.0
+    - isabelle-mcp >=0.3.0
+
+tests:
+  # A metapackage's only failure mode is a run requirement that does not solve or does not
+  # actually work once installed.  rattler-build runs these in an environment where this
+  # package -- and therefore both halves -- is installed, so importing through them is a
+  # real end-to-end check of the union, not a restatement of the recipe.
+  - python:
+      imports:
+        - IsaMini
+        - IsaMini.AoA
+        - isabelle_mcp
+      # pip_check would inspect the pip metadata of packages this one does not own, and
+      # cannot fix.  Each half already runs pip_check in its own recipe, where a failure
+      # is actionable.
+      pip_check: false
+  - script:
+      # Isabelle itself must be present and runnable, reached transitively through both
+      # halves.  Cheap, and it is the assumption every other thing here rests on.
+      - isabelle version
+
+about:
+  homepage: https://github.com/xqyww123/isabelle-packaging-ci
+  summary: "The AI-assisted Isabelle stack: Isa-Mini/AoA and the Isabelle MCP server"
+  description: |
+    A metapackage. Installing it brings in both halves of the AI-assisted Isabelle stack:
+
+      isabelle-minilang -- the Isa-Mini proof language over Isabelle/HOL, and the AoA
+                           proof agent that drives it
+      isabelle-mcp      -- the Model Context Protocol server exposing Isabelle to an
+                           editor or agent
+
+    It contains no files of its own. Install either half directly if only one is wanted;
+    neither depends on the other.
+  license: LGPL-2.1-or-later
+  repository: https://github.com/xqyww123/isabelle-packaging-ci

@@ -18,7 +18,8 @@ Last updated: 2026-07-19 (semantic-embedding shipped; minilang in flight).
 | `isabelle-rpc` | 0.3.1 | noarch python, session + Python host |
 | `isabelle-mcp` | 0.3.0 | noarch python, no session, no hooks |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
-| `isabelle-semantic-embedding` | 0.1.1 | **per-platform, 5 subdirs**, abi3 (one artifact per subdir serves 3.12-3.14) |
+| `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
+| `isabelle-semantic-embedding` | 0.1.1 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.1.1 too |
 
 Verify from outside CI:
 ```sh
@@ -32,14 +33,6 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 never yet run. `noarch: python`, one artifact. Its `Agent/` directory is ENUMERATED rather
 than copied wholesale, because it contains a gitignored `secret.sh`, an `Isa_REPL` session
 that must not reach the component's ROOT, and 33 files of dead `IsaMini_Agent_old/`.
-
-**`isabelle-semantic-embedding` 0.1.1 on PyPI** — blocked on a human step: PyPI's trusted
-publisher for that project still names the OLD GitHub repo (`Semantic_Embedding`), so the
-tag run failed with `invalid-publisher`. Update it at
-https://pypi.org/manage/project/isabelle-semantic-embedding/settings/publishing/ to repo
-`Isabelle_Semantic_Embedding`, then re-run the failed job. Nothing was uploaded, so no
-filename is burned. conda is at 0.1.1 and PyPI at 0.1.0 — conda AHEAD, which is the safe
-direction.
 
 ## Not started
 
@@ -150,9 +143,7 @@ leg is usually the coincidence.
 
 1. `gh workflow run release-conda.yml -R xqyww123/Isa-Mini -f dry_run=true` and iterate to
    green. Nothing about it has ever run.
-2. Fix the PyPI trusted publisher for isabelle-semantic-embedding (see "In flight") and
-   re-run that failed job.
-3. Then the `isabelle-ai` metapackage: `isabelle-minilang` + `isabelle-mcp`, nothing else.
+2. Then the `isabelle-ai` metapackage: `isabelle-minilang` + `isabelle-mcp`, nothing else.
 
 **Expect roughly eight dry runs.** semantic-embedding took that many, and the failure point
 moved forward each time rather than any single run being wasted. Two of the defects it

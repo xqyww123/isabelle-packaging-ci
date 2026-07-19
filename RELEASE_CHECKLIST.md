@@ -44,6 +44,15 @@ curl -fsS https://api.anaconda.org/package/conda-forge/NAME/files \
 
 Missing a platform or badly stale → repackage the upstream wheel onto our channel (§8).
 
+**Check the transitive ones too, and check them under the python you will ship.** The
+worst case is not an absent package but a *reachable broken* one: conda-forge's `json-spec`
+offers 0.10.1, which does `from collections import Mapping` (removed in Python 3.10), and
+0.11.0, which pins `importlib-metadata <6` and so cannot be solved at all — so the solver
+lands on 0.10.1, the environment resolves, installs green, and dies at import. Nothing
+local reproduces it, because locally you have PyPI's fixed version. When you repackage the
+fix, **pin its floor in your own recipe**: leaving a transitive dependency implicit leaves
+the choice to the solver, and the broken version is the one it can reach.
+
 ## 3. Versions
 
 - One repo, one package, one semver.

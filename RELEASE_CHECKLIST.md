@@ -1,256 +1,165 @@
 # Releasing a conda package to https://conda.qiyuan.me
 
-Everything here was learned by getting it wrong first. Each item says what breaks and how
-we found out, because the failures in this stack are overwhelmingly **silent** — the
-package installs, `conda list` shows it, and something is quietly not there.
+Every item below was learned by getting it wrong. The failures in this stack are
+overwhelmingly **silent**: the package installs, `conda list` shows it, and something is
+quietly not there. Read accordingly.
 
-The channel is a Cloudflare R2 bucket. It never deletes: a published filename is permanent
-and CDN-cached, so a bad release is corrected by a new version, not a retraction.
+The channel never deletes. A published filename is permanent and CDN-cached — correct a
+bad release with a new version, not a retraction.
 
----
-
-## 0. Which shape is this package?
-
-Pick before writing anything. Getting this wrong is not a style error.
+## 1. Pick the shape
 
 | Shape | When | Reference |
 |---|---|---|
-| `noarch: generic` | Isabelle session only — ROOT, `.thy`, `.ML`. **No Python files.** | `Performant_Isabelle_ML`, `auto_sledgehammer` |
-| `noarch: python` | Anything containing a Python package, with or without a session | `Isabelle_RPC` (session + python), `Isabelle-MCP` (python only) |
-| per-platform | Compiled artifacts | `Semantic_Embedding` — see its `CONDA_PACKAGING_PLAN.md` |
+| `noarch: generic` | Isabelle session only — **no Python files** | `Performant_Isabelle_ML` |
+| `noarch: python` | anything containing a Python package | `Isabelle_RPC`, `Isabelle-MCP` |
+| per-platform | compiled artifacts | `Semantic_Embedding` (see its plan doc) |
 
-**`noarch: generic` must never carry Python files.** conda installs generic files at their
-literal path (`conda/core/path_actions.py`: `target_short_path = source_path_data.path`),
-so the build machine's `lib/python3.12/site-packages/...` is baked in. Installed into a
-python 3.11 env it creates a `lib/python3.12/` no interpreter looks at: install succeeds,
-`conda list` shows it, `import` raises `ModuleNotFoundError`. `run: python >=3.10` does not
-save you — it *permits* 3.11. `noarch: python` relocates site-packages at link time; that
-relocation is the entire point.
+`noarch: generic` installs files at their literal path, so the builder's
+`lib/python3.12/site-packages/…` gets baked in: installed under 3.11 it creates a directory
+no interpreter reads. Installs green, `import` fails. `run: python >=3.10` does not help —
+it *permits* 3.11. `noarch: python` relocates at link time; that is the whole point.
 
----
+## 2. Dependency names — check what a package IS
 
-## 1. Dependency names: check what a package IS, not that it exists
+The wrong one **resolves, installs green, and dies at import**.
 
-conda names differ from PyPI names, and the failure mode is worse than an unsolvable
-package — the wrong one **resolves, installs green, and dies at import**.
+| PyPI | conda-forge |
+|---|---|
+| `msgpack` | `msgpack-python` |
+| `lmdb` | `python-lmdb` (conda `lmdb` = the C library) |
+| `xxhash` | `python-xxhash` (conda `xxhash` = the C library) |
+| `zstandard` | `zstandard` — **no** `python-zstandard` exists; don't "fix" by analogy |
 
-| PyPI | conda-forge | note |
-|---|---|---|
-| `msgpack` | `msgpack-python` | there is no `msgpack` on conda-forge |
-| `lmdb` | `python-lmdb` | conda `lmdb` is the **C library** |
-| `xxhash` | `python-xxhash` | conda `xxhash` is the **C library** |
-| `zstandard` | `zstandard` | **do not** "fix" this to `python-zstandard` — no such package |
-
-We shipped `lmdb` once. conda installed LMDB 0.9.35, the package installed cleanly, the
-Isabelle session built, and only `import Isabelle_RPC_Host` failed.
-
-**The version is the tell.** PyPI `lmdb` is 2.x while conda `lmdb` is 0.9.x, because they
-are different software. Read the summary — "Python binding" vs "database":
+The version is the tell: PyPI `lmdb` is 2.x, conda `lmdb` is 0.9.x — different software.
 
 ```sh
-curl -fsS https://api.anaconda.org/package/conda-forge/<name> \
+# what is it?
+curl -fsS https://api.anaconda.org/package/conda-forge/NAME \
   | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['latest_version'],'|',d['summary'])"
-```
-
-Also check **platform coverage**, not just existence — `rocksdict` on conda-forge has
-`linux-64`/`osx-64`/`win-64` only, no Apple Silicon:
-
-```sh
-curl -fsS https://api.anaconda.org/package/conda-forge/<name>/files \
+# which platforms?  (rocksdict has no Apple Silicon)
+curl -fsS https://api.anaconda.org/package/conda-forge/NAME/files \
   | python3 -c "import sys,json;print(sorted({f['attrs']['subdir'] for f in json.load(sys.stdin)}))"
 ```
 
-If conda-forge is too old or missing a platform, repackaging the upstream wheel onto our
-own channel is cheap — see §9.
+Missing a platform or badly stale → repackage the upstream wheel onto our channel (§8).
 
----
+## 3. Versions
 
-## 2. Versioning
+- One repo, one package, one semver.
+- If the project also ships to PyPI, **conda must never fall behind**. If PyPI gets ahead,
+  `pip install -U` removes conda's `.dist-info` and orphans the Isabelle half beyond
+  `conda remove`.
+- Don't add `./VERSION` where a version already exists (`Isabelle-MCP` uses
+  `__version__`). Two sources of truth drift.
+- No `-` in a conda version.
 
-- **Each component has its own semver.** One repo, one package, one version.
-- Where the project already publishes to PyPI, the conda version **must never fall behind**
-  PyPI's. If PyPI gets ahead, `pip install -U` takes over, its uninstall removes conda's
-  `.dist-info`, and the Isabelle half — session, hooks, `etc/components` entry — is orphaned
-  beyond conda's reach (`conda remove` then reports `PackagesNotFoundError`). Verified.
-- Do not invent a `./VERSION` file where the project already declares a version
-  (`Isabelle-MCP` reads `isabelle_mcp.__version__`). Two sources of truth for one number
-  is how they drift.
-- A conda version may not contain `-`.
+## 4. Component hooks (session packages)
 
----
+`post-link` runs `isabelle components -u "$PREFIX/share/<name>"`, `pre-unlink` runs `-x`.
 
-## 3. The Isabelle component hooks
+- Write **both** `bin/*.sh` and `Scripts/*.bat`, unconditionally. conda picks by running
+  platform and silently succeeds when the file is absent → `.sh`-only installs clean on
+  Windows and never registers.
+- Don't guard with `case "$target_platform" in win-*)` — for noarch that is `noarch`, so
+  the branch never matches. Looks applied; isn't.
+- Every hook ends `exit 0`. A nonzero post-link rolls the whole install back.
+- Windows needs a throwaway warm-up **before** `components`:
+  `call "%PREFIX%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME >nul 2>&1`.
+  Cygwin heals on the first `isabelle` call, but that call's classpath is computed before
+  the heal — so the first invocation is the one that cannot run a Scala tool, and
+  `components` is one.
+- Pass a Cygwin path: `Path.check_elem` rejects `:` and `\`. Convert in pure batch
+  (`cygpath.exe` prints nothing on the runner). The drive letter needs **no** lowercasing.
+- A package that registers from its **own code** must have **no** hooks (`Isabelle-MCP`) —
+  a hook would add a second, competing `etc/components` entry.
 
-Session packages register themselves at install time and unregister at removal:
+## 5. ROOT exposure
 
+`isabelle components -u` exposes the component's **whole** ROOT. A session whose directory
+or imports are not shipped breaks **every** `isabelle build` in the user's environment,
+including unrelated ones. Move test/dev sessions to their own ROOT in an unshipped
+subdirectory (`Isa-Mini/Agent/AoA_REPL/ROOT`, `Semantic_Embedding/Test/ROOT`). Verify with
+a control — an invented session name must error.
+
+## 6. Python halves
+
+- Build with `$PYTHON -m pip install . --no-deps --no-build-isolation`. That is what makes
+  the `.dist-info`; **without it pip cannot see the package** and will install PyPI's copy
+  over conda's files.
+- Declare `entry_points` in the recipe.
+- setuptools' glob **skips hidden entries**: `Foo/**/*` matches nothing under `Foo/.claude/`.
+  Spell the dot out — `Foo/.claude/**/*`. The obvious pattern ships an empty directory.
+- A user who ran `pip install` first keeps a stale `.dist-info`; no packaging choice fixes
+  that — document `pip uninstall NAME` before `conda install`.
+
+## 7. Workflow gotchas
+
+Copy an existing `release-conda.yml`, then read every line — the copies do diverge, and
+the divergences are defects.
+
+- `"$CONDA/bin/python" -m conda_index`, never bare `python` (setup-miniconda leaves
+  `/usr/bin/python` first). This shipped to two repos.
+- `--build-num`, not `--build-number` (rattler-build exits 2).
+- Step outputs don't cross jobs — export a job `outputs:` block.
+- `conda-forge` must be in the channel list for anything with Python deps.
+- Secrets are **per repo** and passed **explicitly**, never `secrets: inherit` (naming them
+  re-arms `required: true`, so an unseeded repo fails at resolution with a named error):
+  `gh secret set CONDA_R2_{ACCESS_KEY_ID,SECRET_ACCESS_KEY} -R xqyww123/REPO`
+- Entry point in tests is `<prefix>/bin/isabelle` or `<prefix>/Scripts/isabelle.bat` —
+  **not** `<prefix>/isa/bin/isabelle`, the distribution's unix launcher, which ships on
+  Windows too and which Git-Bash calls executable. Dispatch on `$RUNNER_OS`.
+- On Windows `isabelle getenv` returns `/cygdrive/c/…`; Git-Bash needs `/c/…`.
+- `conda remove` without `--force` takes base `isabelle` with it, whose own pre-unlink
+  deletes the namespaced `ISABELLE_HOME_USER` — so an "entry is gone" check proves nothing.
+
+## 8. Repackaging a third-party dependency
+
+conda-forge missing a platform or badly stale? Repackage upstream's own wheel — cheap, and
+not a build to maintain:
+
+```yaml
+source: [{url: "https://files.pythonhosted.org/…/PKG-VER-TAG.whl", sha256: "…"}]
+build:  {number: 0, script: "$PYTHON -m pip install <the wheel> --no-deps"}
 ```
-bin/.<name>-post-link.sh      isabelle components -u "$PREFIX/share/<name>"
-bin/.<name>-pre-unlink.sh     isabelle components -x "$PREFIX/share/<name>"
-Scripts/.<name>-post-link.bat     (Windows, CRLF)
-Scripts/.<name>-pre-unlink.bat
-```
 
-Non-negotiables, each of which cost a debugging round:
+One recipe per platform tag. Record why we carry it and when to drop it.
 
-- **Write both sets, unconditionally.** conda picks by the RUNNING platform and returns
-  success in silence when the file is absent, so a `.sh`-only package installs cleanly on
-  Windows and is never registered.
-- **Do not guard with `case "$target_platform" in win-*)`.** For noarch that variable is
-  `noarch`; the branch never matches. It looks applied and is not.
-- **Every hook ends `exit 0`.** A nonzero post-link makes conda roll the whole install
-  back (measured on Windows). A failed registration must degrade to a later "unknown
-  session", not a failed install.
-- **Windows needs a throwaway warm-up first:**
-  ```bat
-  call "%PREFIX%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME >nul 2>&1
-  call "%PREFIX%\isa\bin\isabelle.bat" components -u "%CYG%" >nul 2>&1
-  ```
-  Cygwin heals itself on the first `isabelle` call, but that call's Java classpath is
-  computed before the heal completes — so the first invocation is precisely the one that
-  cannot run a Scala tool, and `components` is a Scala tool
-  (`Could not find or load main class isabelle.Components`). A bash-only subcommand
-  absorbs the cold start. Both hooks need it: install-then-remove leaves pre-unlink cold.
-- **The path must be Cygwin form.** `Path.check_elem` rejects `:` and `\`, so
-  `%PREFIX%\share\...` raises "Illegal character" — invisibly, given `exit /b 0`. Convert
-  with pure batch (`cygpath.exe` printed nothing on a windows-latest runner). The drive
-  letter needs **no** lowercasing: Isabelle accepts `/cygdrive/C/...` and lowercases it
-  itself.
-- **A package that registers from its own code must NOT have hooks.** `Isabelle-MCP`
-  registers from Python at run time; a conda hook would add a second, competing
-  `etc/components` entry. Its build step asserts the *absence* of hooks so a copy-paste
-  from a sibling recipe fails loudly.
+## 9. Release
 
-Registration lands in `$ISABELLE_HOME_USER/etc/components`, which the base package
-namespaces per environment (`~/.isabelle/Isabelle2025-2-conda-<env>`).
+1. **Dependencies first** — `verify` installs from the live channel, so run deps must
+   already be published. Order: `isabelle` → `isabelle-performant-ml` →
+   `auto-sledgehammer` → `isabelle-rpc` → `isabelle-semantic-embedding` →
+   `isabelle-minilang`.
+2. Dry run: `gh workflow run release-conda.yml -R REPO -f dry_run=true` — stops after
+   `verify`, publishes nothing.
+3. Tag: `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`. Some repos use `master`.
+4. If `publish` fails: fix, then **re-run failed jobs** — the guard compares sha256 over
+   https, so a byte-identical re-upload resumes instead of dead-ending.
 
----
+## 10. What verification must assert
 
-## 4. Splitting the ROOT
+A green install proves very little. Each of these caught a real defect:
 
-`isabelle components -u` exposes a component's **whole** ROOT. If it declares a session
-whose directory or imports are not shipped, **every** `isabelle build` in the user's
-environment fails — including unrelated sessions, because Isabelle reads every registered
-ROOT at startup.
-
-Move test/dev sessions into their own ROOT in a subdirectory that is not shipped. Done for
-`Isa-Mini` (`Agent/AoA_REPL/ROOT`) and `Semantic_Embedding` (`Test/ROOT`). Verify with a
-control: an invented session name must error, or the check proves nothing.
-
----
-
-## 5. Python packaging details
-
-- Build with `$PYTHON -m pip install . --no-deps --no-build-isolation`. The `pip install`
-  is what generates the `.dist-info` — **without it pip cannot see the package at all** and
-  will install PyPI's copy over conda's files (and a later `conda remove` then deletes
-  pip's). With it, `pip install <name>` reports "already satisfied" and touches nothing.
-- Declare `entry_points` in the recipe; conda generates the wrappers per platform.
-- **setuptools' glob skips hidden entries.** `Foo/**/*` matches nothing under `Foo/.claude/`.
-  Spell the dot component out: `Foo/.claude/**/*`. Measured — the obvious pattern produces
-  an empty directory and the belief that it shipped.
-- A user who ran `pip install <name>` first keeps a stale `.dist-info` beside conda's;
-  `conda list` then misreports it as `pypi_0` and a later `pip uninstall` deletes
-  conda-owned files. No packaging choice avoids this — document `pip uninstall` first.
-
----
-
-## 6. The workflow
-
-Copy an existing `release-conda.yml` **and then read every line**, because the copies do
-diverge and the divergences are defects:
-
-- `"$CONDA/bin/python" -m conda_index`, never bare `python` — setup-miniconda leaves
-  `/usr/bin/python` first on PATH. This exact bug shipped to two repos.
-- `--build-num`, not `--build-number` (rattler-build exits 2 on the latter).
-- Step outputs do not cross jobs. Export a job `outputs:` block if a later job needs the
-  version.
-- `conda-forge` must be in the channel list for any package with Python dependencies;
-  `--override-channels` without it fails to solve.
-- Secrets are **per repo**: a reusable workflow receives the CALLING repo's secrets, and a
-  personal account has no org-level secrets. Pass them explicitly, never `secrets: inherit`
-  — naming them re-arms `required: true`, so an unseeded repo fails at resolution time
-  with a named error instead of an opaque S3 failure twenty minutes later.
-  ```sh
-  gh secret set CONDA_R2_ACCESS_KEY_ID     -R xqyww123/<repo>
-  gh secret set CONDA_R2_SECRET_ACCESS_KEY -R xqyww123/<repo>
-  ```
-- The entry point in a smoke test is `<prefix>/bin/isabelle` or
-  `<prefix>/Scripts/isabelle.bat` — **not** `<prefix>/isa/bin/isabelle`, which is the
-  distribution's unix launcher; it ships on Windows too and Git-Bash calls it executable,
-  so an `-x` dispatch picks it and Isabelle dies with "Failed to determine hardware and
-  operating system type!". Dispatch on `$RUNNER_OS`.
-- On Windows, `isabelle getenv` returns a Cygwin path Git-Bash cannot open
-  (`/cygdrive/c/…` vs `/c/…`).
-- `conda remove` without `--force` takes the base `isabelle` with it, and isabelle's own
-  pre-unlink deletes the whole namespaced `ISABELLE_HOME_USER` — so an "entry is gone"
-  assertion passes while proving nothing.
-
----
-
-## 7. Release sequence
-
-1. **Dependencies first.** A package's `verify` job installs it from the live channel, so
-   every run dependency must already be published. The order is forced by the graph:
-   `isabelle` → `isabelle-performant-ml` → `auto-sledgehammer` → `isabelle-rpc` →
-   `isabelle-semantic-embedding` → `isabelle-minilang`.
-2. **Dry run first:** `gh workflow run release-conda.yml -R <repo> -f dry_run=true`. It
-   stops after `verify`, which is where the evidence is, and publishes nothing.
-3. **Then tag:** `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`. Note some repos use
-   `master`, not `main`.
-4. Watch all four jobs. If `publish` fails, fix and **re-run the failed jobs** — the
-   immutability guard compares sha256 over https and lets a byte-identical re-upload
-   through, so a re-run resumes rather than dead-ending.
-
----
-
-## 8. What verification must actually assert
-
-A green install proves very little. Every one of these caught a real defect:
-
-- the payload contains what it should (unpack the `.conda`, do not trust the file list);
-- **both** hook sets are present, the `.bat` is CRLF, and the path literal in the hook
-  matches where the files were installed;
-- no hardcoded `lib/pythonX.Y` path anywhere in the payload;
-- the component is registered — read `$ISABELLE_HOME_USER/etc/components`, do not infer it;
+- unpack the `.conda` and check the payload (the zip file list alone shows nothing);
+- both hook sets present, `.bat` is CRLF, hook path literal matches the install location;
+- no hardcoded `lib/pythonX.Y` anywhere;
+- the component **is registered** — read `etc/components`, don't infer;
 - the session **builds** from the installed package;
-- for Python halves: `import`, the console script on PATH, `importlib.metadata.version`
-  matching, and `pip install <name>` reporting "already satisfied";
-- the pre-unlink **unregisters** — and the check is not vacuous (see §6 on `--force`);
-- smoke runs on **windows-latest as well as ubuntu-latest**. Windows registration failure
-  is silent, so it cannot be inferred from a green Linux leg.
+- Python half: import, console script on PATH, `importlib.metadata.version`, and
+  `pip install NAME` saying "already satisfied";
+- pre-unlink **unregisters**, non-vacuously (§7 on `--force`);
+- smoke on **windows-latest as well as ubuntu-latest** — Windows failure is silent and
+  cannot be inferred from a green Linux leg.
 
 When a test passes, ask what a broken implementation would have done. Several of ours
 passed for the wrong reason until a negative control was run against the pre-fix code.
 
----
+## 11. After publishing
 
-## 9. Repackaging a third-party dependency
-
-When conda-forge lacks a platform or lags badly, repackage the upstream wheel onto our
-channel. This is cheap and does not mean maintaining a build — the wheel is upstream's own
-artifact:
-
-```yaml
-source:
-  - url: https://files.pythonhosted.org/…/<pkg>-<ver>-<tag>.whl
-    sha256: …
-build:
-  number: 0
-  script: $PYTHON -m pip install <the wheel> --no-deps
+```sh
+curl -fsS https://conda.qiyuan.me/noarch/repodata.json | python3 -m json.tool | head
 ```
 
-One recipe per platform tag. Record why we carry it and the condition for dropping it
-(normally: conda-forge gains the platform).
-
----
-
-## 10. After publishing
-
-- Confirm from outside CI:
-  ```sh
-  curl -fsS https://conda.qiyuan.me/noarch/repodata.json | python3 -m json.tool | head
-  ```
-- Read the publish job's **audit log**, not its check mark: it prints one line per subdir
-  and an `audited N subdir(s)` total. (It used to be able to pass having inspected
-  nothing.)
-- A published name can never be reused. To correct content, release a new version.
+Read the publish job's **audit log**, not its check mark: it prints one line per subdir and
+`audited N subdir(s)`. It used to be able to pass having inspected nothing.

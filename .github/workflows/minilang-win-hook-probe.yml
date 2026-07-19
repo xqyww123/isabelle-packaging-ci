@@ -46,7 +46,10 @@ jobs:
           set -euo pipefail
           eval "$(conda shell.bash hook)"; conda activate p
           echo "----- Scripts/ hook files -----"
-          ls -l "$CONDA_PREFIX/Scripts/" | grep -i 'post-link\|pre-unlink' || echo "  (NONE)"
+          # ls -a, not ls: conda link scripts are DOTFILES (.name-post-link.bat), and a
+          # plain `ls -l` hides them.  The first run of this probe reported "(NONE)" for
+          # that reason alone and proved nothing.
+          ls -la "$CONDA_PREFIX/Scripts/" | grep -i 'post-link\|pre-unlink' || echo "  (NONE)"
           echo "----- the component directory -----"
           ls -l "$CONDA_PREFIX/share/" || true
           echo "----- does our ROOT exist? -----"
@@ -84,7 +87,13 @@ jobs:
           BAT
           PREFIX=$(cygpath -w "$CONDA_PREFIX" 2>/dev/null || echo "$CONDA_PREFIX")
           echo "passing PREFIX=$PREFIX"
-          PREFIX="$PREFIX" cmd.exe /c "$(cygpath -w "$RUNNER_TEMP/probe.bat")" || echo "probe.bat exit=$?"
+          # MSYS_NO_PATHCONV and `//c`, both deliberate.  Git-Bash rewrites any argument
+          # that looks like a unix path, so a plain `cmd.exe /c` arrives as
+          # `cmd.exe C:/Program Files/Git/c` -- cmd then starts INTERACTIVELY and the
+          # batch file never runs.  The first version of this probe did exactly that and
+          # printed only the Windows banner, which is why it proved nothing.
+          MSYS_NO_PATHCONV=1 PREFIX="$PREFIX" \
+            cmd.exe //c "$(cygpath -w "$RUNNER_TEMP/probe.bat")" || echo "probe.bat exit=$?"
 
       - name: "etc/components after the manual run"
         if: always()

@@ -119,8 +119,11 @@ jobs:
           python3 -c "import sys,zipfile,tarfile,io,zstandard; z=zipfile.ZipFile(sys.argv[1]); b=next(n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')); r=zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(b))); tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])" "$pkg" "$work"
           find "$work" \( -name '*.so' -o -name '*.pyd' -o -name '*.dylib' \) | head -3 | grep -q . \
             || { echo "::error::no compiled extension in the payload"; find "$work" | head -20; exit 1; }
-          find "$work" -name '*.dist-info' -maxdepth 3 | grep -q . \
-            || { echo "::error::no dist-info -- pip would not see this package"; exit 1; }
+          # No -maxdepth: the payload is lib/python3.X/site-packages/... on unix (depth 4)
+          # but Lib/site-packages/... on Windows (depth 3).  A depth limit passed only on
+          # Windows and failed every unix leg on a perfectly good package.
+          find "$work" -name '*.dist-info' | grep -q . \
+            || { echo "::error::no dist-info -- pip would not see this package"; find "$work" -maxdepth 4 | head -20; exit 1; }
           echo "  OK  compiled extension + dist-info present"
 
       - uses: actions/upload-artifact@v4

@@ -43,6 +43,17 @@ build:
   number: 0
   # Not noarch: the wheel carries a compiled extension for one platform and one CPython.
   string: py${{ py | replace(".", "") }}_0
+  # Do not rewrite the extension's load commands.  rattler-build relinks binaries by
+  # default so their rpaths point into the conda prefix, and on osx-arm64 that fails
+  # outright -- upstream's wheel was not linked with spare header padding, so
+  # install_name_tool reports "larger updated load commands do not fit".
+  #
+  # The rewrite is pointless here anyway: a PyPI wheel is self-contained by construction
+  # (delocate/auditwheel bundle whatever it needs), so the extension links against system
+  # libraries and its own vendored copies, never against anything in the prefix.  There is
+  # no rpath that wants fixing.
+  dynamic_linking:
+    binary_relocation: false
   script:
     # python, NOT bash.  rattler-build has no bash in the build environment on Windows
     # ("interpreter `bash` was not found"), and this script needs no shell: it installs a

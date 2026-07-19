@@ -86,10 +86,17 @@ jobs:
       - name: Install rattler-build
         run: |
           set -euo pipefail
-          case "${{ runner.os }}" in
-            Linux)   asset=rattler-build-$(uname -m)-unknown-linux-musl ;;
-            macOS)   asset=rattler-build-$(uname -m)-apple-darwin ;;
-            Windows) asset=rattler-build-x86_64-pc-windows-msvc.exe ;;
+          # Map explicitly; do NOT interpolate `uname -m`.  rattler-build's assets use
+          # `aarch64`, but macOS reports `arm64` -- so the uname form 404s there while
+          # working by coincidence on linux-aarch64, where uname already says aarch64.
+          # That coincidence is exactly why the bug showed up on one platform only.
+          case "${{ matrix.target.subdir }}" in
+            linux-64)      asset=rattler-build-x86_64-unknown-linux-musl ;;
+            linux-aarch64) asset=rattler-build-aarch64-unknown-linux-musl ;;
+            osx-64)        asset=rattler-build-x86_64-apple-darwin ;;
+            osx-arm64)     asset=rattler-build-aarch64-apple-darwin ;;
+            win-64)        asset=rattler-build-x86_64-pc-windows-msvc.exe ;;
+            *) echo "::error::no rattler-build asset mapped for ${{ matrix.target.subdir }}"; exit 1 ;;
           esac
           curl -fsSL -o rattler-build "https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/$asset"
           chmod +x rattler-build

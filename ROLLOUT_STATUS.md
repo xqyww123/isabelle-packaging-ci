@@ -4,8 +4,9 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-07-19 (rpc 0.3.4 with the Windows daemon port; semantic-embedding 0.1.2;
-win-64's 0.1.1 deleted; isabelle-ai dry-run green, not yet published).
+Last updated: 2026-07-19 — ROLLOUT COMPLETE. rpc 0.3.4 (Windows daemon port),
+semantic-embedding 0.1.2, win-64 0.1.1 deleted, minilang Windows registration verified,
+isabelle-ai 0.1.0 published.
 
 ---
 
@@ -22,6 +23,10 @@ win-64's 0.1.1 deleted; isabelle-ai dry-run green, not yet published).
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
 | `isabelle-semantic-embedding` | 0.1.2 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.1.1 (conda is ahead) |
+| `isabelle-ai` | 0.1.0 | noarch generic, **metapackage** — minilang + mcp, no files of its own |
+
+**The rollout is complete.** Every package in the original plan is published, and every one
+of them has been installed from the live channel on Linux and on Windows.
 
 `isabelle-rpc` 0.3.4 is the first release that works on Windows at all: `fork_and_launch__`
 called `os.fork()`, which does not exist there, so every Windows launch died with
@@ -42,24 +47,32 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 ## In flight
 
-**`isabelle-ai` 0.1.0** (metapackage) — recipe and workflow written, committed, and
-**dry-run green on the first attempt** (run 29690846852). Not yet published. It lives HERE,
-in `conda/metapackage/isabelle-ai/`, not in a component repo: the "recipe beside its source"
-rule presupposes a source, and this has none. Its own directory rather than
-`conda/third-party/`, whose name carries "upstream's artifact, pinned by sha256" — none of
-which applies.
+Nothing.
 
-Contents: `isabelle-minilang >=0.4.0` + `isabelle-mcp >=0.3.0`, floors not exact pins, and
-nothing else. The package is empty by construction, so the workflow asserts exactly that —
-no file outside `info/`, `depends` equal to those two and nothing more, `subdir: noarch`.
+## Notes on the two packages that landed last
 
-Remaining before publishing: re-verify minilang's Windows component registration. A
-metapackage multiplies whatever it pulls in, so a registration defect in minilang would
-reach every `isabelle-ai` user rather than only those who chose minilang directly.
+**`isabelle-ai`** lives HERE, in `conda/metapackage/isabelle-ai/`, not in a component repo:
+the "recipe beside its source" rule presupposes a source, and this has none. Its own
+directory rather than `conda/third-party/`, whose name carries "upstream's artifact, pinned
+by sha256" — none of which applies. Floors, not exact pins: a metapackage that pins `==`
+must be republished for every release of either half. Empty by construction, and the
+workflow asserts exactly that — no file outside `info/`, `depends` equal to those two and
+nothing more, `subdir: noarch`. Dry-run green on the first attempt.
 
-## Not started
+**`isabelle-minilang`'s Windows registration was never minilang's bug.** Its Windows smoke
+failed with "the component is not registered" while `etc/components` listed its four
+dependencies, which read as a defect in its own post-link hook. It was not: the probe
+(`minilang-win-hook-probe.yml`, which strips the `>nul 2>&1` the real hook needs) showed
+`isabelle components -u` exiting 2 on `*** Illegal char <\n>` in a path belonging to
+`isabelle-semantic-embedding`'s jar. That is the SAME CRLF defect that got 0.1.1's win-64
+build deleted — `components -u` validates the whole component set, so one dependency's
+carriage return takes the caller down with it. Publishing 0.1.2 and deleting the bad build
+fixed minilang's registration with no change to minilang. Re-running the failed smoke was
+the whole fix.
 
-Nothing. Every package in the original plan is published or in flight above.
+The general shape, since it cost three separate investigations: **a failure in package A's
+hook may belong to package B**, because `isabelle components` is a whole-set operation.
+Suspect the dependencies before the hook.
 
 ---
 

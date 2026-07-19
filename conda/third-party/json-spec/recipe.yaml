@@ -1,0 +1,109 @@
+schema_version: 1
+
+# json-spec, repackaged from upstream's own PyPI wheel onto conda.qiyuan.me.
+#
+# WHY WE CARRY IT
+#
+# conda-forge's json-spec is unusable on any modern Python, in two different ways, and
+# there is no third option there:
+#
+#   0.10.1 (2020) -- `from collections import Mapping` in jsonspec/pointer/bases.py.
+#                    That name was removed in Python 3.10, so `import jsonspec` raises
+#                    ImportError outright.
+#   0.11.0 (2023) -- pins `importlib-metadata >=5.0.0,<6`.  The ecosystem is on 8.x, so
+#                    the solver cannot take it and silently falls back to 0.10.1.
+#
+# The fallback is the trap: the environment SOLVES, installs green, and dies at import.
+# Measured on Isa-Mini release-conda run 29677008949, where the conda test env resolved
+# json-spec 0.10.1 under python 3.14 and `import jsoncomment` failed.
+#
+# PyPI's 0.12.0 fixes both: it requires-python >=3.10 and its only runtime requirement is
+# conditional on python < 3.10, i.e. it has none in practice.
+#
+# WHO NEEDS IT: isabelle-minilang, transitively.  IsaMini/AoA/{mcp_http_server,retrieval}.py
+# `import jsoncomment` at module level, and jsoncomment 0.4.2 -- the newest release on
+# either index -- hard-depends on json-spec.
+#
+# DROP THIS once conda-forge ships json-spec >= 0.12.  It exists to fill a packaging gap,
+# not an upstream one.
+#
+# WHAT THIS IS NOT: a build.  The wheel is upstream's own artifact, downloaded by URL and
+# pinned by sha256; we only re-wrap it in conda's format.  That is why carrying it is
+# cheap.  Second instance of this pattern after rocksdict; if a third arrives, generalise
+# the workflow rather than copying it again.
+
+context:
+  version: ${{ env.get("JSON_SPEC_VERSION", default="0.12.0") }}
+  wheel_url: ${{ env.get("JSON_SPEC_WHEEL_URL") }}
+  wheel_sha: ${{ env.get("JSON_SPEC_WHEEL_SHA256") }}
+
+package:
+  name: json-spec
+  version: ${{ version }}
+
+source:
+  - url: ${{ wheel_url }}
+    sha256: ${{ wheel_sha }}
+    # NOT renamed: pip parses the wheel FILENAME for name/version/python/abi/platform, so
+    # a `file_name:` here makes it reject the file outright.  The script globs for it.
+
+build:
+  number: 0
+  # noarch: python, unlike rocksdict.  The wheel is py3-none-any -- pure Python, no
+  # compiled extension -- so one artifact serves every platform and every interpreter.
+  noarch: python
+  script:
+    # python, NOT bash: rattler-build has no bash in the build environment on Windows, and
+    # this needs no shell.  Keeps one script for every platform.
+    interpreter: python
+    content: |
+      import os, pathlib, subprocess, sys, sysconfig
+
+      whls = sorted(pathlib.Path(os.environ["SRC_DIR"]).glob("*.whl"))
+      assert len(whls) == 1, f"expected exactly one wheel in SRC_DIR, got {whls}"
+      print("repackaging", whls[0].name)
+      # --no-deps: json-spec's only declared requirement applies to python < 3.10, which
+      # its own requires-python excludes, so there is nothing for pip to resolve.
+      subprocess.run([sys.executable, "-m", "pip", "install", str(whls[0]), "--no-deps", "-vv"],
+                     check=True)
+
+      # Prove the module really landed AND that this is the fixed release -- a
+      # mis-specified URL that fetched 0.10.1 would install just as cleanly and fail only
+      # at a user's import.
+      sp = pathlib.Path(sysconfig.get_paths()["purelib"]) / "jsonspec"
+      assert sp.is_dir(), f"{sp} missing"
+      bases = (sp / "pointer" / "bases.py").read_text()
+      assert "from collections import Mapping" not in bases, \
+          "this is the pre-3.10 json-spec -- wrong version fetched"
+      print("installed", sp)
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+  run:
+    # Upstream's own floor: requires-python >=3.10,<4.  Below it the package is the broken
+    # `from collections import Mapping` code, which is the whole reason we carry this.
+    - python >=3.10
+
+tests:
+  - python:
+      imports:
+        - jsonspec
+        - jsonspec.pointer
+      pip_check: true
+  - script:
+      # The actual consumer.  Importing jsonspec alone would pass against a package that
+      # still breaks the thing we need it for.
+      - python -c "from jsonspec.pointer import extract, ExtractError; print('jsonspec.pointer ok')"
+
+about:
+  homepage: https://github.com/johnnoone/json-spec
+  summary: "Implements JSON Schema, JSON Pointer and JSON Reference (repackaged from the upstream wheel)"
+  description: |
+    json-spec, repackaged unmodified from the wheel its author publishes on PyPI, because
+    conda-forge carries only 0.10.1 (which cannot import on Python 3.10 or newer) and
+    0.11.0 (which pins importlib-metadata <6 and so cannot be solved alongside a modern
+    environment).  No source is modified here; the wheel is pinned by sha256.
+  license: BSD-3-Clause
+  repository: https://github.com/johnnoone/json-spec

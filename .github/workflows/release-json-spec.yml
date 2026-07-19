@@ -1,0 +1,120 @@
+# Repackage upstream's json-spec wheel onto https://conda.qiyuan.me.
+#
+# WHY: conda-forge's json-spec cannot be used on modern Python.  0.10.1 (2020) does
+# `from collections import Mapping`, removed in 3.10; 0.11.0 pins importlib-metadata <6,
+# which no modern environment can satisfy, so the solver falls back to 0.10.1 -- the
+# environment resolves, installs green, and dies at `import jsonspec`.  PyPI's 0.12.0 is
+# fixed.  isabelle-minilang needs it transitively: IsaMini.AoA imports jsoncomment, whose
+# newest release hard-depends on json-spec.  DROP THIS once conda-forge ships >= 0.12.
+#
+# Simpler than release-rocksdict.yml in one way that matters: the wheel is py3-none-any,
+# so this is `noarch: python` and there is no matrix -- one build, one artifact, and a
+# linux runner can produce it for every platform.
+name: release-json-spec
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "json-spec version to repackage"
+        type: string
+        default: "0.12.0"
+      dry_run:
+        description: "Build only -- do NOT publish to the channel"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-json-spec
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Resolve the wheel URL and sha256 from PyPI"
+        id: whl
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, urllib.request
+          ver = "${{ inputs.version }}"
+          d = json.load(urllib.request.urlopen(f"https://pypi.org/pypi/json-spec/{ver}/json", timeout=30))
+          hits = [f for f in d["urls"] if f["filename"].endswith("-py3-none-any.whl")]
+          if len(hits) != 1:
+              raise SystemExit("expected exactly one py3-none-any wheel, got "
+                               + repr([f['filename'] for f in hits]))
+          f = hits[0]
+          print(f"url={f['url']}")
+          print(f"sha={f['digests']['sha256']}")
+          print(f"file={f['filename']}")
+          PY
+          echo "resolved: $(grep '^file=' "$GITHUB_OUTPUT" | tail -1)"
+
+      - name: Install rattler-build
+        run: |
+          set -euo pipefail
+          curl -fsSL -o rattler-build \
+            https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/rattler-build-x86_64-unknown-linux-musl
+          chmod +x rattler-build
+          ./rattler-build --version
+
+      - name: Build
+        env:
+          JSON_SPEC_VERSION:      ${{ inputs.version }}
+          JSON_SPEC_WHEEL_URL:    ${{ steps.whl.outputs.url }}
+          JSON_SPEC_WHEEL_SHA256: ${{ steps.whl.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ./rattler-build build \
+            --recipe conda/third-party/json-spec/recipe.yaml \
+            --output-dir out
+          find out -name '*.conda' -print
+
+      - name: "Sanity: the payload is the FIXED release"
+        run: |
+          set -euo pipefail
+          pkg=$(find out -name 'json-spec-*.conda' | head -1)
+          [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
+          python3 -m pip install --quiet zstandard
+          work=$(mktemp -d)
+          python3 -c "import sys,zipfile,tarfile,io,zstandard; z=zipfile.ZipFile(sys.argv[1]); b=next(n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')); r=zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(b))); tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])" "$pkg" "$work"
+          bases=$(find "$work" -path '*/jsonspec/pointer/bases.py' | head -1)
+          [ -n "$bases" ] || { echo "::error::jsonspec/pointer/bases.py is not in the payload"; exit 1; }
+          # THE assertion.  A wrong version would install just as cleanly and fail only at
+          # a user's import -- this is the exact line that breaks on Python >= 3.10.
+          ! grep -q 'from collections import Mapping' "$bases" \
+            || { echo "::error::this is the pre-3.10 json-spec -- wrong version packaged"; exit 1; }
+          # noarch: python must not bake in an interpreter-specific path.
+          ! find "$work" -path '*lib/python3*' -print -quit | grep -q . \
+            || { echo "::error::payload contains a hardcoded lib/pythonX.Y path"; exit 1; }
+          echo "  OK  fixed release, relocatable"
+
+      - name: Lay the package out as <subdir>/*.conda for publish-conda.yml
+        run: |
+          set -euo pipefail
+          mkdir -p pkgs/noarch
+          find out -name '*.conda' -exec cp {} pkgs/noarch/ \;
+          n=$(find pkgs -name '*.conda' | wc -l)
+          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 package, found $n"; exit 1; }
+          ls -l pkgs/noarch/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conda-packages
+          path: pkgs/**/*.conda
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    uses: ./.github/workflows/publish-conda.yml
+    with:
+      artifact: conda-packages
+      package_name: json-spec
+    secrets:
+      CONDA_R2_ACCESS_KEY_ID:     ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
+      CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}

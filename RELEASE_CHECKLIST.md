@@ -119,6 +119,12 @@ the divergences are defects.
   **not** `<prefix>/isa/bin/isabelle`, the distribution's unix launcher, which ships on
   Windows too and which Git-Bash calls executable. Dispatch on `$RUNNER_OS`.
 - On Windows `isabelle getenv` returns `/cygdrive/c/…`; Git-Bash needs `/c/…`.
+- Under Git-Bash, `cmd.exe /c foo.bat` **starts cmd interactively and never runs the
+  batch**: MSYS rewrites any argument shaped like a unix path, so `/c` arrives as
+  `C:/Program Files/Git/c`. Use `MSYS_NO_PATHCONV=1 cmd.exe //c "$(cygpath -w …)"`. The
+  give-away is a Windows banner and a prompt in the log, with no error.
+- conda's link scripts are **dotfiles** (`.<pkg>-post-link.bat`). `ls -l` hides them, so a
+  listing that reports "no hooks" may just be missing `-a`.
 - `conda remove` without `--force` takes base `isabelle` with it, whose own pre-unlink
   deletes the namespaced `ISABELLE_HOME_USER` — so an "entry is gone" check proves nothing.
 - `$CONDA/bin/python` is ubuntu-only. On Windows Miniconda is `%CONDA%\python.exe` with no

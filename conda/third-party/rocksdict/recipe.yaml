@@ -35,26 +35,39 @@ package:
 source:
   - url: ${{ wheel_url }}
     sha256: ${{ wheel_sha }}
-    file_name: rocksdict.whl
+    # NOT renamed: pip parses the wheel FILENAME for name/version/python/abi/platform, so
+    # a `file_name: rocksdict.whl` here makes it reject the file outright ("Invalid wheel
+    # filename (wrong number of parts)").  The script globs for it instead.
 
 build:
   number: 0
   # Not noarch: the wheel carries a compiled extension for one platform and one CPython.
   string: py${{ py | replace(".", "") }}_0
   script:
-    interpreter: bash
+    # python, NOT bash.  rattler-build has no bash in the build environment on Windows
+    # ("interpreter `bash` was not found"), and this script needs no shell: it installs a
+    # wheel and asserts the result.  Using python removes the whole class of Windows shell
+    # problems and keeps one script for all five platforms.
+    interpreter: python
     content: |
-      set -euo pipefail
-      # --no-deps: rocksdict has no runtime dependencies beyond CPython itself, and
-      # anything it did have would be conda's job to resolve, not pip's.
-      $PYTHON -m pip install "$SRC_DIR/rocksdict.whl" --no-deps -vv
+      import os, pathlib, subprocess, sys, sysconfig
 
-      # The point of the exercise: assert the compiled extension really landed, so a
+      whls = sorted(pathlib.Path(os.environ["SRC_DIR"]).glob("*.whl"))
+      assert len(whls) == 1, f"expected exactly one wheel in SRC_DIR, got {whls}"
+      src = whls[0]
+      print("repackaging:", src.name)
+      # --no-deps: rocksdict needs nothing beyond CPython, and anything it did need would
+      # be conda's job to resolve, not pip's.
+      subprocess.run([sys.executable, "-m", "pip", "install", str(src), "--no-deps", "-vv"],
+                     check=True)
+
+      # The point of the exercise: prove the compiled extension really landed, so a
       # mis-specified wheel URL cannot ship an empty package.
-      sp=$($PYTHON -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
-      test -d "$sp/rocksdict"
-      find "$sp/rocksdict" \( -name '*.so' -o -name '*.pyd' -o -name '*.dylib' \) | grep -q . \
-        || { echo "no compiled extension in the installed package"; exit 1; }
+      sp = pathlib.Path(sysconfig.get_paths()["purelib"]) / "rocksdict"
+      assert sp.is_dir(), f"{sp} missing"
+      ext = [p for p in sp.rglob("*") if p.suffix in (".so", ".pyd", ".dylib")]
+      assert ext, f"no compiled extension under {sp}"
+      print("installed extension:", ext[0])
 
 requirements:
   host:

@@ -36,14 +36,18 @@ concurrency:
 
 jobs:
   build:
-    name: "rocksdict ${{ matrix.subdir }} py${{ matrix.py }}"
-    runs-on: ${{ matrix.runner }}
+    name: "rocksdict ${{ matrix.target.subdir }} py${{ matrix.py }}"
+    runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         py: ["3.11", "3.12", "3.13"]
-        include:
+        # An object-valued key, NOT `include:`.  `include` entries whose keys do not
+        # appear in the base matrix are merged into every combination in order, each
+        # overwriting the last -- so five of them yield 3 jobs all wearing the LAST
+        # platform, not 15 jobs.  Measured: the first run produced three win-64 legs.
+        target:
           - {subdir: linux-64,      runner: ubuntu-latest,    plat: manylinux_2_17_x86_64}
           - {subdir: linux-aarch64, runner: ubuntu-24.04-arm, plat: manylinux_2_17_aarch64}
           - {subdir: osx-64,        runner: macos-13,         plat: macosx_10_14_x86_64}
@@ -63,7 +67,7 @@ jobs:
           import json, os, urllib.request
           ver  = "${{ inputs.version }}"
           py   = "${{ matrix.py }}".replace(".", "")
-          plat = "${{ matrix.plat }}"
+          plat = "${{ matrix.target.plat }}"
           d = json.load(urllib.request.urlopen(f"https://pypi.org/pypi/rocksdict/{ver}/json", timeout=30))
           hits = [f for f in d["urls"]
                   if f["filename"].endswith(".whl")
@@ -121,7 +125,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: rocksdict-${{ matrix.subdir }}-py${{ matrix.py }}
+          name: rocksdict-${{ matrix.target.subdir }}-py${{ matrix.py }}
           path: out/**/*.conda
           if-no-files-found: error
 

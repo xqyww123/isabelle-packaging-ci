@@ -113,6 +113,25 @@ the divergences are defects.
 - `conda remove` without `--force` takes base `isabelle` with it, whose own pre-unlink
   deletes the namespaced `ISABELLE_HOME_USER` — so an "entry is gone" check proves nothing.
 
+## 7b. rattler-build specifics
+
+- No `bash` in the build environment on **Windows** ("interpreter `bash` was not found").
+  Write the build script in `python` — it removes the whole class and keeps one script for
+  every platform.
+- `source.file_name:` renaming a wheel breaks pip, which parses the filename for
+  name/version/abi/platform.
+- `dynamic_linking.binary_relocation: false` when repackaging a foreign wheel: rattler-build
+  rewrites load commands by default, upstream wheels have no spare header padding, and
+  `install_name_tool` then fails on macOS. The rewrite was never wanted — a PyPI wheel is
+  self-contained by construction.
+- `include:` in a matrix does **not** make a cross product: entries whose keys are absent
+  from the base matrix are merged into every combination in order, each overwriting the
+  last. Use an object-valued matrix key.
+- macOS runners' system python is PEP 668 managed — `pip install` needs
+  `--break-system-packages` there.
+- Map release-asset names from the **subdir you know**, not `uname -m`: macOS says `arm64`
+  where assets say `aarch64`, and the same expression works on linux-aarch64 by coincidence.
+
 ## 8. Repackaging a third-party dependency
 
 conda-forge missing a platform or badly stale? Repackage upstream's own wheel — cheap, and

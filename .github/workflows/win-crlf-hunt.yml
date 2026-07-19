@@ -1,0 +1,84 @@
+# Probe: WHERE does the carriage return in $COMPONENT come from?
+#
+# ESTABLISHED so far:
+#   * `isabelle build` fails for EVERY session on Windows once
+#     isabelle-semantic-embedding is installed -- not even HOL builds.  Without it, the
+#     same commands succeed (win-classpath-blast-radius, both legs).
+#   * The failure is `*** Illegal char <\n> at index 100`, and index 100 is EXACTLY the
+#     length of the component path, i.e. the offending character sits between $COMPONENT
+#     and the "/lib/..." that etc/settings appends to it.
+#   * getfunctions' init_components reads the catalog with bash `read -r`, which strips
+#     the newline but NOT a carriage return, so a CRLF catalog line would produce exactly
+#     this.
+#
+# BUT that explanation is not yet consistent with the evidence: in the control leg
+# (isabelle-rpc only) `isabelle build Isabelle_RPC` SUCCEEDED, and a CR on that catalog
+# line would have made init_component's `[ -d "$COMPONENT" ]` fail and the session
+# disappear.  So the catalog is probably not uniformly CRLF, and the CR may not be in the
+# catalog at all.
+#
+# This probe hexdumps the three candidate sites instead of reasoning about them:
+#   1. $ISABELLE_HOME_USER/etc/components
+#   2. the INSTALLED share/isabelle-semantic-embedding/etc/settings  (LF in the repo --
+#      but conda rewrites text files for prefix replacement, so verify the bytes ON DISK)
+#   3. $COMPONENT / ISABELLE_SEMANTIC_EMBEDDING_HOME as the shell actually sees them
+#
+# Publishes nothing.
+name: win-crlf-hunt
+
+on:
+  workflow_dispatch:
+
+jobs:
+  hunt:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+
+      - name: Install isabelle-semantic-embedding
+        run: |
+          set -euo pipefail
+          conda create -y -n p -c https://conda.qiyuan.me -c conda-forge \
+            --override-channels isabelle-semantic-embedding
+          eval "$(conda shell.bash hook)"; conda activate p
+          echo "ISA=$CONDA_PREFIX/Scripts/isabelle.bat" >> "$GITHUB_ENV"
+
+      - name: "1. etc/components, byte for byte"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          hu=$("$ISA" getenv -b ISABELLE_HOME_USER)
+          case "$hu" in /cygdrive/*) hu="/${hu#/cygdrive/}" ;; esac
+          echo "catalog = $hu/etc/components"
+          od -c "$hu/etc/components" | head -30
+          echo "----- CR count -----"
+          python -c "import sys; b=open(sys.argv[1],'rb').read(); print('CR bytes:', b.count(b'\r'), 'LF bytes:', b.count(b'\n'))" "$hu/etc/components"
+
+      - name: "2. the INSTALLED etc/settings, byte for byte"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          f="$CONDA_PREFIX/share/isabelle-semantic-embedding/etc/settings"
+          ls -l "$f"
+          od -c "$f"
+          python -c "import sys; b=open(sys.argv[1],'rb').read(); print('CR bytes:', b.count(b'\r'), 'LF bytes:', b.count(b'\n'))" "$f"
+
+      - name: "3. what the SHELL ends up with"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          # Ask Isabelle's own settings machinery, which is the thing that actually
+          # composes the classpath.  `getenv` is pure shell and still works even though
+          # every Scala tool is broken, which is what makes it usable as the instrument.
+          echo "----- ISABELLE_SEMANTIC_EMBEDDING_HOME -----"
+          "$ISA" getenv -b ISABELLE_SEMANTIC_EMBEDDING_HOME | od -c | head -5
+          echo "----- ISABELLE_COMPONENTS -----"
+          "$ISA" getenv -b ISABELLE_COMPONENTS | od -c | head -20
+          echo "----- ISABELLE_CLASSPATH (the composed value that fails) -----"
+          "$ISA" getenv -b ISABELLE_CLASSPATH | od -c | head -30

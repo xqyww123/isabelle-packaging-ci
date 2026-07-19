@@ -1,0 +1,93 @@
+# Probe: how much of Isabelle does isabelle-semantic-embedding's classpath entry break
+# on Windows?
+#
+# ESTABLISHED (minilang-win-hook-probe, run 3):
+#   `isabelle components -u` exits 2 with
+#     *** Illegal char <\n> at index 100:
+#     C:\Miniconda\envs\p\isa\contrib\cygwin\cygdrive\c\Miniconda\envs\p\share\
+#       isabelle-semantic-embedding\lib\semantic_embedding.jar
+#   i.e. the bundled Cygwin ROOT is prepended to the /cygdrive/... component path, so the
+#   classpath entry names a file that does not exist.  isabelle-semantic-embedding is the
+#   first component we ship that has a `classpath` line at all -- performant-ml,
+#   auto-sledgehammer and isabelle-rpc are pure ML -- which is why nothing hit this before.
+#
+# UNKNOWN, and the point of this probe: whether the damage is confined to `components`,
+# or every Scala-backed entry point in that environment is broken.  That difference
+# decides whether the fix is cosmetic or whether isabelle-semantic-embedding is unusable
+# on Windows today.
+#
+# The comparison is what makes it evidence: the SAME commands are run in an environment
+# WITHOUT semantic-embedding (isabelle-rpc only) and WITH it.  Without the control, a
+# failure here could just as easily be a property of the runner.
+#
+# Publishes nothing.  Every step is `|| true` so one failure does not hide the rest --
+# the exit codes are the data.
+name: win-classpath-blast-radius
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # control first: same commands, no semantic-embedding in the environment.
+        include:
+          - { name: "control (isabelle-rpc only)", pkg: "isabelle-rpc" }
+          - { name: "with semantic-embedding",     pkg: "isabelle-semantic-embedding" }
+    name: ${{ matrix.name }}
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          conda create -y -n p -c https://conda.qiyuan.me -c conda-forge \
+            --override-channels ${{ matrix.pkg }}
+          eval "$(conda shell.bash hook)"; conda activate p
+          ISA="$CONDA_PREFIX/Scripts/isabelle.bat"
+          echo "ISA=$ISA" >> "$GITHUB_ENV"
+          hu=$("$ISA" getenv -b ISABELLE_HOME_USER)
+          case "$hu" in /cygdrive/*) hu="/${hu#/cygdrive/}" ;; esac
+          echo "----- etc/components -----"; cat "$hu/etc/components" || true
+
+      - name: "Which entry points still work?"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          probe () {
+            echo "===== $* ====="
+            "$ISA" "$@" >/tmp/out 2>&1; rc=$?
+            echo "exit=$rc"; head -8 /tmp/out
+          }
+          # getenv is pure shell -- expected to work even when Scala is broken, and that
+          # is what makes it the baseline rather than a test.
+          probe getenv -b ISABELLE_HOME
+          # Scala-backed, in rough order of how much a user would miss them.
+          probe components -l                 || true
+          probe version                       || true
+          probe scala_build                   || true
+          probe build -n HOL                  || true
+          probe build -n -d . Pure            || true
+          echo "===== done ====="
+
+      - name: "Does a session actually BUILD?"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          # The question that matters most: semantic-embedding's own win-64 verify SKIPPED
+          # this step (`if: !startsWith(subdir,'win')`), so it has never been run on
+          # Windows for any of our packages.  If this fails only in the second leg, the
+          # published package is unusable there.
+          if [ "${{ matrix.pkg }}" = isabelle-semantic-embedding ]; then S=Semantic_Embedding
+          else S=Isabelle_RPC; fi
+          echo "building $S"
+          "$ISA" build -v "$S" 2>&1 | tail -25 || echo "BUILD FAILED rc=$?"

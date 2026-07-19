@@ -1,0 +1,82 @@
+schema_version: 1
+
+# rocksdict, repackaged from upstream's own PyPI wheels onto conda.qiyuan.me.
+#
+# WHY WE CARRY A THIRD-PARTY PACKAGE AT ALL
+#
+# conda-forge has rocksdict for linux-64, osx-64 and win-64 only -- no osx-arm64, no
+# linux-aarch64, and only ever version 0.3.23.  isabelle-semantic-embedding imports it at
+# module level (premise_selection.py), so conda-forge's coverage would cap that package at
+# three platforms and lock Apple Silicon out, even though the base `isabelle` package ships
+# all five and our own natives build fine there.
+#
+# DROP THIS the moment conda-forge gains osx-arm64 and linux-aarch64.  It exists to fill a
+# packaging gap, not because upstream lacks support: PyPI has had all five platforms all
+# along.
+#
+# WHAT THIS IS NOT: a build.  We do not compile RocksDB.  The wheel is upstream's own
+# artifact, downloaded by URL and pinned by sha256; we only re-wrap it in conda's format.
+# That is why carrying it is cheap.
+#
+# NOT abi3: every rocksdict wheel is tied to one CPython version (cp310 … cp314), so the
+# matrix is platform x python, not platform.  The workflow drives that; this recipe builds
+# exactly one (platform, python) pair from the URL and hash it is given.
+
+context:
+  version: ${{ env.get("ROCKSDICT_VERSION", default="0.3.29") }}
+  wheel_url: ${{ env.get("ROCKSDICT_WHEEL_URL") }}
+  wheel_sha: ${{ env.get("ROCKSDICT_WHEEL_SHA256") }}
+  py: ${{ env.get("ROCKSDICT_PY") }}
+
+package:
+  name: rocksdict
+  version: ${{ version }}
+
+source:
+  - url: ${{ wheel_url }}
+    sha256: ${{ wheel_sha }}
+    file_name: rocksdict.whl
+
+build:
+  number: 0
+  # Not noarch: the wheel carries a compiled extension for one platform and one CPython.
+  string: py${{ py | replace(".", "") }}_0
+  script:
+    interpreter: bash
+    content: |
+      set -euo pipefail
+      # --no-deps: rocksdict has no runtime dependencies beyond CPython itself, and
+      # anything it did have would be conda's job to resolve, not pip's.
+      $PYTHON -m pip install "$SRC_DIR/rocksdict.whl" --no-deps -vv
+
+      # The point of the exercise: assert the compiled extension really landed, so a
+      # mis-specified wheel URL cannot ship an empty package.
+      sp=$($PYTHON -c "import sysconfig; print(sysconfig.get_paths()['purelib'])")
+      test -d "$sp/rocksdict"
+      find "$sp/rocksdict" \( -name '*.so' -o -name '*.pyd' -o -name '*.dylib' \) | grep -q . \
+        || { echo "no compiled extension in the installed package"; exit 1; }
+
+requirements:
+  host:
+    - python ${{ py }}.*
+    - pip
+  run:
+    # Pinned to the exact CPython the wheel was built for -- there is no abi3 here, so a
+    # 3.12 wheel under 3.13 would import-fail at run time.
+    - python ${{ py }}.*
+
+tests:
+  - python:
+      imports:
+        - rocksdict
+      pip_check: true
+
+about:
+  homepage: https://github.com/Congyuwang/RocksDict
+  summary: "Python binding for RocksDB (repackaged from the upstream wheel)"
+  description: |
+    RocksDict, repackaged unmodified from the wheel its authors publish on PyPI, so that
+    conda users on Apple Silicon and aarch64 Linux can install it -- conda-forge builds it
+    for x86-64 platforms only.  No source is compiled here; the wheel is pinned by sha256.
+  license: MIT
+  repository: https://github.com/Congyuwang/RocksDict

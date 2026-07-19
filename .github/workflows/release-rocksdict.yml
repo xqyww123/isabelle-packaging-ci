@@ -1,0 +1,170 @@
+# Repackage upstream's rocksdict wheels onto https://conda.qiyuan.me.
+#
+# WHY: conda-forge has rocksdict for linux-64/osx-64/win-64 only, at 0.3.23 -- no
+# osx-arm64, no linux-aarch64.  isabelle-semantic-embedding imports it at module level, so
+# conda-forge's coverage would lock Apple Silicon out of that package.  PyPI has had all
+# five platforms all along; this is a packaging gap, not an upstream one.  DROP THIS once
+# conda-forge gains the two missing subdirs.
+#
+# NOT A BUILD: we do not compile RocksDB.  Each wheel is upstream's own artifact, pinned by
+# sha256 and re-wrapped in conda's format.
+#
+# WHY NATIVE RUNNERS rather than one linux job with --target-platform: the recipe's build
+# script runs `$PYTHON -m pip install`, and an osx-arm64 python cannot execute on linux.
+# Cross-building would only work for a recipe that never runs the target interpreter.
+#
+# NOT abi3: every rocksdict wheel is tied to one CPython (cp310 … cp314), so the matrix is
+# platform x python.  Python versions here follow isabelle-semantic-embedding's floor
+# (requires-python >=3.11).
+name: release-rocksdict
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "rocksdict version to repackage"
+        type: string
+        default: "0.3.29"
+      dry_run:
+        description: "Build only -- do NOT publish to the channel"
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-rocksdict
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: "rocksdict ${{ matrix.subdir }} py${{ matrix.py }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        py: ["3.11", "3.12", "3.13"]
+        include:
+          - {subdir: linux-64,      runner: ubuntu-latest,    plat: manylinux_2_17_x86_64}
+          - {subdir: linux-aarch64, runner: ubuntu-24.04-arm, plat: manylinux_2_17_aarch64}
+          - {subdir: osx-64,        runner: macos-13,         plat: macosx_10_14_x86_64}
+          - {subdir: osx-arm64,     runner: macos-14,         plat: macosx_11_0_arm64}
+          - {subdir: win-64,        runner: windows-latest,   plat: win_amd64}
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Resolve the wheel URL and sha256 from PyPI"
+        id: whl
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, urllib.request
+          ver  = "${{ inputs.version }}"
+          py   = "${{ matrix.py }}".replace(".", "")
+          plat = "${{ matrix.plat }}"
+          d = json.load(urllib.request.urlopen(f"https://pypi.org/pypi/rocksdict/{ver}/json", timeout=30))
+          hits = [f for f in d["urls"]
+                  if f["filename"].endswith(".whl")
+                  and f"-cp{py}-" in f["filename"]
+                  and plat in f["filename"]]
+          if len(hits) != 1:
+              raise SystemExit(f"expected exactly one wheel for cp{py}/{plat}, got "
+                               + repr([f['filename'] for f in hits]))
+          f = hits[0]
+          print(f"url={f['url']}")
+          print(f"sha={f['digests']['sha256']}")
+          print(f"file={f['filename']}")
+          PY
+          echo "resolved: $(grep '^file=' "$GITHUB_OUTPUT" | tail -1)"
+
+      - name: Install rattler-build
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            Linux)   asset=rattler-build-$(uname -m)-unknown-linux-musl ;;
+            macOS)   asset=rattler-build-$(uname -m)-apple-darwin ;;
+            Windows) asset=rattler-build-x86_64-pc-windows-msvc.exe ;;
+          esac
+          curl -fsSL -o rattler-build "https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/$asset"
+          chmod +x rattler-build
+          ./rattler-build --version
+
+      - name: Build
+        env:
+          ROCKSDICT_VERSION:     ${{ inputs.version }}
+          ROCKSDICT_WHEEL_URL:   ${{ steps.whl.outputs.url }}
+          ROCKSDICT_WHEEL_SHA256: ${{ steps.whl.outputs.sha }}
+          ROCKSDICT_PY:          ${{ matrix.py }}
+        run: |
+          set -euo pipefail
+          ./rattler-build build \
+            --recipe conda/third-party/rocksdict/recipe.yaml \
+            --output-dir out \
+            --no-test
+          find out -name '*.conda' -print
+
+      - name: "Sanity: the artifact carries a compiled extension"
+        run: |
+          set -euo pipefail
+          pkg=$(find out -name 'rocksdict-*.conda' | head -1)
+          [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
+          python3 -m pip install --quiet zstandard
+          work=$(mktemp -d)
+          python3 -c "import sys,zipfile,tarfile,io,zstandard; z=zipfile.ZipFile(sys.argv[1]); b=next(n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')); r=zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(b))); tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])" "$pkg" "$work"
+          find "$work" \( -name '*.so' -o -name '*.pyd' -o -name '*.dylib' \) | head -3 | grep -q . \
+            || { echo "::error::no compiled extension in the payload"; find "$work" | head -20; exit 1; }
+          find "$work" -name '*.dist-info' -maxdepth 3 | grep -q . \
+            || { echo "::error::no dist-info -- pip would not see this package"; exit 1; }
+          echo "  OK  compiled extension + dist-info present"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rocksdict-${{ matrix.subdir }}-py${{ matrix.py }}
+          path: out/**/*.conda
+          if-no-files-found: error
+
+  # publish-conda.yml takes ONE artifact laid out as <subdir>/*.conda, so the per-leg
+  # artifacts are merged into that shape here rather than teaching the shared workflow
+  # about matrices.
+  collect:
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: rocksdict-*
+          path: ${{ runner.temp }}/legs
+      - name: Merge into <subdir>/ layout
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/merged"
+          # each leg already contains out/<subdir>/<pkg>.conda; flatten one level
+          find "$RUNNER_TEMP/legs" -name '*.conda' | while read -r f; do
+            sub=$(basename "$(dirname "$f")")
+            mkdir -p "$RUNNER_TEMP/merged/$sub"
+            cp "$f" "$RUNNER_TEMP/merged/$sub/"
+          done
+          echo "===== merged ====="
+          find "$RUNNER_TEMP/merged" -name '*.conda' | sort
+          n=$(find "$RUNNER_TEMP/merged" -name '*.conda' | wc -l)
+          [ "$n" -gt 0 ] || { echo "::error::nothing to publish"; exit 1; }
+          echo "$n package(s)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: conda-packages
+          path: ${{ runner.temp }}/merged/**/*.conda
+          if-no-files-found: error
+
+  publish:
+    needs: collect
+    if: ${{ !inputs.dry_run }}
+    uses: ./.github/workflows/publish-conda.yml
+    with:
+      artifact: conda-packages
+      package_name: rocksdict
+    secrets:
+      CONDA_R2_ACCESS_KEY_ID:     ${{ secrets.CONDA_R2_ACCESS_KEY_ID }}
+      CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}

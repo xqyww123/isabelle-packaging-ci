@@ -121,7 +121,10 @@ jobs:
           set -euo pipefail
           pkg=$(find out -name 'rocksdict-*.conda' | head -1)
           [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
-          python3 -m pip install --quiet zstandard
+          # macOS runners' system python is PEP 668 "externally managed", so a plain
+          # pip install fails there while working on linux and windows.
+          python3 -m pip install --quiet zstandard \
+            || python3 -m pip install --quiet --break-system-packages zstandard
           work=$(mktemp -d)
           python3 -c "import sys,zipfile,tarfile,io,zstandard; z=zipfile.ZipFile(sys.argv[1]); b=next(n for n in z.namelist() if n.startswith('pkg-') and n.endswith('.tar.zst')); r=zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(b))); tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])" "$pkg" "$work"
           find "$work" \( -name '*.so' -o -name '*.pyd' -o -name '*.dylib' \) | head -3 | grep -q . \

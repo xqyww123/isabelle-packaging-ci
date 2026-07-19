@@ -152,6 +152,16 @@ the divergences are defects.
 - Adding a python to an **already-published** version: build only the new leg. A rebuilt
   `.conda` is not guaranteed byte-identical to the published one, and the publish guard
   refuses the run. Parameterise the matrix rather than re-running it whole.
+- A plain YAML scalar cannot contain the two characters **`": "`**. A `python -c` test
+  command with `print('found: ', x)` in it fails the *whole recipe* to parse, and the error
+  points at the end of the line, not at the colon.
+- `build.python.version_independent` relocates like `noarch: python`: `$PREFIX/bin` **and**
+  `$PREFIX/Scripts` both become `python-scripts/`, and `site-packages/` loses its
+  `lib/pythonX.Y` prefix. Write to bin/ and Scripts/ as usual, but anything **inspecting
+  the built artifact** must look under `python-scripts/`.
+- Declare console scripts as recipe `entry_points` — with them, conda generates the wrapper
+  at link time and it is correctly *absent* from the payload, so assert its absence, not
+  its presence.
 
 ## 8. Repackaging a third-party dependency
 

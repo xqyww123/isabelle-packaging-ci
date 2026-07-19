@@ -4,7 +4,7 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-07-19.
+Last updated: 2026-07-19 (semantic-embedding shipped; minilang in flight).
 
 ---
 
@@ -17,6 +17,8 @@ Last updated: 2026-07-19.
 | `auto-sledgehammer` | 0.1.0 | noarch generic, session |
 | `isabelle-rpc` | 0.3.1 | noarch python, session + Python host |
 | `isabelle-mcp` | 0.3.0 | noarch python, no session, no hooks |
+| `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
+| `isabelle-semantic-embedding` | 0.1.1 | **per-platform, 5 subdirs**, abi3 (one artifact per subdir serves 3.12-3.14) |
 
 Verify from outside CI:
 ```sh
@@ -26,19 +28,24 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 ## In flight
 
-**`rocksdict` 0.3.29** — repackaged from upstream's PyPI wheels, workflow
-`release-rocksdict.yml` in this repo. Last dry run: **12/15 legs green**, including all
-three `osx-arm64`. The three `osx-64` legs were still queued (macos-13 runners are scarce);
-nothing about them is known to be broken. Next step is to let a dry run finish 15/15, then
-re-run with `dry_run=false`.
+**`isabelle-minilang` 0.4.0** — recipe and workflow written and committed, secrets seeded,
+never yet run. `noarch: python`, one artifact. Its `Agent/` directory is ENUMERATED rather
+than copied wholesale, because it contains a gitignored `secret.sh`, an `Isa_REPL` session
+that must not reach the component's ROOT, and 33 files of dead `IsaMini_Agent_old/`.
+
+**`isabelle-semantic-embedding` 0.1.1 on PyPI** — blocked on a human step: PyPI's trusted
+publisher for that project still names the OLD GitHub repo (`Semantic_Embedding`), so the
+tag run failed with `invalid-publisher`. Update it at
+https://pypi.org/manage/project/isabelle-semantic-embedding/settings/publishing/ to repo
+`Isabelle_Semantic_Embedding`, then re-run the failed job. Nothing was uploaded, so no
+filename is burned. conda is at 0.1.1 and PyPI at 0.1.0 — conda AHEAD, which is the safe
+direction.
 
 ## Not started
 
 | Package | Version | Blocked on |
 |---|---|---|
-| `isabelle-semantic-embedding` | 0.1.0+ | rocksdict (now unblocked once published); plan written at `Isabelle_Semantic_Embedding/CONDA_PACKAGING_PLAN.md` |
-| `isabelle-minilang` | 0.4.0 | semantic-embedding — its Python half hard-depends on it |
-| `isabelle-ai` (metapackage) | — | minilang + mcp |
+| `isabelle-ai` (metapackage) | — | minilang |
 
 ---
 
@@ -141,15 +148,17 @@ leg is usually the coincidence.
 
 ## Resuming
 
-1. `gh run list -w release-rocksdict -R xqyww123/isabelle-packaging-ci` — get a dry run to
-   15/15, then `-f dry_run=false`.
-2. Read `Isabelle_Semantic_Embedding/CONDA_PACKAGING_PLAN.md` and implement it. Its open
-   questions are listed at the end of that file; the two most likely to bite are
-   rattler-build on macOS/Windows runners (now partly answered by the rocksdict work above)
-   and how `publish-conda.yml`'s single `artifact:` input handles per-subdir artifacts —
-   answered: merge the legs into one `<subdir>/*.conda` artifact in a `collect` job, as
-   `release-rocksdict.yml` does.
-3. Then `isabelle-minilang`, then the `isabelle-ai` metapackage.
+1. `gh workflow run release-conda.yml -R xqyww123/Isa-Mini -f dry_run=true` and iterate to
+   green. Nothing about it has ever run.
+2. Fix the PyPI trusted publisher for isabelle-semantic-embedding (see "In flight") and
+   re-run that failed job.
+3. Then the `isabelle-ai` metapackage: `isabelle-minilang` + `isabelle-mcp`, nothing else.
+
+**Expect roughly eight dry runs.** semantic-embedding took that many, and the failure point
+moved forward each time rather than any single run being wasted. Two of the defects it
+surfaced were not packaging bugs at all but pre-existing bugs in the project (a
+requires-python floor that had always been wrong, and a dependency down to one call site).
+Budget for that rather than treating a red dry run as a setback.
 
 Repo notes: `Isabelle_RPC` and `Isabelle_Semantic_Embedding` use `master`, the others use
 `main`. `Semantic_Embedding` was **renamed on GitHub** to `Isabelle_Semantic_Embedding`.

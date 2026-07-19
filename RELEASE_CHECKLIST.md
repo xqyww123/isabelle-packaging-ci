@@ -21,11 +21,33 @@ If you delete one:
 1. **Publish the fixed version first.** Never leave a window with no working artifact.
 2. Delete only the affected **subdir's** file. Five builds of one version are five
    artifacts; here four were fine.
-3. Re-run `conda index` for that subdir, and purge the CDN cache for **both** the object
-   and `repodata.json`. Getting this half-right is worse than not doing it: repodata that
-   still lists a deleted file resolves and then 404s at download.
+3. Re-run `conda index` for that subdir and push the regenerated index. Getting this
+   half-right is worse than not doing it: repodata that still lists a deleted file
+   resolves and then 404s at download. **Verify from outside** afterwards — the object
+   must 404 over HTTPS *and* be absent from `repodata.json`; check both, not either.
+
+   No CDN purge is needed, measured rather than assumed: `conda.qiyuan.me` returns
+   `cf-cache-status: DYNAMIC` for `repodata.json` and for `.conda` objects alike, i.e.
+   Cloudflare proxies without caching. That is also why `publish-conda.yml` has never had
+   a purge step. Re-measure before trusting this if the Cloudflare config changes.
 4. Say so in this file and in `ROLLOUT_STATUS.md`. A silent exception is how a rule
    becomes folklore.
+
+**Doing it by hand** (there is no workflow, and one deletion does not justify writing one).
+Ubuntu's rclone 1.60 is the broken-against-R2 version — fetch ≥ 1.74 to a temp dir. Source
+the R2 credentials into `RCLONE_CONFIG_R2_*` so they never reach disk or a log. Then: pull
+the subdir, save the current `repodata.json` as a baseline, delete the file **locally**,
+re-index, and **diff the new repodata against the baseline before pushing anything** — the
+only difference may be the one removed entry, with `info`, `repodata_version` and every
+other package untouched. Only then delete on R2 and push `repodata.json`,
+`repodata_from_packages.json` and `index.html`. Never push `.cache/`; it is conda-index's
+local sqlite.
+
+Deletions performed so far:
+
+| Package | Version | Subdir | Why | When |
+|---|---|---|---|---|
+| `isabelle-semantic-embedding` | 0.1.1 | win-64 | CRLF `etc/settings` → CR in the classpath → `isabelle build` could build no session at all, not even HOL, and the error named a jar path | 2026-07-19, after 0.1.2 shipped |
 
 ## 1. Pick the shape
 

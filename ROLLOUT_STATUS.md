@@ -4,7 +4,8 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-07-19 (semantic-embedding shipped; minilang in flight).
+Last updated: 2026-07-19 (rpc 0.3.4 with the Windows daemon port; semantic-embedding 0.1.2;
+win-64's 0.1.1 deleted; isabelle-ai dry-run green, not yet published).
 
 ---
 
@@ -15,11 +16,23 @@ Last updated: 2026-07-19 (semantic-embedding shipped; minilang in flight).
 | `isabelle` | 2025.2 | per-platform, 5 subdirs (predates this rollout) |
 | `isabelle-performant-ml` | 0.1.0 | noarch generic, session |
 | `auto-sledgehammer` | 0.1.0 | noarch generic, session |
-| `isabelle-rpc` | 0.3.1 | noarch python, session + Python host |
+| `isabelle-rpc` | 0.3.4 | noarch python, session + Python host |
 | `isabelle-mcp` | 0.3.0 | noarch python, no session, no hooks |
+| `isabelle-minilang` | 0.4.0 | noarch python, session + AoA |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
-| `isabelle-semantic-embedding` | 0.1.1 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.1.1 too |
+| `isabelle-semantic-embedding` | 0.1.2 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.1.1 (conda is ahead) |
+
+`isabelle-rpc` 0.3.4 is the first release that works on Windows at all: `fork_and_launch__`
+called `os.fork()`, which does not exist there, so every Windows launch died with
+`AttributeError`. It shipped that way through 0.3.3 because the one CI step that would have
+executed it was skipped on Windows. Enabling that step is what surfaced it — along with a
+CRLF `etc/settings` defect and two ML path defects, in sequence, each hidden behind the
+previous one.
+
+0.1.1 of `isabelle-semantic-embedding` is still on the four non-Windows subdirs; only the
+win-64 build was deleted. See RELEASE_CHECKLIST.md for the bar that permitted it and the
+by-hand procedure.
 
 Verify from outside CI:
 ```sh
@@ -29,16 +42,24 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 ## In flight
 
-**`isabelle-minilang` 0.4.0** — recipe and workflow written and committed, secrets seeded,
-never yet run. `noarch: python`, one artifact. Its `Agent/` directory is ENUMERATED rather
-than copied wholesale, because it contains a gitignored `secret.sh`, an `Isa_REPL` session
-that must not reach the component's ROOT, and 33 files of dead `IsaMini_Agent_old/`.
+**`isabelle-ai` 0.1.0** (metapackage) — recipe and workflow written, committed, and
+**dry-run green on the first attempt** (run 29690846852). Not yet published. It lives HERE,
+in `conda/metapackage/isabelle-ai/`, not in a component repo: the "recipe beside its source"
+rule presupposes a source, and this has none. Its own directory rather than
+`conda/third-party/`, whose name carries "upstream's artifact, pinned by sha256" — none of
+which applies.
+
+Contents: `isabelle-minilang >=0.4.0` + `isabelle-mcp >=0.3.0`, floors not exact pins, and
+nothing else. The package is empty by construction, so the workflow asserts exactly that —
+no file outside `info/`, `depends` equal to those two and nothing more, `subdir: noarch`.
+
+Remaining before publishing: re-verify minilang's Windows component registration. A
+metapackage multiplies whatever it pulls in, so a registration defect in minilang would
+reach every `isabelle-ai` user rather than only those who chose minilang directly.
 
 ## Not started
 
-| Package | Version | Blocked on |
-|---|---|---|
-| `isabelle-ai` (metapackage) | — | minilang |
+Nothing. Every package in the original plan is published or in flight above.
 
 ---
 

@@ -50,7 +50,11 @@ jobs:
         target:
           - {subdir: linux-64,      runner: ubuntu-latest,    plat: manylinux_2_17_x86_64}
           - {subdir: linux-aarch64, runner: ubuntu-24.04-arm, plat: manylinux_2_17_aarch64}
-          - {subdir: osx-64,        runner: macos-13,         plat: macosx_10_14_x86_64}
+          # macos-15-intel, not macos-13: the macos-13 label is retired, so those legs
+          # queue forever without ever being scheduled -- every other leg in the matrix
+          # finished while these three sat unstarted for half an hour.  This is the label
+          # Semantic_Embedding's own wheels.yml already uses for its Intel job.
+          - {subdir: osx-64,        runner: macos-15-intel,   plat: macosx_10_14_x86_64}
           - {subdir: osx-arm64,     runner: macos-14,         plat: macosx_11_0_arm64}
           - {subdir: win-64,        runner: windows-latest,   plat: win_amd64}
     defaults:

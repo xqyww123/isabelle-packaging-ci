@@ -25,6 +25,16 @@ on:
         description: "rocksdict version to repackage"
         type: string
         default: "0.3.29"
+      pythons:
+        # Restrict the matrix when ADDING a python to an already-published version.
+        # Rebuilding the legs that are already on the channel would re-upload
+        # `.conda` files that are not guaranteed byte-identical to the published
+        # ones (compression and recorded timestamps need not reproduce), and
+        # publish-conda.yml's immutability guard then refuses the whole run.  Naming
+        # only the new python sidesteps that entirely.
+        description: "JSON list of python versions, e.g. [\"3.14\"]"
+        type: string
+        default: '["3.11", "3.12", "3.13"]'
       dry_run:
         description: "Build only -- do NOT publish to the channel"
         type: boolean
@@ -42,7 +52,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        py: ["3.11", "3.12", "3.13"]
+        py: ${{ fromJSON(inputs.pythons) }}
         # An object-valued key, NOT `include:`.  `include` entries whose keys do not
         # appear in the base matrix are merged into every combination in order, each
         # overwriting the last -- so five of them yield 3 jobs all wearing the LAST

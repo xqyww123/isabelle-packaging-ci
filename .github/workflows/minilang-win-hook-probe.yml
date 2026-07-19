@@ -1,0 +1,96 @@
+# Probe: why does isabelle-minilang's Windows post-link hook not register?
+#
+# isabelle-minilang 0.4.0 published, and its Windows smoke failed: etc/components listed
+# its four DEPENDENCIES (isabelle-performant-ml, auto-sledgehammer, isabelle-rpc,
+# isabelle-semantic-embedding) and not isabelle-minilang itself.  The Linux smoke passed.
+#
+# Ruled out by inspecting the published artifacts, so do not re-check these:
+#   * the hook is present at python-scripts/.isabelle-minilang-post-link.bat, exactly
+#     where isabelle-rpc's is, and conda maps that to Scripts/ on Windows;
+#   * the two .bat files are BYTE-IDENTICAL apart from the package name.
+#
+# So the hook is either not being run, or running and failing.  Our hooks end every
+# isabelle call with `>nul 2>&1` and `exit /b 0`, deliberately -- a nonzero post-link makes
+# conda roll the whole install back -- which is precisely why the failure is invisible.
+# This probe re-runs the same commands WITHOUT the silencing, which is the only way to see
+# what conda saw.
+#
+# Publishes nothing and touches nothing on R2.
+name: minilang-win-hook-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+
+      - name: Install isabelle-minilang from the live channel
+        run: |
+          set -euo pipefail
+          conda create -y -n p -c https://conda.qiyuan.me -c conda-forge \
+            --override-channels isabelle-minilang
+          eval "$(conda shell.bash hook)"; conda activate p
+          echo "CONDA_PREFIX=$CONDA_PREFIX"
+
+      - name: "What actually landed on disk"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          echo "----- Scripts/ hook files -----"
+          ls -l "$CONDA_PREFIX/Scripts/" | grep -i 'post-link\|pre-unlink' || echo "  (NONE)"
+          echo "----- the component directory -----"
+          ls -l "$CONDA_PREFIX/share/" || true
+          echo "----- does our ROOT exist? -----"
+          ls -l "$CONDA_PREFIX/share/isabelle-minilang/" 2>/dev/null | head -20 \
+            || echo "  share/isabelle-minilang IS MISSING"
+          echo "----- etc/components as installed -----"
+          hu=$("$CONDA_PREFIX/Scripts/isabelle.bat" getenv -b ISABELLE_HOME_USER)
+          case "$hu" in /cygdrive/*) hu="/${hu#/cygdrive/}" ;; esac
+          echo "ISABELLE_HOME_USER=$hu"
+          cat "$hu/etc/components" || true
+
+      - name: "Run the hook's commands WITHOUT the silencing -- this is the point"
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          # Reproduce the .bat line for line, but let stdout and stderr through and report
+          # each exit code.  cmd.exe, not bash: the real hook is a .bat and the path
+          # arithmetic (%COMP:~2%, %REST:\=/%) is cmd syntax.
+          cat > "$RUNNER_TEMP/probe.bat" <<'BAT'
+          @echo off
+          set "COMP=%PREFIX%\share\isabelle-minilang"
+          set "DL=%COMP:~0,1%"
+          set "REST=%COMP:~2%"
+          set "REST=%REST:\=/%"
+          set "CYG=/cygdrive/%DL%%REST%"
+          echo PREFIX=%PREFIX%
+          echo COMP=%COMP%
+          echo CYG=%CYG%
+          echo --- warm-up ---
+          call "%PREFIX%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME
+          echo warmup exit=%ERRORLEVEL%
+          echo --- components -u ---
+          call "%PREFIX%\isa\bin\isabelle.bat" components -u "%CYG%"
+          echo components exit=%ERRORLEVEL%
+          BAT
+          PREFIX=$(cygpath -w "$CONDA_PREFIX" 2>/dev/null || echo "$CONDA_PREFIX")
+          echo "passing PREFIX=$PREFIX"
+          PREFIX="$PREFIX" cmd.exe /c "$(cygpath -w "$RUNNER_TEMP/probe.bat")" || echo "probe.bat exit=$?"
+
+      - name: "etc/components after the manual run"
+        if: always()
+        run: |
+          set -euo pipefail
+          eval "$(conda shell.bash hook)"; conda activate p
+          hu=$("$CONDA_PREFIX/Scripts/isabelle.bat" getenv -b ISABELLE_HOME_USER)
+          case "$hu" in /cygdrive/*) hu="/${hu#/cygdrive/}" ;; esac
+          cat "$hu/etc/components" || true

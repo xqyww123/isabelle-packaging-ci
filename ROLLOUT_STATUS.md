@@ -69,7 +69,12 @@ that must not reach the component's ROOT, and 33 files of dead `IsaMini_Agent_ol
   already builds them on native runners; the conda job consumes that, called via
   `workflow_call` rather than copied.
 - Existing published packages are **never** retracted or rebuilt. Improvements apply from
-  each package's next release.
+  each package's next release — with one narrow, now-exercised exception: an artifact that
+  renders the tool unusable AND misattributes the cause may be deleted, after the fixed
+  version is published. See `RELEASE_CHECKLIST.md`'s opening section for the procedure.
+  Used once, for `isabelle-semantic-embedding` 0.1.1 **win-64 only** (a CRLF `etc/settings`
+  left `isabelle build` unable to build any session on Windows, HOL included, with an error
+  naming a jar path rather than the package).
 
 ---
 

@@ -4,8 +4,28 @@ Every item below was learned by getting it wrong. The failures in this stack are
 overwhelmingly **silent**: the package installs, `conda list` shows it, and something is
 quietly not there. Read accordingly.
 
-The channel never deletes. A published filename is permanent and CDN-cached — correct a
-bad release with a new version, not a retraction.
+Correct a bad release with a **new version**, not a retraction. A published filename is
+permanent and CDN-cached, `publish-conda.yml`'s immutability guard assumes filenames never
+come back, and a lockfile pinning a deleted build turns "broken environment" into
+"environment will not resolve".
+
+**The one exception**, and it needs the bar stated rather than left to judgement: an
+artifact may be deleted when it does not merely misbehave but **renders the tool unusable
+and misattributes the cause**. `isabelle-semantic-embedding` 0.1.1's win-64 build was the
+first: a CRLF `etc/settings` put a carriage return in the classpath, `isabelle build` could
+then build no session at all — not even HOL — and the error named a jar path, so nothing
+pointed at the package responsible.
+
+If you delete one:
+
+1. **Publish the fixed version first.** Never leave a window with no working artifact.
+2. Delete only the affected **subdir's** file. Five builds of one version are five
+   artifacts; here four were fine.
+3. Re-run `conda index` for that subdir, and purge the CDN cache for **both** the object
+   and `repodata.json`. Getting this half-right is worse than not doing it: repodata that
+   still lists a deleted file resolves and then 404s at download.
+4. Say so in this file and in `ROLLOUT_STATUS.md`. A silent exception is how a rule
+   becomes folklore.
 
 ## 1. Pick the shape
 

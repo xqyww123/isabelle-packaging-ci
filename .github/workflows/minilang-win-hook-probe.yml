@@ -92,8 +92,14 @@ jobs:
           # `cmd.exe C:/Program Files/Git/c` -- cmd then starts INTERACTIVELY and the
           # batch file never runs.  The first version of this probe did exactly that and
           # printed only the Windows banner, which is why it proved nothing.
-          MSYS_NO_PATHCONV=1 PREFIX="$PREFIX" \
-            cmd.exe //c "$(cygpath -w "$RUNNER_TEMP/probe.bat")" || echo "probe.bat exit=$?"
+          # MSYS_NO_PATHCONV=1 with a SINGLE-slash /c.  These are two alternative fixes
+          # for the same MSYS argument rewriting and they must not be combined: with the
+          # rewriting already disabled, `//c` reaches cmd as the literal `//c`, which it
+          # does not understand, so it starts interactively again -- the exact symptom the
+          # fix was for.  Run 2 of this probe did that.
+          bat=$(cygpath -w "$RUNNER_TEMP/probe.bat")
+          echo "running $bat"
+          MSYS_NO_PATHCONV=1 PREFIX="$PREFIX" cmd.exe /c "$bat"; echo "probe.bat exit=$?"
 
       - name: "etc/components after the manual run"
         if: always()

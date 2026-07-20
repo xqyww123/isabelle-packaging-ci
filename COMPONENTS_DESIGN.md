@@ -16,7 +16,7 @@ agent was decoupled from Isa_REPL; see "Isa-Mini" below).
 | `auto-sledgehammer` | auto_sledgehammer | session | noarch |
 | `isabelle-rpc` | Isabelle_RPC | session + Python `isabelle-rpc` | noarch |
 | `isabelle-semantic-embedding` | Semantic_Embedding | session + Python (native SIMD ext) | **per-platform** |
-| `isabelle-minilang` | Isa-Mini | sessions `Minilang`+`Minilang_Agent` + Python `IsaMini` | noarch |
+| `isabelle-minilang` | Isa-Mini | sessions `Minilang`+`Minilang_AoA` + Python `IsaMini` | noarch |
 | `isabelle-mcp` | Isabelle-MCP | Python `isabelle-mcp` only (no session) | noarch |
 | `isabelle-aoa` | — | metapackage → depends on the six above | noarch |
 
@@ -78,10 +78,10 @@ reference only packaged sessions.
 Isa-Mini is split accordingly (done): its dev sessions — `Minilang_Translator`,
 `Minilang_REPL`, `Minilang_AoA_REPL`, all importing the dev-only, unpackaged `Isa_REPL` —
 live in per-subdir ROOTs (`translator/ROOT`, `REPL/ROOT`, `Agent/AoA_REPL/ROOT`).  The
-top-level `ROOT` holds only `Minilang` + `Minilang_Agent` (+ `Minilang_Agent_Injector`,
+top-level `ROOT` holds only `Minilang` + `Minilang_AoA` (+ `Minilang_Agent_Injector`,
 which needs a dev patch to *build* but is inert — its deps are known, so it breaks
 nothing).  There is NO top-level `ROOTS`, so those subdir ROOTs are never scanned:
-confirmed `isabelle build -n Minilang_Agent` exits 0.
+confirmed `isabelle build -n Minilang_AoA` exits 0.
 
 **Packaging rule:** a session package ships the top-level `ROOT` and the theory dirs its
 shipped sessions need; it must NOT ship a `ROOTS` file or any dev-only subdir, or the

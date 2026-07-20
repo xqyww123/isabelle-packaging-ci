@@ -236,7 +236,7 @@ rclone sync $CH R2:conda/ --s3-no-check-bucket --exclude '.cache/**' \
 
 **这条改变了成本估算**:
 - **加 `Main` 几乎免费**(+3.8 MB,构建时间近乎瞬时——它只是 HOL 之上的一个 `Main_Doc` theory)。
-- 同理,**我们自己的 AoA session heap(`Minilang_Agent` 链)也是 delta,不是几百 MB 的完整镜像** ⇒
+- 同理,**我们自己的 AoA session heap(`Minilang_AoA` 链)也是 delta,不是几百 MB 的完整镜像** ⇒
   将来若想预建它们让用户开箱即用,**包体积不是障碍**,真正的代价只是 **CI 构建时长**(要跑完
   Auto_Sledgehammer / Semantic_Embedding / Isa_REPL / Minilang 那条链)。
 
@@ -793,7 +793,7 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 - **`isabelle` 包 = 方案 A(文件全打进包)**,不是 post-link 下载(见 §3.1)。
 - version **`2025.2`**;上游 changeset + 补丁标识进 build string;改内容 bump build number。
 - **预建的 heap**:`Pure` + `HOL` + **`Main`**(`-b HOL,Main`)。`Main` 只有 3.8 MB(heap 是层级 delta,见 §3.5)。
-  **AoA 自己的 session heap(`Minilang_Agent` 链)暂不预建**——用户首次使用时自建(已确认可接受)。
+  **AoA 自己的 session heap(`Minilang_AoA` 链)暂不预建**——用户首次使用时自建(已确认可接受)。
   将来若要预建,**体积不是障碍**(同样是 delta),代价只是 CI 时长。
 - 重原生依赖(torch/faiss/CUDA)从 conda-forge 拉,不是我们产出。
 - ⚠️ **faiss 的 blas 变体坑**:conda solver 会随机装出缺 mkl 的 faiss build → import 崩。
@@ -929,7 +929,7 @@ CI 里 `pip install my-better-isabelle-prover` → 装到 **0.2.0** → **会把
 
 **② 只打 user ⇒ 发布的 Isabelle 不支持 `by aoa`**
 `register_thy` 是 **dev** 类,而它是 **Isa-REPL 的硬依赖**;Isa-REPL 又在 AoA 链条里
-(`Minilang_Agent = Minilang + Isa_REPL + …`)。
+(`Minilang_AoA = Minilang + Isa_REPL + …`)。
 ⇒ **只打 user 的包,面向的是 Isabelle-MCP + Semantic_Embedding 用户,而不是 AoA。**
 AoA 用户需自己 `patch --category all`。
 

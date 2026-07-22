@@ -50,6 +50,12 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 Nothing.
 
+2026-07-22, after the second wave: the owner set a **latest-version-only retention
+policy** and the channel was swept — 16 stale files deleted across all six subdirs
+(rpc 0.3.1–0.3.4, mcp 0.3.0, minilang 0.4.0, auto-sledgehammer 0.1.0, semantic-embedding
+0.1.1/0.1.2). Procedure and per-file log in `RELEASE_CHECKLIST.md`. Every package on the
+channel now has exactly one version.
+
 ## Notes from the second wave (2026-07-22)
 
 - **The PyPI floors were load-bearing, not cosmetic**: minilang 0.5.0 calls

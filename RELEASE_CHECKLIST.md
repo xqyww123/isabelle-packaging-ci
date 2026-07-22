@@ -43,11 +43,24 @@ other package untouched. Only then delete on R2 and push `repodata.json`,
 `repodata_from_packages.json` and `index.html`. Never push `.cache/`; it is conda-index's
 local sqlite.
 
+**Retention policy, decided by the channel owner 2026-07-22**: the channel keeps only the
+**latest version** of each package; superseded versions are deleted wholesale. This is a
+second, separate ground for deletion — a policy sweep, not the defect exception above, and
+it deliberately trades lockfile reproducibility away (anyone pinning an old version will
+fail to resolve; this is a private channel and the owner accepts that). The procedure is
+the same by-hand one; sweeps go subdir by subdir because re-indexing needs every remaining
+package present locally, and each platform subdir carries a 0.7–1.2 GB `isabelle` bundle.
+
 Deletions performed so far:
 
 | Package | Version | Subdir | Why | When |
 |---|---|---|---|---|
 | `isabelle-semantic-embedding` | 0.1.1 | win-64 | CRLF `etc/settings` → CR in the classpath → `isabelle build` could build no session at all, not even HOL, and the error named a jar path | 2026-07-19, after 0.1.2 shipped |
+| `isabelle-rpc` | 0.3.1–0.3.4 | noarch | policy sweep (0.4.0 is latest) | 2026-07-22 |
+| `isabelle-mcp` | 0.3.0 | noarch | policy sweep (0.3.1) | 2026-07-22 |
+| `isabelle-minilang` | 0.4.0 | noarch | policy sweep (0.5.0) | 2026-07-22 |
+| `auto-sledgehammer` | 0.1.0 | noarch | policy sweep (0.1.1) | 2026-07-22 |
+| `isabelle-semantic-embedding` | 0.1.1, 0.1.2 | all four unix subdirs; win-64 had only 0.1.2 left | policy sweep (0.2.0) | 2026-07-22 |
 
 ## 1. Pick the shape
 

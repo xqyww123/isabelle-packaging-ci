@@ -4,9 +4,10 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-07-19 — ROLLOUT COMPLETE. rpc 0.3.4 (Windows daemon port),
-semantic-embedding 0.1.2, win-64 0.1.1 deleted, minilang Windows registration verified,
-isabelle-ai 0.1.0 published.
+Last updated: 2026-07-22 — second release wave: rpc 0.4.0 (attached hosts; released by
+hand), auto-sledgehammer 0.1.1, mcp 0.3.1, minilang 0.5.0 (Minilang_AoA renames; PyPI
+publishing resumed after a 14-month stall), semantic-embedding 0.2.0. conda and PyPI are
+now in lockstep for every package that has a PyPI presence.
 
 ---
 
@@ -16,13 +17,13 @@ isabelle-ai 0.1.0 published.
 |---|---|---|
 | `isabelle` | 2025.2 | per-platform, 5 subdirs (predates this rollout) |
 | `isabelle-performant-ml` | 0.1.0 | noarch generic, session |
-| `auto-sledgehammer` | 0.1.0 | noarch generic, session |
-| `isabelle-rpc` | 0.3.4 | noarch python, session + Python host |
-| `isabelle-mcp` | 0.3.0 | noarch python, no session, no hooks |
-| `isabelle-minilang` | 0.4.0 | noarch python, session + AoA |
+| `auto-sledgehammer` | 0.1.1 | noarch generic, session |
+| `isabelle-rpc` | 0.4.0 | noarch python, session + Python host; PyPI 0.4.0 |
+| `isabelle-mcp` | 0.3.1 | noarch python, no session, no hooks; PyPI 0.3.1 |
+| `isabelle-minilang` | 0.5.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (resumed from 0.3.5) |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
-| `isabelle-semantic-embedding` | 0.1.2 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.1.1 (conda is ahead) |
+| `isabelle-semantic-embedding` | 0.2.0 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.2.0 (lockstep) |
 | `isabelle-ai` | 0.1.0 | noarch generic, **metapackage** — minilang + mcp, no files of its own |
 
 **The rollout is complete.** Every package in the original plan is published, and every one
@@ -48,6 +49,24 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 ## In flight
 
 Nothing.
+
+## Notes from the second wave (2026-07-22)
+
+- **The PyPI floors were load-bearing, not cosmetic**: minilang 0.5.0 calls
+  `Connection.set_current`, which exists only from isabelle-rpc 0.4.0, so BOTH its
+  pyproject and recipe floors moved to `>=0.4.0`. semantic-embedding 0.2.0 raised the same
+  floor for coherence (it is the rpc-0.4.0 companion) though it calls no 0.4.0-only API.
+- **Tag-triggered PyPI publishes stop at the `pypi` environment gate** (Isabelle-MCP
+  ci.yml, Semantic_Embedding wheels.yml). Approve with
+  `gh api -X POST repos/OWNER/REPO/actions/runs/RUN/pending_deployments ...` — the token
+  can, and a watcher that polls `pending_deployments` catches the stall instead of waiting
+  on a run that will never finish by itself.
+- **`IsaMini` on PyPI resumed at 0.5.0** after stalling at 0.3.5 (2025-05). Isa-Mini has
+  no PyPI workflow; the upload was `twine` by hand with `TWINE_PASSWORD` from
+  `~/secret.sh`, conda published first per the never-behind-PyPI rule.
+- isabelle-performant-ml was deliberately NOT released: its two commits since v0.1.0
+  changed only CI and a SKILL file, not package content. isabelle-ai's floors
+  (`minilang >=0.4.0`, `mcp >=0.3.0`) still hold; no republish.
 
 ## Notes on the two packages that landed last
 

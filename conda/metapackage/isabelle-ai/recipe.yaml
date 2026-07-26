@@ -42,18 +42,17 @@ requirements:
     # here would be restating what the halves already require, and a metapackage that
     # duplicates its children's dependency lists is a second place for them to drift.
     #
-    # RELEASE-TIME ACTION (layered semantic DB rollout, SEMANTIC_DB_LAYERED_PLAN §7):
-    # when the first isabelle-semantic-data and the first L19-warning
-    # isabelle-minilang are published, raise the two floors here to those versions --
-    # an older minilang paired with the post-R2 embedding library is a hard `by aoa`
-    # ImportError in both directions, which is exactly this file's floor doctrine
-    # ("raise a floor only when the pair genuinely stops working below it").
-    - isabelle-minilang >=0.4.0
+    # Floors raised 2026-07-26 (layered semantic DB rollout, SEMANTIC_DB_LAYERED_PLAN
+    # §7): minilang <0.6.0 imports the embedding library's deleted r2_sync module on
+    # every `by aoa`, so the pair genuinely stops working below it -- exactly this
+    # file's floor doctrine.
+    - isabelle-minilang >=0.6.0
     - isabelle-mcp >=0.3.0
     # The pre-built semantic database (the read-only system layer).  A hard dependency
     # HERE, deliberately not of isabelle-semantic-embedding: the library stays lean,
-    # the batteries-included metapackage carries the batteries (plan L3).
-    - isabelle-semantic-data
+    # the batteries-included metapackage carries the batteries (plan L3).  The floor is
+    # the first layered-payload release.
+    - isabelle-semantic-data >=2026.07.26
 
 tests:
   # A metapackage's only failure mode is a run requirement that does not solve or does not

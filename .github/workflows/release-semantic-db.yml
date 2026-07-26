@@ -55,8 +55,10 @@ jobs:
           set -euo pipefail
           # The RELEASED library, from the channel it will be consumed with --
           # the export must run on the same code users read the payload with.
+          # Same floor as the data package's own run dependency: dispatching
+          # before a compatible library is published must fail HERE, loudly.
           conda install -y -c https://conda.qiyuan.me -c conda-forge \
-            isabelle-semantic-embedding
+            "isabelle-semantic-embedding>=0.3.0"
           python -m pip install --quiet "huggingface_hub"
           isabelle-semantics --help >/dev/null
 

@@ -117,11 +117,14 @@ jobs:
           SEMANTIC_DATA_PAYLOAD: ${{ runner.temp }}/payload
         run: |
           set -euo pipefail
+          # Our channel FIRST: the run dependency (isabelle-semantic-embedding)
+          # exists nowhere else, and rattler-build resolves the test
+          # environment as well as the build one.
           ./rattler-build build \
             --recipe conda/data/isabelle-semantic-data/recipe.yaml \
             --output-dir out \
             --build-num "${{ inputs.build_number }}" \
-            -c conda-forge
+            -c https://conda.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
 
       - name: "Sanity: hook-less, dependency-less, payload in place"
@@ -148,13 +151,18 @@ jobs:
             echo "::error::the data package must not carry link hooks"; exit 1
           fi
           python3 - "$work" <<'PY'
-          import json, pathlib, sys
+          import json, pathlib, re, sys
           idx = json.loads((pathlib.Path(sys.argv[1]) / "info" / "index.json").read_text())
-          if idx.get("depends"):
-              raise SystemExit(f"::error::the data package must have no dependencies, got {idx['depends']}")
+          deps = idx.get("depends", [])
+          print("depends =", deps)
+          # Exactly ONE dependency: the reader-library floor (user decision
+          # 2026-07-26) -- a pre-layered library ignores the payload silently.
+          names = sorted(re.split(r"[ <>=!]", d, 1)[0] for d in deps)
+          if names != ["isabelle-semantic-embedding"]:
+              raise SystemExit(f"::error::expected exactly the isabelle-semantic-embedding floor, got {deps}")
           if idx.get("subdir") != "noarch":
               raise SystemExit(f"::error::expected noarch, got {idx.get('subdir')}")
-          print("  OK  noarch, hook-less, dependency-less, payload present")
+          print("  OK  noarch, hook-less, exactly the reader-library floor, payload present")
           PY
 
       - name: Lay the package out as <subdir>/*.conda for publish-conda.yml

@@ -11,11 +11,14 @@ schema_version: 1
 # $PREFIX/share/isabelle-semantic-data/ and layers it under the user's
 # writable DB; user machines never merge it and never write to it.
 #
-# DELIBERATELY hook-less and dependency-less (plan L2/L3): the stores are
-# openable in place, so there is nothing to do at link time; and the package
-# is data, useful to whatever library version reads it, so it depends on
-# nothing.  It is a hard run dependency of the `isabelle-ai` metapackage; the
-# library package stays lean.
+# DELIBERATELY hook-less (plan L2): the stores are openable in place, so
+# there is nothing to do at link time.  It carries exactly ONE dependency
+# (user decision 2026-07-26, amending the earlier dependency-less wording):
+# a floor on the library that reads it — a pre-layered library would ignore
+# the payload silently, so installing the data must pull a reader that can
+# actually see it.  The edge is one-way (the library deliberately does NOT
+# depend on the data, L3: the library stays lean; `isabelle-ai` carries the
+# batteries), so no cycle.
 #
 # Version = YYYY.MM.DD.HHMM (UTC), derived from the payload manifest's
 # created_at by the workflow (plan L15; the manifest is the single clock).
@@ -42,6 +45,13 @@ build:
     - mkdir -p "$PREFIX/share/isabelle-semantic-data"
     - cp -a payload/. "$PREFIX/share/isabelle-semantic-data/"
 
+requirements:
+  run:
+    # The first library version with the layered read facade (system/user
+    # layers, tombstones, `<prefix>/share/isabelle-semantic-data` discovery).
+    # Anything older never probes this payload's location at all.
+    - isabelle-semantic-embedding >=0.3.0
+
 tests:
   - script:
       # A data package's only failure mode is a payload that is not there.
@@ -64,6 +74,7 @@ about:
     nothing here is ever modified in place.  Updating means updating this
     package.
 
-    Data only -- no code, no hooks, no dependencies.
+    Data only -- no code, no hooks; the single dependency is the floor on the
+    isabelle-semantic-embedding library that can read the layered payload.
   license: LGPL-2.1-or-later
   repository: https://github.com/xqyww123/isabelle-packaging-ci

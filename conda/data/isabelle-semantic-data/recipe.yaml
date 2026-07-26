@@ -51,7 +51,9 @@ requirements:
     # layers, tombstones, `<prefix>/share/isabelle-semantic-data` discovery).
     # Anything older never probes this payload's location at all.
     - isabelle-semantic-embedding >=0.3.0
-  run_constrained:
+  # rattler-build's name for conda-build's `run_constrained` (the first
+  # dispatch failed on the old spelling).
+  run_constraints:
     # NOT a dependency (the data is useful without the agent) — but IF
     # isabelle-minilang is installed it must be >=0.6.0: older minilang
     # imports the embedding library's deleted r2_sync module on every

@@ -92,12 +92,12 @@ jobs:
           deps = idx.get("depends", [])
           print("depends =", deps)
           names = sorted(re.split(r"[ <>=!]", d, 1)[0] for d in deps)
-          expected = ["isabelle-mcp", "isabelle-minilang"]
+          expected = ["isabelle-mcp", "isabelle-minilang", "isabelle-semantic-data"]
           if names != expected:
               raise SystemExit(f"::error::expected exactly {expected}, got {names}")
           if idx.get("subdir") != "noarch":
               raise SystemExit(f"::error::expected noarch, got {idx.get('subdir')}")
-          print("  OK  empty, noarch, exactly the two halves")
+          print("  OK  empty, noarch, exactly the two halves plus the data")
           PY
 
       - name: Lay the package out as <subdir>/*.conda for publish-conda.yml
@@ -146,3 +146,5 @@ jobs:
           conda install -y -c https://conda.qiyuan.me -c conda-forge isabelle-ai
           python -c "import IsaMini, IsaMini.AoA, isabelle_mcp; print('both halves import')"
           isabelle version
+          test -f "$CONDA_PREFIX/share/isabelle-semantic-data/MANIFEST.json" \
+            || { echo "::error::the semantic-data payload is not on disk"; exit 1; }

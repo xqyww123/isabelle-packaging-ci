@@ -1,0 +1,69 @@
+schema_version: 1
+
+# isabelle-semantic-data -- the pre-built semantic database of the AI-assisted
+# Isabelle stack, as a conda DATA package (SEMANTIC_DB_LAYERED_PLAN.md).
+#
+# The payload is the read-only "system" layer of the layered semantic DB:
+# extracted LMDB stores plus a MANIFEST.json, produced by the release
+# workflow's `isabelle-semantics export` run over the Hugging Face dev-sync
+# snapshot (release-semantic-db.yml).  The read facade in
+# isabelle-semantic-embedding discovers it at
+# $PREFIX/share/isabelle-semantic-data/ and layers it under the user's
+# writable DB; user machines never merge it and never write to it.
+#
+# DELIBERATELY hook-less and dependency-less (plan L2/L3): the stores are
+# openable in place, so there is nothing to do at link time; and the package
+# is data, useful to whatever library version reads it, so it depends on
+# nothing.  It is a hard run dependency of the `isabelle-ai` metapackage; the
+# library package stays lean.
+#
+# Version = YYYY.MM.DD.HHMM (UTC), derived from the payload manifest's
+# created_at by the workflow (plan L15; the manifest is the single clock).
+# The build number is a packaging revision only.
+
+context:
+  version: ${{ env.get("SEMANTIC_DATA_VERSION") }}
+
+package:
+  name: isabelle-semantic-data
+  version: ${{ version }}
+
+source:
+  # The exported payload directory, produced earlier in the same workflow run.
+  path: ${{ env.get("SEMANTIC_DATA_PAYLOAD") }}
+  target_directory: payload
+
+build:
+  number: ${{ env.get("SEMANTIC_DATA_BUILD_NUMBER", default="0") }}
+  # noarch: generic -- LMDB stores are platform-independent data, and there is
+  # no Python ABI story to claim.
+  noarch: generic
+  script:
+    - mkdir -p "$PREFIX/share/isabelle-semantic-data"
+    - cp -a payload/. "$PREFIX/share/isabelle-semantic-data/"
+
+tests:
+  - script:
+      # A data package's only failure mode is a payload that is not there.
+      - test -f "$PREFIX/share/isabelle-semantic-data/MANIFEST.json"
+      - test -f "$PREFIX/share/isabelle-semantic-data/semantics.lmdb/data.mdb"
+
+about:
+  homepage: https://github.com/xqyww123/isabelle-packaging-ci
+  summary: "Pre-built semantic database for the AI-assisted Isabelle stack (read-only system layer)"
+  description: |
+    The pre-built semantic database of the AI-assisted Isabelle stack:
+    semantic interpretations (deformalizations) of Isabelle/HOL entities,
+    their embedding vectors, and the experience index, as extracted LMDB
+    stores.
+
+    This is the read-only "system" layer of the layered semantic DB.  The
+    isabelle-semantic-embedding library discovers it at
+    share/isabelle-semantic-data/ and layers it under the user's writable
+    database: local work always wins, deletions mask system records, and
+    nothing here is ever modified in place.  Updating means updating this
+    package.
+
+    Data only -- no code, no hooks, no dependencies.
+  license: LGPL-2.1-or-later
+  repository: https://github.com/xqyww123/isabelle-packaging-ci

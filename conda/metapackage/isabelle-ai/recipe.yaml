@@ -38,11 +38,22 @@ build:
 
 requirements:
   run:
-    # The two halves.  Nothing else: adding `isabelle` or `isabelle-rpc` here would be
-    # restating what these two already require, and a metapackage that duplicates its
-    # children's dependency lists is a second place for them to drift.
+    # The two halves plus the data.  Nothing else: adding `isabelle` or `isabelle-rpc`
+    # here would be restating what the halves already require, and a metapackage that
+    # duplicates its children's dependency lists is a second place for them to drift.
+    #
+    # RELEASE-TIME ACTION (layered semantic DB rollout, SEMANTIC_DB_LAYERED_PLAN §7):
+    # when the first isabelle-semantic-data and the first L19-warning
+    # isabelle-minilang are published, raise the two floors here to those versions --
+    # an older minilang paired with the post-R2 embedding library is a hard `by aoa`
+    # ImportError in both directions, which is exactly this file's floor doctrine
+    # ("raise a floor only when the pair genuinely stops working below it").
     - isabelle-minilang >=0.4.0
     - isabelle-mcp >=0.3.0
+    # The pre-built semantic database (the read-only system layer).  A hard dependency
+    # HERE, deliberately not of isabelle-semantic-embedding: the library stays lean,
+    # the batteries-included metapackage carries the batteries (plan L3).
+    - isabelle-semantic-data
 
 tests:
   # A metapackage's only failure mode is a run requirement that does not solve or does not
@@ -62,19 +73,31 @@ tests:
       # Isabelle itself must be present and runnable, reached transitively through both
       # halves.  Cheap, and it is the assumption every other thing here rests on.
       - isabelle version
+      # The semantic-data dependency edge, end to end: the payload must actually be on
+      # disk where the read facade probes (sys.prefix/share/isabelle-semantic-data).
+      # Cheap in frequency -- release-isabelle-ai is manual-dispatch only.
+      - if: unix
+        then:
+          - test -f "$PREFIX/share/isabelle-semantic-data/MANIFEST.json"
+      - if: win
+        then:
+          - if not exist "%PREFIX%\share\isabelle-semantic-data\MANIFEST.json" exit 1
 
 about:
   homepage: https://github.com/xqyww123/isabelle-packaging-ci
   summary: "The AI-assisted Isabelle stack: Isa-Mini/AoA and the Isabelle MCP server"
   description: |
-    A metapackage. Installing it brings in both halves of the AI-assisted Isabelle stack:
+    A metapackage. Installing it brings in both halves of the AI-assisted Isabelle stack,
+    plus the data they retrieve from:
 
-      isabelle-minilang -- the Isa-Mini proof language over Isabelle/HOL, and the AoA
-                           proof agent that drives it
-      isabelle-mcp      -- the Model Context Protocol server exposing Isabelle to an
-                           editor or agent
+      isabelle-minilang      -- the Isa-Mini proof language over Isabelle/HOL, and the
+                                AoA proof agent that drives it
+      isabelle-mcp           -- the Model Context Protocol server exposing Isabelle to
+                                an editor or agent
+      isabelle-semantic-data -- the pre-built semantic database (the read-only system
+                                layer under the user's writable one)
 
-    It contains no files of its own. Install either half directly if only one is wanted;
-    neither depends on the other.
+    It contains no files of its own. Install the pieces directly if only some are wanted;
+    none of them depends on another.
   license: LGPL-2.1-or-later
   repository: https://github.com/xqyww123/isabelle-packaging-ci

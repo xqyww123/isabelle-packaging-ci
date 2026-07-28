@@ -4,10 +4,12 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-07-22 — second release wave: rpc 0.4.0 (attached hosts; released by
-hand), auto-sledgehammer 0.1.1, mcp 0.3.1, minilang 0.5.0 (Minilang_AoA renames; PyPI
-publishing resumed after a 14-month stall), semantic-embedding 0.2.0. conda and PyPI are
-now in lockstep for every package that has a PyPI presence.
+Last updated: 2026-07-28 — sweep mechanism landed (`scripts/sweep-old-versions.py`) and
+first owner-selected sweep executed; see "In flight". Before that, 2026-07-22: second
+release wave: rpc 0.4.0 (attached hosts; released by hand), auto-sledgehammer 0.1.1,
+mcp 0.3.1, minilang 0.5.0 (Minilang_AoA renames; PyPI publishing resumed after a 14-month
+stall), semantic-embedding 0.2.0. conda and PyPI are in lockstep for every package that
+has a PyPI presence.
 
 ---
 
@@ -36,9 +38,9 @@ executed it was skipped on Windows. Enabling that step is what surfaced it — a
 CRLF `etc/settings` defect and two ML path defects, in sequence, each hidden behind the
 previous one.
 
-0.1.1 of `isabelle-semantic-embedding` is still on the four non-Windows subdirs; only the
-win-64 build was deleted. See RELEASE_CHECKLIST.md for the bar that permitted it and the
-by-hand procedure.
+(Historical note: 0.1.1 of `isabelle-semantic-embedding` outlived its win-64 defect
+deletion on the four non-Windows subdirs until the 2026-07-22 sweep removed it. See
+RELEASE_CHECKLIST.md for the bar that permitted the defect deletion.)
 
 Verify from outside CI:
 ```sh
@@ -50,11 +52,22 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 Nothing.
 
-2026-07-22, after the second wave: the owner set a **latest-version-only retention
-policy** and the channel was swept — 16 stale files deleted across all six subdirs
-(rpc 0.3.1–0.3.4, mcp 0.3.0, minilang 0.4.0, auto-sledgehammer 0.1.0, semantic-embedding
-0.1.1/0.1.2). Procedure and per-file log in `RELEASE_CHECKLIST.md`. Every package on the
-channel now has exactly one version.
+2026-07-22, after the second wave: the channel was swept — 16 stale files deleted across
+all six subdirs (rpc 0.3.1–0.3.4, mcp 0.3.0, minilang 0.4.0, auto-sledgehammer 0.1.0,
+semantic-embedding 0.1.1/0.1.2), under what was then framed as a latest-version-only
+retention policy. Per-file log in `RELEASE_CHECKLIST.md`.
+
+2026-07-28: superseded-version deletion **reworded from that automatic-retention framing
+to owner-selected sweeps** — no automatic policy; the owner picks from computed candidates
+(files with a strictly newer version in the same subdir). New tool:
+`scripts/sweep-old-versions.py` edits the per-subdir metadata surgically — no package
+downloads, machine-gated against concurrent publish runs, verification anchored on the
+owner's plan file. Design + three-reviewer adversarial-debate record:
+`CONDA_CHANNEL_SWEEP_PLAN.md` in the owner's working tree; user manual: the "Sweeping
+superseded versions" section of `RELEASE_CHECKLIST.md`. First run deleted 7 files
+(isabelle-ai 0.1.0, isabelle-minilang 0.5.0, isabelle-semantic-embedding 0.2.0 × 5
+platform subdirs), all externally verified; every package on the channel again has
+exactly one version.
 
 ## Notes from the second wave (2026-07-22)
 

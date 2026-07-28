@@ -40,16 +40,13 @@ the subdir, save the current `repodata.json` as a baseline, delete the file **lo
 re-index, and **diff the new repodata against the baseline before pushing anything** — the
 only difference may be the one removed entry, with `info`, `repodata_version` and every
 other package untouched. Only then delete on R2 and push `repodata.json`,
-`repodata_from_packages.json` and `index.html`. Never push `.cache/`; it is conda-index's
+`repodata_from_packages.json` and `index.html`. (File first, deliberately: a harmful
+artifact should stop being downloadable before anything else. The sweep manual below
+inverts the order for harmless old versions.) Never push `.cache/`; it is conda-index's
 local sqlite.
 
-**Retention policy, decided by the channel owner 2026-07-22**: the channel keeps only the
-**latest version** of each package; superseded versions are deleted wholesale. This is a
-second, separate ground for deletion — a policy sweep, not the defect exception above, and
-it deliberately trades lockfile reproducibility away (anyone pinning an old version will
-fail to resolve; this is a private channel and the owner accepts that). The procedure is
-the same by-hand one; sweeps go subdir by subdir because re-indexing needs every remaining
-package present locally, and each platform subdir carries a 0.7–1.2 GB `isabelle` bundle.
+**Superseded versions** are the second, separate ground for deletion — owner-selected,
+not automatic. See "Sweeping superseded versions — user manual" right after the table.
 
 Deletions performed so far:
 
@@ -61,6 +58,106 @@ Deletions performed so far:
 | `isabelle-minilang` | 0.4.0 | noarch | policy sweep (0.5.0) | 2026-07-22 |
 | `auto-sledgehammer` | 0.1.0 | noarch | policy sweep (0.1.1) | 2026-07-22 |
 | `isabelle-semantic-embedding` | 0.1.1, 0.1.2 | all four unix subdirs; win-64 had only 0.1.2 left | policy sweep (0.2.0) | 2026-07-22 |
+| `isabelle-ai` | 0.1.0 | noarch | owner-selected sweep; superseded by 0.2.0 | 2026-07-28 |
+| `isabelle-minilang` | 0.5.0 | noarch | owner-selected sweep; superseded by 0.6.0 | 2026-07-28 |
+| `isabelle-semantic-embedding` | 0.2.0 | all five platform subdirs | owner-selected sweep; superseded by 0.3.0 | 2026-07-28 |
+
+Rows before 2026-07-28 say "policy sweep" — the automatic-retention framing of the time,
+since replaced by the owner-selected manual below.
+
+## Sweeping superseded versions — user manual
+
+**What this is.** Old versions are deleted **when and as the owner chooses** — there is no
+automatic retention policy (reworded 2026-07-28; supersedes the 2026-07-22 "keeps only the
+latest version" phrasing). `scripts/sweep-old-versions.py` computes the **candidates** —
+files with a strictly newer `VersionOrder` version of the same package in the same
+subdir — and the owner selects among them. Version ties (`2026.07.26` vs `2026.7.26`,
+`1.0` vs `1.0.0` — conda compares them equal) all survive; a package's newest or only
+version in a subdir is never deletable. Deleting superseded versions deliberately trades
+lockfile reproducibility away; this is a private channel and the owner accepts that.
+
+The script edits the per-subdir metadata surgically and **downloads no package**. Design
+and adversarial-review record: `CONDA_CHANNEL_SWEEP_PLAN.md` in the owner's working tree.
+The pull-everything-and-re-index procedure above remains the one for **defect
+deletions** — a policy split, not a mechanical one: by the time a defect deletion is legal
+its file is usually superseded too (rule 1 above), so the script would accept it. What the
+script does refuse is any non-candidate, including a defective build of a package's
+*newest* version.
+
+**Prerequisites** — 1, 2 and 4 are checked at startup with an abort pointing here; a
+broken `gh` surfaces fail-closed at `execute`'s first concurrency gate (`plan` does not
+need `gh`):
+
+1. rclone ≥ 1.74 (Ubuntu's apt 1.60 is broken against R2):
+   `curl -fsSL https://rclone.org/install.sh | sudo bash`, or point `$RCLONE` at a
+   downloaded binary.
+2. A python that can `import conda.models.version` — any environment with the `conda`
+   package installed.
+3. A logged-in `gh` — the concurrency gate queries workflow runs.
+4. `CONDA_R2_ACCESS_KEY_ID` / `CONDA_R2_SECRET_ACCESS_KEY` in the environment.
+
+**Routine.** From this repo's root; `python3` must be the conda-capable one from
+prerequisite 2; `sweep-plan.txt` lands in the current directory. Run in a subshell so the
+credentials do not linger in the interactive shell:
+
+```sh
+(source ~/Current/MLML/secret.sh && python3 scripts/sweep-old-versions.py plan sweep-plan.txt)
+#  zero channel writes; lists every candidate as `subdir/filename  # superseded by X`
+# edit sweep-plan.txt: the lines you KEEP are the ones DELETED; '#' comments a line out
+(source ~/Current/MLML/secret.sh && python3 scripts/sweep-old-versions.py execute sweep-plan.txt)
+#  shows the final list, asks you to type DELETE, then acts
+```
+
+Without a tty (an agent running an owner-approved plan), `execute PLAN --confirm DELETE`
+replaces the prompt — pass it only after the owner approved that exact plan file.
+Afterwards, append the rows `execute` prints to the deletions table above (they match its
+five columns) and note the sweep in `ROLLOUT_STATUS.md`.
+
+**What `execute` does, in order** — every failure is an abort, never a warned-past write;
+an abort mid-way leaves only the safe direction (metadata already stops listing files that
+still exist — see *Interrupted?*):
+
+1. Gates on publish runs (next paragraph) and re-checks the channel-shape assumptions:
+   exactly three metadata files per subdir, `removed == []` in repodata. If either fails,
+   a new conda-index behaviour has appeared — stop and use the full re-index procedure.
+2. Recomputes the candidates and refuses any plan line that is not one (newest/only
+   versions, unknown or already-gone files).
+3. Checks that no surviving package loses a satisfiable in-channel dependency
+   (platform ∪ noarch, per platform).
+4. Shows the final list and requires the typed `DELETE` (or the `--confirm` flag above).
+5. Edits `repodata.json`, `repodata_from_packages.json`, `index.html`. The abort gate is
+   semantic and anchored on your plan: parsed(edited) must equal parsed(baseline) minus
+   exactly the selected entries.
+6. Pushes the edited metadata **before** deleting any file — fresh clients stop resolving
+   the old versions first — then deletes the files one by one.
+7. Verifies from outside, anchored on the plan file (never on its own edits): every file
+   404s over HTTPS and is gone from R2, and the live `repodata.json` key set equals
+   baseline minus plan.
+
+**Concurrency is machine-gated, not a discipline.** A publish that raced the sweep would
+re-upload the deleted files from its own full-channel snapshot (`publish-conda.yml` pulls
+the whole channel and pushes it back). The script therefore aborts when any
+release/publish/conda/wheel-named workflow is in progress or queued across the publishing
+repos —
+checked before executing and again before pushing — and when a `.conda` on R2 is newer
+than its subdir's `repodata.json` (the signature of an in-flight or half-failed publish:
+publishes upload packages minutes before the index). Both checks are needed: the modtime
+signal is blind to publish re-runs, the run listing to unknown repos. After the sweep it
+checks whether a publish started meanwhile and re-verifies. If a race slips through
+anyway, nothing is lost — the publish resurrects the files, and the fix is to rerun the
+sweep.
+
+**Interrupted?** Rerun **from `plan`**: a fully-deleted file is no longer a candidate, so
+feeding the old plan file back to `execute` aborts on it. A fresh `plan` re-lists the
+leftovers, the already-deleted lines simply no longer appear, and you select again. The
+script prints how many of the selected files the repodata cross-check covered, so the
+thinner guard rail on such a re-run (entries already gone from repodata) is visible rather
+than silent.
+
+**Maintenance duty — the one manual sync point.** A repo that starts publishing to the
+channel must be added both to `PUBLISH_REPOS` in the script and to this list: `Isa-Mini`,
+`Isabelle-MCP`, `Isabelle_RPC`, `Isabelle_Semantic_Embedding`, `auto_sledgehammer`,
+`Performant_Isabelle_ML`, `isabelle-packaging-ci` (all under `xqyww123/`).
 
 ## 1. Pick the shape
 

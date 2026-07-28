@@ -4,17 +4,27 @@ Every item below was learned by getting it wrong. The failures in this stack are
 overwhelmingly **silent**: the package installs, `conda list` shows it, and something is
 quietly not there. Read accordingly.
 
-Correct a bad release with a **new version**, not a retraction. A published filename is
-permanent and CDN-cached, `publish-conda.yml`'s immutability guard assumes filenames never
-come back, and a lockfile pinning a deleted build turns "broken environment" into
-"environment will not resolve".
+Correct a bad release with a **new version**, not a retraction. Deleting from the channel
+is exceptional; the two grounds that exist, their procedures, and the log of every
+deletion so far are in "Deleting from the channel" below, before the numbered checklist.
 
-**The one exception**, and it needs the bar stated rather than left to judgement: an
-artifact may be deleted when it does not merely misbehave but **renders the tool unusable
-and misattributes the cause**. `isabelle-semantic-embedding` 0.1.1's win-64 build was the
-first: a CRLF `etc/settings` put a carriage return in the classpath, `isabelle build` could
-then build no session at all — not even HOL — and the error named a jar path, so nothing
-pointed at the package responsible.
+## Deleting from the channel
+
+A published filename is permanent: `publish-conda.yml`'s immutability guard assumes
+filenames never come back, and a lockfile pinning a deleted build turns "broken
+environment" into "environment will not resolve". Exactly two grounds for deletion
+exist — **defect deletions** (an artifact so broken it must go) and **owner-selected
+sweeps of superseded versions**. Nothing else is ever deleted, and every deletion lands
+in the log at the end of this section.
+
+### Defect deletions
+
+The bar needs stating rather than leaving to judgement: an artifact may be deleted when
+it does not merely misbehave but **renders the tool unusable and misattributes the
+cause**. `isabelle-semantic-embedding` 0.1.1's win-64 build was the first: a CRLF
+`etc/settings` put a carriage return in the classpath, `isabelle build` could then build
+no session at all — not even HOL — and the error named a jar path, so nothing pointed at
+the package responsible.
 
 If you delete one:
 
@@ -45,27 +55,7 @@ artifact should stop being downloadable before anything else. The sweep manual b
 inverts the order for harmless old versions.) Never push `.cache/`; it is conda-index's
 local sqlite.
 
-**Superseded versions** are the second, separate ground for deletion — owner-selected,
-not automatic. See "Sweeping superseded versions — user manual" right after the table.
-
-Deletions performed so far:
-
-| Package | Version | Subdir | Why | When |
-|---|---|---|---|---|
-| `isabelle-semantic-embedding` | 0.1.1 | win-64 | CRLF `etc/settings` → CR in the classpath → `isabelle build` could build no session at all, not even HOL, and the error named a jar path | 2026-07-19, after 0.1.2 shipped |
-| `isabelle-rpc` | 0.3.1–0.3.4 | noarch | policy sweep (0.4.0 is latest) | 2026-07-22 |
-| `isabelle-mcp` | 0.3.0 | noarch | policy sweep (0.3.1) | 2026-07-22 |
-| `isabelle-minilang` | 0.4.0 | noarch | policy sweep (0.5.0) | 2026-07-22 |
-| `auto-sledgehammer` | 0.1.0 | noarch | policy sweep (0.1.1) | 2026-07-22 |
-| `isabelle-semantic-embedding` | 0.1.1, 0.1.2 | all four unix subdirs; win-64 had only 0.1.2 left | policy sweep (0.2.0) | 2026-07-22 |
-| `isabelle-ai` | 0.1.0 | noarch | owner-selected sweep; superseded by 0.2.0 | 2026-07-28 |
-| `isabelle-minilang` | 0.5.0 | noarch | owner-selected sweep; superseded by 0.6.0 | 2026-07-28 |
-| `isabelle-semantic-embedding` | 0.2.0 | all five platform subdirs | owner-selected sweep; superseded by 0.3.0 | 2026-07-28 |
-
-Rows before 2026-07-28 say "policy sweep" — the automatic-retention framing of the time,
-since replaced by the owner-selected manual below.
-
-## Sweeping superseded versions — user manual
+### Sweeping superseded versions — user manual
 
 **What this is.** Old versions are deleted **when and as the owner chooses** — there is no
 automatic retention policy (reworded 2026-07-28; supersedes the 2026-07-22 "keeps only the
@@ -79,10 +69,10 @@ lockfile reproducibility away; this is a private channel and the owner accepts t
 The script edits the per-subdir metadata surgically and **downloads no package**. Design
 and adversarial-review record: `CONDA_CHANNEL_SWEEP_PLAN.md` in the owner's working tree.
 The pull-everything-and-re-index procedure above remains the one for **defect
-deletions** — a policy split, not a mechanical one: by the time a defect deletion is legal
-its file is usually superseded too (rule 1 above), so the script would accept it. What the
-script does refuse is any non-candidate, including a defective build of a package's
-*newest* version.
+deletions** — a policy split, not a mechanical one: by the time a defect deletion is
+legal its file is usually superseded too (defect rule 1 above), so the script would
+accept it. What the script does refuse is any non-candidate, including a defective build
+of a package's *newest* version.
 
 **Prerequisites** — 1, 2 and 4 are checked at startup with an abort pointing here; a
 broken `gh` surfaces fail-closed at `execute`'s first concurrency gate (`plan` does not
@@ -110,7 +100,7 @@ credentials do not linger in the interactive shell:
 
 Without a tty (an agent running an owner-approved plan), `execute PLAN --confirm DELETE`
 replaces the prompt — pass it only after the owner approved that exact plan file.
-Afterwards, append the rows `execute` prints to the deletions table above (they match its
+Afterwards, append the rows `execute` prints to the deletion log below (they match its
 five columns) and note the sweep in `ROLLOUT_STATUS.md`.
 
 **What `execute` does, in order** — every failure is an abort, never a warned-past write;
@@ -138,9 +128,8 @@ still exist — see *Interrupted?*):
 re-upload the deleted files from its own full-channel snapshot (`publish-conda.yml` pulls
 the whole channel and pushes it back). The script therefore aborts when any
 release/publish/conda/wheel-named workflow is in progress or queued across the publishing
-repos —
-checked before executing and again before pushing — and when a `.conda` on R2 is newer
-than its subdir's `repodata.json` (the signature of an in-flight or half-failed publish:
+repos — checked before executing and again before pushing — and when a `.conda` on R2 is
+newer than its subdir's `repodata.json` (the signature of an in-flight or half-failed publish:
 publishes upload packages minutes before the index). Both checks are needed: the modtime
 signal is blind to publish re-runs, the run listing to unknown repos. After the sweep it
 checks whether a publish started meanwhile and re-verifies. If a race slips through
@@ -158,6 +147,23 @@ than silent.
 channel must be added both to `PUBLISH_REPOS` in the script and to this list: `Isa-Mini`,
 `Isabelle-MCP`, `Isabelle_RPC`, `Isabelle_Semantic_Embedding`, `auto_sledgehammer`,
 `Performant_Isabelle_ML`, `isabelle-packaging-ci` (all under `xqyww123/`).
+
+### Deletion log
+
+| Package | Version | Subdir | Why | When |
+|---|---|---|---|---|
+| `isabelle-semantic-embedding` | 0.1.1 | win-64 | CRLF `etc/settings` → CR in the classpath → `isabelle build` could build no session at all, not even HOL, and the error named a jar path | 2026-07-19, after 0.1.2 shipped |
+| `isabelle-rpc` | 0.3.1–0.3.4 | noarch | policy sweep (0.4.0 is latest) | 2026-07-22 |
+| `isabelle-mcp` | 0.3.0 | noarch | policy sweep (0.3.1) | 2026-07-22 |
+| `isabelle-minilang` | 0.4.0 | noarch | policy sweep (0.5.0) | 2026-07-22 |
+| `auto-sledgehammer` | 0.1.0 | noarch | policy sweep (0.1.1) | 2026-07-22 |
+| `isabelle-semantic-embedding` | 0.1.1, 0.1.2 | all four unix subdirs; win-64 had only 0.1.2 left | policy sweep (0.2.0) | 2026-07-22 |
+| `isabelle-ai` | 0.1.0 | noarch | owner-selected sweep; superseded by 0.2.0 | 2026-07-28 |
+| `isabelle-minilang` | 0.5.0 | noarch | owner-selected sweep; superseded by 0.6.0 | 2026-07-28 |
+| `isabelle-semantic-embedding` | 0.2.0 | all five platform subdirs | owner-selected sweep; superseded by 0.3.0 | 2026-07-28 |
+
+Rows before 2026-07-28 say "policy sweep" — the automatic-retention framing of the time,
+since replaced by the owner-selected manual above.
 
 ## 1. Pick the shape
 

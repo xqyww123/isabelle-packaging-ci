@@ -141,12 +141,13 @@ Suspect the dependencies before the hook.
   already builds them on native runners; the conda job consumes that, called via
   `workflow_call` rather than copied.
 - Existing published packages are **never** retracted or rebuilt. Improvements apply from
-  each package's next release — with one narrow, now-exercised exception: an artifact that
-  renders the tool unusable AND misattributes the cause may be deleted, after the fixed
-  version is published. See `RELEASE_CHECKLIST.md`'s opening section for the procedure.
-  Used once, for `isabelle-semantic-embedding` 0.1.1 **win-64 only** (a CRLF `etc/settings`
-  left `isabelle build` unable to build any session on Windows, HOL included, with an error
-  naming a jar path rather than the package).
+  each package's next release. Deletion has exactly two grounds, both procedural in
+  `RELEASE_CHECKLIST.md`'s "Deleting from the channel" section: the defect bar (an
+  artifact that renders the tool unusable AND misattributes the cause, deletable only
+  after the fixed version is published — used once, for `isabelle-semantic-embedding`
+  0.1.1 **win-64 only**: a CRLF `etc/settings` left `isabelle build` unable to build any
+  session on Windows, HOL included, with an error naming a jar path rather than the
+  package) and owner-selected sweeps of superseded versions (since 2026-07-28).
 
 ---
 

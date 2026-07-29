@@ -11,8 +11,23 @@ schema_version: 1
 # $PREFIX/share/isabelle-semantic-data/ and layers it under the user's
 # writable DB; user machines never merge it and never write to it.
 #
-# DELIBERATELY hook-less (plan L2): the stores are openable in place, so
-# there is nothing to do at link time.  It carries exactly ONE dependency
+# ONE link hook, and only one (amending the earlier "deliberately hook-less",
+# plan L2).  The stores are openable in place, so the PAYLOAD needs nothing at
+# link time; what needs something is the USER's cache.  When this package
+# replaces an older payload, the user's vector store may still hold vectors it
+# computed from the OLD payload's text -- and for a model this payload ships no
+# vector store for, nothing downstream can ever tell those apart from legitimate
+# ones (VECTOR_INVALIDATION_PLAN §7).  The post-link hook is the one moment when
+# the question is answerable for free: it fires exactly when the payload changes
+# and before any process can read it, so no created_at needs remembering, no
+# marker file exists to go stale, and no process pays a per-read check.
+#
+# The hook may call our own console script because the dependency edge below is
+# one-way: conda links isabelle-semantic-embedding FIRST, so
+# $PREFIX/bin/isabelle-semantics is guaranteed present.  It still fetches
+# nothing (L19 -- no automatic download anywhere).
+#
+# It carries exactly ONE dependency
 # (user decision 2026-07-26, amending the earlier dependency-less wording):
 # a floor on the library that reads it — a pre-layered library would ignore
 # the payload silently, so installing the data must pull a reader that can
@@ -44,6 +59,28 @@ build:
   script:
     - mkdir -p "$PREFIX/share/isabelle-semantic-data"
     - cp -a payload/. "$PREFIX/share/isabelle-semantic-data/"
+    # BOTH hook files, unconditionally.  This is noarch: conda picks by the
+    # RUNNING platform and returns success IN SILENCE when the file is absent,
+    # so a .sh-only package would install cleanly on Windows and simply never
+    # purge anything.  The .bat must be CRLF, and both must exit 0 on every
+    # path: a nonzero post-link makes conda roll the whole install back
+    # (measured, isabelle-packaging-ci run 29637825807) -- which would trade a
+    # stale vector cache for losing the database altogether.
+    #
+    # `isabelle-semantics post-install-system-db` is itself written to exit 0
+    # unconditionally; the `exit 0` here is the second belt, for the case where
+    # the console script cannot be executed at all.
+    - mkdir -p "$PREFIX/bin" "$PREFIX/Scripts"
+    - |
+      cat > "$PREFIX/bin/.isabelle-semantic-data-post-link.sh" <<'HOOK'
+      #!/bin/bash
+      "$PREFIX/bin/isabelle-semantics" post-install-system-db
+      exit 0
+      HOOK
+    - chmod +x "$PREFIX/bin/.isabelle-semantic-data-post-link.sh"
+    - |
+      printf '@echo off\r\ncall "%%PREFIX%%\\Scripts\\isabelle-semantics.exe" post-install-system-db\r\nexit /b 0\r\n' \
+        > "$PREFIX/Scripts/.isabelle-semantic-data-post-link.bat"
 
 requirements:
   run:
@@ -66,6 +103,17 @@ tests:
       # A data package's only failure mode is a payload that is not there.
       - test -f "$PREFIX/share/isabelle-semantic-data/MANIFEST.json"
       - test -f "$PREFIX/share/isabelle-semantic-data/semantics.lmdb/data.mdb"
+      # Both hooks present, the .bat really CRLF, and neither fetching anything.
+      - test -x "$PREFIX/bin/.isabelle-semantic-data-post-link.sh"
+      - test -f "$PREFIX/Scripts/.isabelle-semantic-data-post-link.bat"
+      - grep -q 'post-install-system-db' "$PREFIX/bin/.isabelle-semantic-data-post-link.sh"
+      # A literal CR from printf, not bash's $'\r': the test script is not
+      # guaranteed to be bash, and an unsupported quoting form would make this
+      # check pass vacuously -- the exact shape of a fix that looks applied.
+      - CR=$(printf '\r'); grep -q "$CR" "$PREFIX/Scripts/.isabelle-semantic-data-post-link.bat"
+      - grep -q 'exit 0' "$PREFIX/bin/.isabelle-semantic-data-post-link.sh"
+      # L19 stands: the hook cleans the local cache, it never downloads.
+      - "! grep -qE ' pull|curl|wget' \"$PREFIX/bin/.isabelle-semantic-data-post-link.sh\""
 
 about:
   homepage: https://github.com/xqyww123/isabelle-packaging-ci
@@ -83,7 +131,10 @@ about:
     nothing here is ever modified in place.  Updating means updating this
     package.
 
-    Data only -- no code, no hooks; the single dependency is the floor on the
-    isabelle-semantic-embedding library that can read the layered payload.
+    Data only -- no code.  The one link hook drops cached embedding vectors
+    that the replaced database supplied the text for, so the new text and its
+    vectors cannot disagree; it downloads nothing.  The single dependency is
+    the floor on the isabelle-semantic-embedding library that can read the
+    layered payload.
   license: LGPL-2.1-or-later
   repository: https://github.com/xqyww123/isabelle-packaging-ci

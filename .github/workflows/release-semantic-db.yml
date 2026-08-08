@@ -7,7 +7,7 @@
 #
 #   download the HF tarball -> `isabelle-semantics export` (drop tombstones, build
 #   the system experience index, stamp the manifest, compacting rewrite, gates)
-#   -> rattler-build the hook-less data package -> publish.
+#   -> rattler-build the data package (one post-link hook) -> publish.
 #
 # The package version is YYYY.MM.DD.HHMM (UTC), derived from the created_at the
 # export just stamped (L15) -- there is no version input: the manifest is the
@@ -129,7 +129,7 @@ jobs:
             -c https://conda.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
 
-      - name: "Sanity: hook-less, dependency-less, payload in place"
+      - name: "Sanity: link hooks, reader-library floor, payload in place"
         run: |
           set -euo pipefail
           pkg=$(find out -name 'isabelle-semantic-data-*.conda' | head -1)
@@ -148,9 +148,23 @@ jobs:
             || { echo "::error::no MANIFEST.json in the payload"; exit 1; }
           test -f "$work/share/isabelle-semantic-data/semantics.lmdb/data.mdb" \
             || { echo "::error::no semantics.lmdb in the payload"; exit 1; }
-          # Hook-less by design (plan L2): a link hook here is a packaging bug.
-          if find "$work" -name '.*-post-link*' -o -name '.*-pre-unlink*' | grep -q .; then
-            echo "::error::the data package must not carry link hooks"; exit 1
+          # ONE post-link hook by design (recipe commit c9f5be6, amending the
+          # earlier "deliberately hook-less", plan L2): it purges the vectors the
+          # replaced payload supplied the text for.  Both platform files ship
+          # unconditionally -- conda picks by the RUNNING platform and succeeds
+          # in silence when the file is absent, so a .sh-only package would
+          # install cleanly on Windows and never purge.  Assert exactly that
+          # set: any other hook, and any pre-unlink at all, is a packaging bug.
+          # LC_ALL=C so the Scripts/ vs bin/ order does not depend on locale.
+          hooks=$(cd "$work" && find . \( -name '.*-post-link*' -o -name '.*-pre-unlink*' \) \
+                    | sed 's|^\./||' | LC_ALL=C sort)
+          expected=$(printf '%s\n' 'Scripts/.isabelle-semantic-data-post-link.bat' \
+                                   'bin/.isabelle-semantic-data-post-link.sh' | LC_ALL=C sort)
+          if [ "$hooks" != "$expected" ]; then
+            echo "::error::unexpected link hooks in the data package"
+            echo "got:";      printf '%s\n' "$hooks"
+            echo "expected:"; printf '%s\n' "$expected"
+            exit 1
           fi
           python3 - "$work" <<'PY'
           import json, pathlib, re, sys
@@ -164,7 +178,7 @@ jobs:
               raise SystemExit(f"::error::expected exactly the isabelle-semantic-embedding floor, got {deps}")
           if idx.get("subdir") != "noarch":
               raise SystemExit(f"::error::expected noarch, got {idx.get('subdir')}")
-          print("  OK  noarch, hook-less, exactly the reader-library floor, payload present")
+          print("  OK  noarch, exactly the one post-link hook, the reader-library floor, payload present")
           PY
 
       - name: Lay the package out as <subdir>/*.conda for publish-conda.yml

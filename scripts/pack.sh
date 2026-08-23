@@ -211,6 +211,25 @@ sed -i 's/^public option ML_system_64 : bool = false/public option ML_system_64 
 echo "patched etc/options: ML_system_64 default -> true (64-bit words)"
 
 # ---------------------------------------------------------------------------
+# 1f. Unregister the dead bundled nunchaku component.
+#
+# The distribution ships contrib/nunchaku-0.5, a 2017 binary (self-reported
+# 0.1) that does not know the `cvc5` solver name the 2025-2 frontend sends:
+# every `nunchaku` invocation dies in ~4ms with "unknown solver 'cvc5'".  Its
+# etc/settings also unconditionally sets NUNCHAKU_HOME, so "NUNCHAKU_HOME is
+# set" can never distinguish a working install from this corpse.  Dropping the
+# registration line removes both; a working nunchaku comes from the
+# `isabelle-nunchaku` component package (which sets NUNCHAKU_VERSION for
+# version-gated consumers).  The contrib/nunchaku-0.5 directory itself stays --
+# unregistered, it is inert, and deleting payload is not this script's job.
+# ---------------------------------------------------------------------------
+COMPONENTS="$TREE/etc/components"
+grep -q '^contrib/nunchaku-0.5$' "$COMPONENTS" || {
+  echo "::error::etc/components anchor 'contrib/nunchaku-0.5' not found -- upstream layout changed, re-check the patch"; exit 1; }
+sed -i '\#^contrib/nunchaku-0.5$#d' "$COMPONENTS"
+echo "patched etc/components: dropped dead contrib/nunchaku-0.5 registration"
+
+# ---------------------------------------------------------------------------
 # 2. inject the heaps
 # ---------------------------------------------------------------------------
 mkdir -p "$TREE/heaps"

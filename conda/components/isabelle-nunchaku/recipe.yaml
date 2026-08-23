@@ -49,9 +49,11 @@ source:
 
 build:
   number: 0
-  # Keep in sync with `number` above: conda build strings do not sort, so the
-  # upstream base rides along here (hyphens are illegal, underscore is fine).
-  string: d23a876_0
+  # The upstream base rides along in the build string (conda build strings do
+  # not sort; hyphens are illegal there, underscore is fine).  build_number
+  # follows `number` / the --build-num override, so re-releases keep unique
+  # filenames (verified with rattler-build 0.69.1).
+  string: d23a876_${{ build_number }}
   # Static binaries: no RPATH to rewrite, no embedded prefix to patch.  Both
   # switches make the (pointless) default rewriting impossible instead of
   # merely unexercised.

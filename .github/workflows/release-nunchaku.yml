@@ -53,9 +53,12 @@ jobs:
             "https://github.com/xqyww123/nunchaku/releases/download/v${{ inputs.version }}/nunchaku-bin-x86_64-linux"
           chmod +x conda/components/isabelle-nunchaku/nunchaku-bin
           # static, and answers --help: the cheapest proof we staged a binary,
-          # not an HTML error page
-          ldd conda/components/isabelle-nunchaku/nunchaku-bin 2>&1 \
-            | grep -q "not a dynamic executable"
+          # not an HTML error page.  LC_ALL=C: ldd's message is localized, and
+          # its English wording itself varies ("not a dynamic executable" vs
+          # "statically linked") -- accept both, like the fork CI smoke does.
+          LC_ALL=C ldd conda/components/isabelle-nunchaku/nunchaku-bin > ldd.out 2>&1 || true
+          cat ldd.out
+          grep -Eq "not a dynamic executable|statically linked" ldd.out
           conda/components/isabelle-nunchaku/nunchaku-bin --help > /dev/null
 
       - name: Install rattler-build

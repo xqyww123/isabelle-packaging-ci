@@ -1,0 +1,144 @@
+schema_version: 1
+
+# isabelle-nunchaku: the maintained Nunchaku model finder (fork of
+# nunchaku-inria/nunchaku) as an Isabelle component, packaged as a conda add-on
+# to the base `isabelle` package.  linux-64 only (NOT noarch: it carries native
+# binaries; on other platforms the NUNCHAKU_VERSION gate in consumers simply
+# stays closed and that is a supported configuration).
+#
+# The component makes Isabelle2025-2's `nunchaku` command actually work: the
+# distribution registers a 2017 binary (self-reported 0.1) that does not know
+# the `cvc5` solver name the 2025-2 frontend sends, and always sets
+# NUNCHAKU_HOME pointing at it.  This component's etc/settings wins over the
+# distribution's (user-side components are evaluated later), and sets
+# NUNCHAKU_VERSION so version-gated consumers can tell a working install from
+# the bundled one.
+#
+# Inputs, all explicit:
+#   - env ISA_COMPONENT_VERSION: the release version; must equal the VERSION
+#     file in the fork checkout (asserted below).  CI reads VERSION and exports
+#     it -- versions are never written by hand (house rule).
+#   - git source: the fork at tag v<version> -- supplies the wrapper,
+#     etc/settings skeleton, VERSION and LICENSE.
+#   - url source: the official static cvc5 release, sha256-pinned.
+#   - path source ./nunchaku-bin: the musl-static binary built by the fork's
+#     CI (release-binary job artifact), staged next to this recipe before
+#     building.  It is NOT built here -- precedent: Semantic_Embedding's
+#     recipe, "THE TWO NATIVE ARTIFACTS ARE NOT BUILT HERE".
+
+context:
+  version: ${{ env.get("ISA_COMPONENT_VERSION", default="0.0.0") }}
+  # The upstream commit the fork is pinned to.  Deliberately a recipe constant:
+  # syncing the fork to a new upstream base is a re-certification event, and
+  # bumping this line is part of that same conscious change.
+  upstream_base_short: d23a876
+  upstream_base_full: d23a876d788e9d7fb59ec58a003cf1d0765723f1
+
+package:
+  name: isabelle-nunchaku
+  version: ${{ version }}
+
+source:
+  - git: https://github.com/xqyww123/nunchaku.git
+    rev: v${{ version }}
+  - url: https://github.com/cvc5/cvc5/releases/download/cvc5-1.3.4/cvc5-Linux-x86_64-static.zip
+    sha256: dcdbfada0ce493ee98259c0816e0daafc561c223aadb3af298c2968e73ea39c6
+    target_directory: cvc5-dist
+  - path: ./nunchaku-bin
+    file_name: nunchaku-bin
+
+build:
+  number: 0
+  # Keep in sync with `number` above: conda build strings do not sort, so the
+  # upstream base rides along here (hyphens are illegal, underscore is fine).
+  string: d23a876_0
+  # Static binaries: no RPATH to rewrite, no embedded prefix to patch.  Both
+  # switches make the (pointless) default rewriting impossible instead of
+  # merely unexercised.
+  dynamic_linking:
+    binary_relocation: false
+  prefix_detection:
+    ignore: true
+  script:
+    interpreter: bash
+    env:
+      # rattler-build sanitizes the host environment; hand the version to the
+      # script explicitly (same value as context.version).
+      ISA_COMPONENT_VERSION: ${{ version }}
+    content: |
+      set -euo pipefail
+
+      # single source of truth: the release version must be the fork's VERSION
+      test "$(cat "$SRC_DIR/VERSION")" = "${ISA_COMPONENT_VERSION:?}" \
+        || { echo "VERSION file ($(cat "$SRC_DIR/VERSION")) != ISA_COMPONENT_VERSION ($ISA_COMPONENT_VERSION)"; exit 1; }
+
+      name=isabelle-nunchaku
+      dest="$PREFIX/share/$name"
+      mkdir -p "$dest/x86_64-linux/solvers" "$dest/etc"
+
+      # component skeleton from the fork, version injected from VERSION
+      sed "s/@NUNCHAKU_VERSION@/$ISA_COMPONENT_VERSION/" \
+        "$SRC_DIR/component/etc/settings" > "$dest/etc/settings"
+      grep -q "NUNCHAKU_VERSION=\"$ISA_COMPONENT_VERSION\"" "$dest/etc/settings"
+      cp -a "$SRC_DIR/component/x86_64-linux/nunchaku" "$dest/x86_64-linux/"
+
+      # the CI-built static binary and the pinned cvc5
+      install -m 755 "$SRC_DIR/nunchaku-bin" "$dest/x86_64-linux/nunchaku-bin"
+      install -m 755 "$SRC_DIR/cvc5-dist/bin/cvc5" \
+        "$dest/x86_64-linux/solvers/cvc5"
+
+      # version floor, asserted -- not prose.  The backend sends
+      # get-model-domain-elements (cvc5 >= 1.3.1); an older cvc5 answers with
+      # an error and the model parse fails.
+      "$dest/x86_64-linux/solvers/cvc5" --version | head -1 \
+        | grep -Eq 'cvc5 1\.(3\.[1-9]|[4-9])'
+
+      # provenance + licenses
+      printf '%s\n' "${{ upstream_base_full }}" > "$dest/COMMIT"
+      cp -a "$SRC_DIR/LICENSE" "$dest/LICENSE"
+      cp -a "$SRC_DIR/cvc5-dist/COPYING" "$dest/LICENSE-cvc5"
+
+      # the wrapper must run from where it will live
+      test -x "$dest/x86_64-linux/nunchaku"
+      "$dest/x86_64-linux/nunchaku" --help > /dev/null
+
+      # ------------------------------------------------------------------
+      # Link hooks (unix only -- this is a linux-64 package): register with
+      # `isabelle components -u` on install, unregister with -x on removal.
+      # Pattern and rationale: COMPONENTS_DESIGN.md + the
+      # isabelle-performant-ml recipe.  Hooks exit 0 unconditionally -- a
+      # nonzero post-link rolls back the whole install; a failed registration
+      # surfaces later as a clear "component unavailable".
+      # ------------------------------------------------------------------
+      mkdir -p "$PREFIX/bin"
+      for spec in post-link:-u pre-unlink:-x; do
+        action=${spec%%:*}
+        verb=${spec##*:}
+        printf '%s\n' \
+          '#!/bin/bash' \
+          "\"\$PREFIX/isa/bin/isabelle\" components $verb \"\$PREFIX/share/$name\" 2>/dev/null \\" \
+          "  || echo \"warning: 'isabelle components $verb $name' failed; the nunchaku component may be unavailable\"" \
+          'exit 0' \
+          > "$PREFIX/bin/.$name-$action.sh"
+        chmod +x "$PREFIX/bin/.$name-$action.sh"
+      done
+      grep -qF "share/$name" "$PREFIX/bin/.$name-post-link.sh"
+
+requirements:
+  run:
+    # Bounded to the Isabelle series this component is certified against
+    # (house rule: without the bound, conda's newest-wins pairs it with a
+    # future Isabelle it was never tested with).
+    - isabelle >=2025.2,<2025.3
+
+about:
+  homepage: https://github.com/xqyww123/nunchaku
+  summary: "Nunchaku model finder for Isabelle (maintained fork + cvc5), as an Isabelle component"
+  description: |
+    A maintained build of the Nunchaku counterexample finder (fork of
+    nunchaku-inria/nunchaku, pinned upstream base in COMMIT), bundled with a
+    static cvc5 and registered as an Isabelle component.  Makes the
+    Isabelle2025-2 `nunchaku` command work out of the box; sets
+    NUNCHAKU_VERSION for version-gated programmatic consumers.
+  license: BSD-2-Clause
+  repository: https://github.com/xqyww123/nunchaku

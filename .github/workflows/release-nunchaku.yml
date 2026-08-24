@@ -49,17 +49,18 @@ jobs:
       - name: Stage the CI-built static binary from the fork release
         run: |
           set -euo pipefail
-          curl -fsSL -o conda/components/isabelle-nunchaku/nunchaku-bin \
-            "https://github.com/xqyww123/nunchaku/releases/download/v${{ inputs.version }}/nunchaku-bin-x86_64-linux"
-          chmod +x conda/components/isabelle-nunchaku/nunchaku-bin
-          # static, and answers --help: the cheapest proof we staged a binary,
-          # not an HTML error page.  LC_ALL=C: ldd's message is localized, and
-          # its English wording itself varies ("not a dynamic executable" vs
-          # "statically linked") -- accept both, like the fork CI smoke does.
-          LC_ALL=C ldd conda/components/isabelle-nunchaku/nunchaku-bin > ldd.out 2>&1 || true
-          cat ldd.out
-          grep -Eq "not a dynamic executable|statically linked" ldd.out
-          conda/components/isabelle-nunchaku/nunchaku-bin --help > /dev/null
+          base="https://github.com/xqyww123/nunchaku/releases/download/v${{ inputs.version }}"
+          dst=conda/components/isabelle-nunchaku/nunchaku-bin
+          curl -fsSL -o "$dst" "$base/nunchaku-bin-x86_64-linux"
+          # release assets are mutable (same-name re-upload); pin by digest
+          curl -fsSL -o nunchaku-bin.sha256 "$base/nunchaku-bin-x86_64-linux.sha256"
+          echo "$(cut -d' ' -f1 nunchaku-bin.sha256)  $dst" | sha256sum -c
+          chmod +x "$dst"
+          # really static (INTERP is an ELF program-header name, locale-free),
+          # self-reports the release version, and answers --help
+          ! readelf -l "$dst" | grep -q INTERP
+          "$dst" --version | grep -q " ${{ inputs.version }} "
+          "$dst" --help > /dev/null
 
       - name: Install rattler-build
         run: |
@@ -99,8 +100,16 @@ jobs:
           comp="$work/share/isabelle-nunchaku"
           grep -q "NUNCHAKU_VERSION=\"${{ inputs.version }}\"" "$comp/etc/settings" \
             || { echo "::error::etc/settings does not carry NUNCHAKU_VERSION=${{ inputs.version }}"; exit 1; }
-          grep -Eq '^[0-9a-f]{40}$' "$comp/COMMIT" \
-            || { echo "::error::COMMIT is not a full 40-char sha"; exit 1; }
+          grep -Eq '^base [0-9a-f]{40}$' "$comp/COMMIT" \
+            || { echo "::error::COMMIT lacks the upstream base line"; exit 1; }
+          grep -Eq '^build [0-9a-f]{40}$' "$comp/COMMIT" \
+            || { echo "::error::COMMIT lacks the build line"; exit 1; }
+          # the packaged tree must be the live tag's commit
+          tag_sha=$(git ls-remote https://github.com/xqyww123/nunchaku.git \
+                      "refs/tags/v${{ inputs.version }}^{}" | cut -f1)
+          [ -n "$tag_sha" ] || { echo "::error::tag v${{ inputs.version }} not found upstream"; exit 1; }
+          grep -q "^build $tag_sha\$" "$comp/COMMIT" \
+            || { echo "::error::COMMIT build sha does not match tag v${{ inputs.version }} ($tag_sha)"; exit 1; }
           test -x "$comp/x86_64-linux/nunchaku"
           test -x "$comp/x86_64-linux/nunchaku-bin"
           test -x "$comp/x86_64-linux/solvers/cvc5"
@@ -177,5 +186,13 @@ jobs:
           "$CONDA_PREFIX/isa/bin/isabelle" getenv -b NUNCHAKU_HOME | grep -qx "$comp/x86_64-linux"
           # the wrapper runs, and its cvc5 satisfies the version floor
           "$comp/x86_64-linux/nunchaku" --help > /dev/null
-          "$comp/x86_64-linux/solvers/cvc5" --version | head -1 | grep -Eq 'cvc5 1\.(3\.[1-9]|[4-9])'
+          "$comp/x86_64-linux/solvers/cvc5" --version | head -1 | grep -q 'cvc5 1.3.4'
+          # the uninstall half of the design: removing the package must
+          # close the version gate (NUNCHAKU_VERSION falls back to the
+          # distribution's "0.5"), non-vacuously
+          conda remove -y isabelle-nunchaku
+          v_after=$("$CONDA_PREFIX/isa/bin/isabelle" getenv -b NUNCHAKU_VERSION || true)
+          [ "$v_after" != "${{ inputs.version }}" ] \
+            || { echo "::error::NUNCHAKU_VERSION still ${{ inputs.version }} after conda remove"; exit 1; }
+          echo "after remove: NUNCHAKU_VERSION='$v_after'"
           echo "smoke OK"

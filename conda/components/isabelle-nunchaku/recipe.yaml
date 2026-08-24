@@ -53,7 +53,7 @@ build:
   # not sort; hyphens are illegal there, underscore is fine).  build_number
   # follows `number` / the --build-num override, so re-releases keep unique
   # filenames (verified with rattler-build 0.69.1).
-  string: d23a876_${{ build_number }}
+  string: ${{ upstream_base_short }}_${{ build_number }}
   # Static binaries: no RPATH to rewrite, no embedded prefix to patch.  Both
   # switches make the (pointless) default rewriting impossible instead of
   # merely unexercised.
@@ -89,14 +89,22 @@ build:
       install -m 755 "$SRC_DIR/cvc5-dist/bin/cvc5" \
         "$dest/x86_64-linux/solvers/cvc5"
 
-      # version floor, asserted -- not prose.  The backend sends
-      # get-model-domain-elements (cvc5 >= 1.3.1); an older cvc5 answers with
-      # an error and the model parse fails.
+      # the pinned cvc5 version, asserted -- not prose.  The sha256 above
+      # already pins the artifact; this asserts the pin is the intended one
+      # (>= 1.3.1 needed: the backend sends get-model-domain-elements).
+      # Changing the pin is a re-certification event, and this line failing
+      # is its intended prompt.
       "$dest/x86_64-linux/solvers/cvc5" --version | head -1 \
-        | grep -Eq 'cvc5 1\.(3\.[1-9]|[4-9])'
+        | grep -q 'cvc5 1\.3\.4'
 
-      # provenance + licenses
-      printf '%s\n' "${{ upstream_base_full }}" > "$dest/COMMIT"
+      # provenance + licenses.  COMMIT records the pinned upstream base and
+      # the fork commit actually packaged; the ancestry assert makes a
+      # force-pushed or misdirected tag fail here rather than ship.
+      git -C "$SRC_DIR" merge-base --is-ancestor "${{ upstream_base_full }}" HEAD \
+        || { echo "checked-out tree does not descend from the pinned upstream base"; exit 1; }
+      { printf 'base %s\n' "${{ upstream_base_full }}"
+        printf 'build %s\n' "$(git -C "$SRC_DIR" rev-parse HEAD)"
+      } > "$dest/COMMIT"
       cp -a "$SRC_DIR/LICENSE" "$dest/LICENSE"
       cp -a "$SRC_DIR/cvc5-dist/COPYING" "$dest/LICENSE-cvc5"
 
@@ -125,6 +133,25 @@ build:
         chmod +x "$PREFIX/bin/.$name-$action.sh"
       done
       grep -qF "share/$name" "$PREFIX/bin/.$name-post-link.sh"
+
+tests:
+  # Runs against a fresh environment with the package installed -- so a
+  # hand-run `rattler-build build` validates the artifact, not just the
+  # build prefix.  (The isabelle end-to-end assertion lives in the release
+  # workflow's post-publish smoke; these stay self-contained.)
+  - script:
+      - comp="$PREFIX/share/isabelle-nunchaku"
+      - test -x "$comp/x86_64-linux/nunchaku"
+      - test -x "$comp/x86_64-linux/nunchaku-bin"
+      - test -x "$comp/x86_64-linux/solvers/cvc5"
+      - test -f "$comp/LICENSE" && test -f "$comp/LICENSE-cvc5"
+      - grep -q 'NUNCHAKU_VERSION="${{ version }}"' "$comp/etc/settings"
+      - grep -Eq '^base [0-9a-f]{40}$' "$comp/COMMIT"
+      - grep -Eq '^build [0-9a-f]{40}$' "$comp/COMMIT"
+      - '"$comp/x86_64-linux/nunchaku" --help > /dev/null'
+      - '"$comp/x86_64-linux/solvers/cvc5" --version | head -1 | grep -q "cvc5 1.3.4"'
+      - test -x "$PREFIX/bin/.isabelle-nunchaku-post-link.sh"
+      - test -x "$PREFIX/bin/.isabelle-nunchaku-pre-unlink.sh"
 
 requirements:
   run:

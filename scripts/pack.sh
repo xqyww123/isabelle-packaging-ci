@@ -224,6 +224,7 @@ echo "patched etc/options: ML_system_64 default -> true (64-bit words)"
 # unregistered, it is inert, and deleting payload is not this script's job.
 # ---------------------------------------------------------------------------
 COMPONENTS="$TREE/etc/components"
+grep -q 'nunchaku' "$COMPONENTS" || { echo "::error::etc/components already lacks the nunchaku registration -- patch applied twice?"; exit 1; }
 grep -q '^contrib/nunchaku-0.5$' "$COMPONENTS" || {
   echo "::error::etc/components anchor 'contrib/nunchaku-0.5' not found -- upstream layout changed, re-check the patch"; exit 1; }
 sed -i '\#^contrib/nunchaku-0.5$#d' "$COMPONENTS"

@@ -353,7 +353,12 @@ One recipe per platform tag. Record why we carry it and when to drop it.
 1. **Dependencies first** — `verify` installs from the live channel, so run deps must
    already be published. Order: `isabelle` → `isabelle-performant-ml` →
    `auto-sledgehammer` → `isabelle-rpc` → `isabelle-semantic-embedding` →
-   `isabelle-minilang`.
+   `isabelle-minilang`. `isabelle-nunchaku` depends only on `isabelle` and can go
+   any time after it: certify per the fork's `regress/README.md` (gate PASS), tag
+   `v<VERSION>` on `xqyww123/nunchaku` (its CI attaches the static binary + .sha256
+   to the release), then
+   `gh workflow run release-nunchaku --repo xqyww123/isabelle-packaging-ci -f version=<VERSION> -f dry_run=false`
+   (dry_run defaults to true; run that first).
 2. Dry run: `gh workflow run release-conda.yml -R REPO -f dry_run=true` — stops after
    `verify`, publishes nothing.
 3. Tag: `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`. Some repos use `master`.

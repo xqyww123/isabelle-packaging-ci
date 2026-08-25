@@ -299,6 +299,17 @@ the divergences are defects.
 
 ## 7b. rattler-build specifics
 
+- rattler-build **does** run conda link scripts in the `tests:` environment — but it
+  gives the hook the **invoking user's `HOME`** while the test script gets a rattler temp
+  one (measured 2026-08-25, rattler-build 0.69.1). Two consequences. (a) A test that
+  probes for the *automatic* post-link's effect reads an unregistered state and is a
+  false red; invoke the hooks explicitly, with one environment for hook and probe and a
+  `HOME` inside `$PREFIX`. (b) The matching pre-unlink is **never** run at teardown, so
+  every `rattler-build build` of a component recipe leaves a permanent entry in
+  `$HOME/.isabelle/Isabelle2025-2-conda-<envdir>/etc/components` pointing at a deleted
+  temp prefix — after which every `isabelle` call in a conda environment directory of
+  that name prints `### Missing Isabelle component: …`. Clean it by hand, or build in a
+  container. CI runners are ephemeral, so publish safety is unaffected.
 - No `bash` in the build environment on **Windows** ("interpreter `bash` was not found").
   Write the build script in `python` — it removes the whole class and keeps one script for
   every platform.
@@ -361,20 +372,82 @@ One recipe per platform tag. Record why we carry it and when to drop it.
      carries three hermetic suites (`regress/cvc5_guard/`, `regress/soundness_guard/`,
      `regress/smbc_models/`) that need no solver and run on every platform's own
      toolchain.
-   - Tag `v<VERSION>` on `xqyww123/nunchaku`, **annotated** — `git tag -a`, never a
-     lightweight tag. The provenance check in `release-nunchaku.yml` resolves the tag
-     with `git ls-remote … "refs/tags/v<VERSION>^{}"`, and that peeled ref exists only
-     for annotated tags; a lightweight tag fails with "annotated tag not found upstream".
-   - The fork's CI then attaches **two artifact families**, for five platforms —
-     `nunchaku-bin-<isabelle-platform>` and `smbc-bin-<isabelle-platform>`, each with a
-     `.sha256`, where `<isabelle-platform>` is one of `x86_64-linux`, `arm64-linux`,
-     `x86_64-darwin`, `arm64-darwin`, `x86_64-cygwin`. Ten assets. smbc is not optional:
-     the component's wrapper unconditionally exports `NUNCHAKU_SMBC`, so a package
-     without it runs a configuration the gate never certified.
-   - Then
-     `gh workflow run release-nunchaku --repo xqyww123/isabelle-packaging-ci -f version=<VERSION> -f dry_run=false`
-     (dry_run defaults to true; run that first). It builds all five subdirs on native
-     runners and refuses to publish unless all five arrived.
+
+   **The six steps, in this order. The order is load-bearing — three of these are the
+   only points at which a broken build can still be stopped rather than published.**
+
+   1. **Rehearse the fork, before any tag exists.**
+      `gh workflow run build --repo xqyww123/nunchaku --ref main` — `main.yml` has
+      `workflow_dispatch`, and both release job families run on a dispatch. This is the
+      *first* execution of the five release legs in their current form, and it is what
+      proves the things no local check can: `dune runtest` with the three hermetic
+      suites on macOS and under Isabelle's Cygwin, the musl-static link of **both**
+      binaries, `git` plus the pinned-commit smbc build inside Isabelle's Cygwin, and
+      `.exe`-appending end to end on win-64. Do not tag until both families are green.
+   2. **Tag** `v<VERSION>` on `xqyww123/nunchaku`, **annotated** — `git tag -a`, never a
+      lightweight tag. The provenance check in `release-nunchaku.yml` resolves the tag
+      with `git ls-remote … "refs/tags/v<VERSION>^{}"`, and that peeled ref exists only
+      for annotated tags; a lightweight tag fails with "annotated tag not found
+      upstream".
+
+      **A defect found after the tag exists is fixed by a NEW PATCH VERSION, never by
+      moving the tag.** A moved tag makes `git ls-remote …^{}` name a different commit
+      than the already-attached assets were built from, and the fork attaches with
+      `--clobber`, so the difference would be hidden rather than caught.
+   3. **Wait for the fork's `release-gate` job.** Every release leg creates
+      `v<VERSION>` as a **draft** and attaches its own five files:
+      `nunchaku-bin-<isabelle-platform>`, `smbc-bin-<isabelle-platform>`, a `.sha256`
+      for each, and `versions-<isabelle-platform>.txt` — where `<isabelle-platform>` is
+      one of `x86_64-linux`, `arm64-linux`, `x86_64-darwin`, `arm64-darwin`,
+      `x86_64-cygwin`. **Twenty-five assets: ten binaries, ten sidecars, five version
+      records.** The `release-gate` job diffs the release's asset list against that
+      contract and only then runs `gh release edit --draft=false`.
+
+      **Do not dispatch packaging until the release is out of draft.** A draft release
+      is not served at `releases/download/…`, which is the URL
+      `release-nunchaku.yml`'s staging step fetches — every leg would 404 five legs
+      deep and look like "the fork's CI is broken".
+
+      smbc is not optional: the component's wrapper unconditionally exports
+      `NUNCHAKU_SMBC`, so a package without it runs a configuration the gate never
+      certified. `versions-<platform>.txt` is not optional either: on `x86_64-cygwin`
+      it is the **only** content check either repository can make on the two
+      Cygwin-ABI binaries, and the staging step asserts its version and 40-hex commit
+      fields against the tag on all five legs.
+   4. **Packaging dry run.**
+      `gh workflow run release-nunchaku --repo xqyww123/isabelle-packaging-ci -f version=<VERSION>`
+      (`dry_run` defaults to true). This is the first execution of the recipe's hook
+      round-trip and of the packaged wrapper's `--solvers cvc5,smbc` run, on all five
+      subdirs, inside the build job — so it is a real gate, not a formality.
+
+      What a dry run still does **not** cover: nothing is installed from the channel
+      (`publish` and the post-publish `smoke` are both skipped), so `conda`'s own
+      linker never runs the `.bat` hooks and the uninstall half is untested.
+   5. **Inside the dry-run window, before `dry_run=false`: measure the installed win-64
+      wrapper.** Take the win-64 `.conda` from the dry run's `conda-packages` artifact,
+      install it from a local channel on a `windows-latest` runner (the pattern is
+      `macos-install-probe.yml:50-92`), and run
+
+      ```
+      isabelle.bat env bash -c '"$NUNCHAKU_HOME/nunchaku" --solvers cvc5,smbc --timeout 30 <case>'
+      ```
+
+      with `MSYS2_ARG_CONV_EXCL="*"`, asserting that **no** `solver not available` line
+      appears. This is the one functional property of the shipped win-64 package that
+      nothing in either repository asserts: the wrapper hands the solvers
+      extension-less paths, the payload holds `cvc5.exe`/`smbc.exe`, the conda payload
+      records no mode bits, and the binary decides availability with
+      `test -f && test -x`. Once it is green, fold the invocation into the smoke's
+      win-64 branch (`release-nunchaku.yml`) so it stays measured. **Do not add it to
+      the gate before it has been measured once.**
+   6. **Publish.** Re-dispatch with `-f dry_run=false`. It builds all five subdirs on
+      native runners and refuses to publish unless all five arrived. Then read the
+      publish job's **audit log** (`audited N subdir(s)`), not its check mark.
+
+      If `publish` fails partway: **re-run failed jobs**, or bump `build_number`. A
+      fresh *dispatch* does not substitute — it rebuilds, and a rebuilt `.conda` is
+      not byte-identical (`info/index.json` carries a timestamp), so the channel's
+      content-comparing guard correctly refuses it and the re-dispatch dead-ends.
 2. Dry run: `gh workflow run release-conda.yml -R REPO -f dry_run=true` — stops after
    `verify`, publishes nothing.
 3. Tag: `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`. Some repos use `master`.
@@ -410,6 +483,13 @@ the line it is supposed to execute and confirm the test reaches it.
 ```sh
 curl -fsS https://conda.qiyuan.me/noarch/repodata.json | python3 -m json.tool | head
 ```
+
+**Update `ROLLOUT_STATUS.md`.** Its "Published on https://conda.qiyuan.me" table names
+the version and shape of every package, and a row moves only on publication — so moving
+it is a post-publish step, not part of the release commit. For `isabelle-nunchaku` 0.5.3
+that means the row goes from `0.5.2 / component, linux-64 only` to
+`0.5.3 / component, 5 subdirs`, and the paragraph below the table that explains what
+0.5.3 will change becomes a statement of what it did.
 
 Read the publish job's **audit log**, not its check mark: it prints one line per subdir and
 `audited N subdir(s)`. It used to be able to pass having inspected nothing.

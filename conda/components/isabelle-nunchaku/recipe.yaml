@@ -28,7 +28,12 @@ schema_version: 1
 #     recipe, "THE TWO NATIVE ARTIFACTS ARE NOT BUILT HERE".  smbc arrives the
 #     same way as nunchaku (sha256-pinned, from a named release) rather than as
 #     a vendored blob, so it has the same provenance chain and the same
-#     re-certification trigger.
+#     re-certification trigger.  Neither `path:` source carries a `sha256:` of
+#     its own -- rattler-build would accept one, but the digest would have to be
+#     injected per platform from CI.  The real digest check is the workflow's
+#     (release-nunchaku.yml stages each binary against the release's `.sha256`
+#     sidecar), so a HAND-RUN `rattler-build build` does NOT perform it: it
+#     validates the layout of whatever binaries happen to sit in this directory.
 
 context:
   version: ${{ env.get("ISA_COMPONENT_VERSION", default="0.0.0") }}
@@ -37,11 +42,36 @@ context:
   # bumping this line is part of that same conscious change.
   upstream_base_short: d23a876
   upstream_base_full: d23a876d788e9d7fb59ec58a003cf1d0765723f1
-  # The two bundled solvers, pinned.  Both versions are asserted from the
-  # binaries themselves further down; these lines exist so a reader sees the
-  # pins in one place and so changing one without the other fails the build.
+  # The two bundled solvers, pinned.
+  #
+  # These are NOT the source of truth: the fork's component/solvers.pins is, and
+  # the build script dies unless every value here -- both versions, all five
+  # cvc5 digests below, and the subdir->platform table -- agrees with it.  They
+  # are restated because rattler-build needs literals in `source:` and because
+  # release-nunchaku.yml reads them out of this block
+  # (.github/scripts/nunchaku-pins.sh), which is what keeps the workflow's
+  # assertions from being a fourth independent copy.
+  #
+  # cvc5's version is asserted from the binary itself on ALL FIVE platforms (it
+  # is a native binary everywhere).  nunchaku's and smbc's are asserted from the
+  # binaries on the four non-Cygwin platforms; on win-64 they are Cygwin-ABI and
+  # cannot run in a build environment, so there they are asserted from
+  # versions-x86_64-cygwin.txt, which the fork's win-64 leg captured under
+  # Isabelle's own Cygwin (release-nunchaku.yml checks it before staging).
   cvc5_version: "1.3.4"
   smbc_version: "0.6.1"
+  # The five cvc5 digests.  `source:` needs a literal, so they live here rather
+  # than being read from the fork -- and every one of them is asserted against
+  # the fork's table in the build script, on every leg, not just this leg's own.
+  cvc5_sha256_linux_64: dcdbfada0ce493ee98259c0816e0daafc561c223aadb3af298c2968e73ea39c6
+  cvc5_sha256_linux_aarch64: 2a4c108367f20b0c8990abd6b9535a5d62e08908d471d4671c00734e408f85bc
+  cvc5_sha256_osx_64: 5a7976affaf37dcf03ee44c3d0297c8e0ba08afd44ac832dab97400da726b852
+  cvc5_sha256_osx_arm64: 3840aa53f6ee6fc357415dcfe291d7f5ffec6cfb1ccca6fef64120a0d2be4cb6
+  cvc5_sha256_win_64: 279fe7e95810cfb62433fcfc2932f35325a665f32d3697ff33f75e31d5c6a179
+  # smbc's licence, which the package must carry: it is a third bundled work and
+  # 0.5.3 is the release that starts redistributing it.  sha256 measured
+  # 2026-08-25 against c-cube/smbc@v0.6.1.
+  smbc_license_sha256: 26a91735d09a69bcd0355a729282ea139d76e61475bc4adec6c23b493d643efb
 
 package:
   name: isabelle-nunchaku
@@ -57,28 +87,33 @@ source:
   - if: target_platform == "linux-64"
     then:
       - url: https://github.com/cvc5/cvc5/releases/download/cvc5-${{ cvc5_version }}/cvc5-Linux-x86_64-static.zip
-        sha256: dcdbfada0ce493ee98259c0816e0daafc561c223aadb3af298c2968e73ea39c6
+        sha256: ${{ cvc5_sha256_linux_64 }}
         target_directory: cvc5-dist
   - if: target_platform == "linux-aarch64"
     then:
       - url: https://github.com/cvc5/cvc5/releases/download/cvc5-${{ cvc5_version }}/cvc5-Linux-arm64-static.zip
-        sha256: 2a4c108367f20b0c8990abd6b9535a5d62e08908d471d4671c00734e408f85bc
+        sha256: ${{ cvc5_sha256_linux_aarch64 }}
         target_directory: cvc5-dist
   - if: target_platform == "osx-64"
     then:
       - url: https://github.com/cvc5/cvc5/releases/download/cvc5-${{ cvc5_version }}/cvc5-macOS-x86_64-static.zip
-        sha256: 5a7976affaf37dcf03ee44c3d0297c8e0ba08afd44ac832dab97400da726b852
+        sha256: ${{ cvc5_sha256_osx_64 }}
         target_directory: cvc5-dist
   - if: target_platform == "osx-arm64"
     then:
       - url: https://github.com/cvc5/cvc5/releases/download/cvc5-${{ cvc5_version }}/cvc5-macOS-arm64-static.zip
-        sha256: 3840aa53f6ee6fc357415dcfe291d7f5ffec6cfb1ccca6fef64120a0d2be4cb6
+        sha256: ${{ cvc5_sha256_osx_arm64 }}
         target_directory: cvc5-dist
   - if: target_platform == "win-64"
     then:
       - url: https://github.com/cvc5/cvc5/releases/download/cvc5-${{ cvc5_version }}/cvc5-Win64-x86_64-static.zip
-        sha256: 279fe7e95810cfb62433fcfc2932f35325a665f32d3697ff33f75e31d5c6a179
+        sha256: ${{ cvc5_sha256_win_64 }}
         target_directory: cvc5-dist
+  # smbc's licence text.  A third bundled work must travel with its licence, and
+  # the upstream repository ships no licence file inside the built binary.
+  - url: https://raw.githubusercontent.com/c-cube/smbc/v${{ smbc_version }}/LICENSE
+    sha256: ${{ smbc_license_sha256 }}
+    file_name: smbc-LICENSE
   - path: ./nunchaku-bin
     file_name: nunchaku-bin
   - path: ./smbc-bin
@@ -113,6 +148,15 @@ build:
       NUNCHAKU_CVC5_VERSION: ${{ cvc5_version }}
       NUNCHAKU_SMBC_VERSION: ${{ smbc_version }}
       NUNCHAKU_UPSTREAM_BASE: ${{ upstream_base_full }}
+      # All five, on every leg: the point is to catch a bump applied to one side
+      # of the pipeline only, and four fifths of that would be invisible if each
+      # leg checked only its own.
+      NUNCHAKU_CVC5_SHA256S: >-
+        linux-64=${{ cvc5_sha256_linux_64 }}
+        linux-aarch64=${{ cvc5_sha256_linux_aarch64 }}
+        osx-64=${{ cvc5_sha256_osx_64 }}
+        osx-arm64=${{ cvc5_sha256_osx_arm64 }}
+        win-64=${{ cvc5_sha256_win_64 }}
     content: |
       import os, pathlib, shutil, subprocess
 
@@ -147,16 +191,53 @@ build:
       # On win-64 the nunchaku and smbc binaries are Cygwin-ABI executables:
       # they need cygwin1.dll, which lives in the base `isabelle` package -- a
       # RUN dependency, absent from a build environment.  So they cannot be
-      # executed here at all.  That assertion is not lost: the fork's win-64
-      # release leg runs both under Isabelle's own bundled Cygwin, against this
-      # very component layout, before the assets are ever attached.  cvc5 is a
-      # native binary on every platform, so its pin is asserted everywhere.
+      # executed here at all; what replaces those assertions there is described
+      # at the `else:` branch that uses this flag.  cvc5 is a native binary on
+      # every platform, so its pin is asserted everywhere.
       can_run_cygwin_abi = TARGET != "win-64"
 
       # single source of truth: the release version must be the fork's VERSION
       forks_version = (SRC / "VERSION").read_text().strip()
       if forks_version != VERSION:
           die(f"VERSION file ({forks_version}) != ISA_COMPONENT_VERSION ({VERSION})")
+
+      # ------------------------------------------------------------------
+      # the solver pins, against the fork's own table
+      # ------------------------------------------------------------------
+      # component/solvers.pins in the checked-out tag is where "which solver,
+      # which bytes" is decided; everything in this recipe's `context:` is a
+      # restatement that rattler-build's `source:` schema forces.  So assert
+      # them, all of them, on every leg.  Without this the two repositories
+      # pinned cvc5 with ten independent literals and nothing compared them: a
+      # 1.3.5 bump applied to this recipe alone would have shipped a combination
+      # the fork never smoked, with every gate on both sides green.
+      pins, cvc5_rows = {}, {}
+      for raw in (SRC / "component" / "solvers.pins").read_text().splitlines():
+          f = raw.split("#", 1)[0].split()
+          if not f:
+              continue
+          if f[0] == "cvc5" and len(f) == 4:
+              cvc5_rows[f[1]] = (f[2], f[3])
+          elif len(f) == 2:
+              pins[f[0]] = f[1]
+      if pins.get("cvc5-version") != CVC5:
+          die(f"solvers.pins pins cvc5 {pins.get('cvc5-version')}, this recipe says {CVC5}")
+      if pins.get("smbc-version") != SMBC:
+          die(f"solvers.pins pins smbc {pins.get('smbc-version')}, this recipe says {SMBC}")
+      # The subdir -> platform table below is deliberately independent of the
+      # workflow's matrix (release-nunchaku.yml cross-checks the two).  This
+      # makes it agree with the fork's platform list as well, so all three move
+      # together or none of them do.
+      if set(cvc5_rows) != {p for p, _ in PLATFORMS.values()}:
+          die(f"solvers.pins covers {sorted(cvc5_rows)}, this recipe covers "
+              f"{sorted(p for p, _ in PLATFORMS.values())}")
+      recipe_digests = dict(kv.split("=", 1) for kv in os.environ["NUNCHAKU_CVC5_SHA256S"].split())
+      for subdir, (p, _) in PLATFORMS.items():
+          if cvc5_rows[p][1] != recipe_digests[subdir]:
+              die(f"cvc5 for {p}: solvers.pins says {cvc5_rows[p][1]}, this "
+                  f"recipe's source: says {recipe_digests[subdir]}")
+      print(f"solver pins agree with the fork: cvc5 {CVC5}, smbc {SMBC}, "
+            f"{len(cvc5_rows)} platforms, {len(recipe_digests)} digests")
 
       dest = PREFIX / "share" / NAME
       (dest / plat / "solvers").mkdir(parents=True, exist_ok=True)
@@ -204,33 +285,20 @@ build:
       # pin is a re-certification event, and these lines failing is its
       # intended prompt.
       def first_line(*cmd):
-          out = subprocess.run(cmd, capture_output=True, text=True, check=True)
-          return (out.stdout + out.stderr).splitlines()[0]
-
-      cvc5_line = first_line(str(dest / plat / "solvers" / f"cvc5{exe}"), "--version")
-      print("cvc5:", cvc5_line)
-      if f"cvc5 {CVC5}" not in cvc5_line:
-          die(f"bundled cvc5 reports '{cvc5_line}', expected cvc5 {CVC5}")
-
-      if can_run_cygwin_abi:
-          smbc_line = first_line(str(dest / plat / "solvers" / f"smbc{exe}"), "--version")
-          print("smbc:", smbc_line)
-          if SMBC not in smbc_line:
-              die(f"bundled smbc reports '{smbc_line}', expected {SMBC}")
-          nun_line = first_line(str(dest / plat / f"nunchaku-bin{exe}"), "--version")
-          print("nunchaku:", nun_line)
-          if f" {VERSION} " not in nun_line:
-              die(f"nunchaku-bin reports '{nun_line}', expected version {VERSION}")
-          # the wrapper must run from where it will live
-          subprocess.run([str(dest / plat / "nunchaku"), "--help"],
-                         check=True, stdout=subprocess.DEVNULL)
-      else:
-          print(f"{TARGET}: nunchaku-bin and smbc are Cygwin-ABI binaries and "
-                "cannot run in a build environment; the fork's win-64 release "
-                "leg asserted their versions under Isabelle's own Cygwin.")
+          # check=False plus an explicit die(): with check=True a non-zero exit
+          # aborts with a CalledProcessError traceback and an empty output
+          # aborts with an IndexError, both without the ::error:: annotation
+          # every other failure here produces -- and on macOS a Gatekeeper kill
+          # of a downloaded binary lands exactly here.
+          out = subprocess.run(cmd, capture_output=True, text=True)
+          lines = (out.stdout + out.stderr).splitlines()
+          if out.returncode != 0 or not lines:
+              die(f"{cmd[0]} {' '.join(cmd[1:])} exited {out.returncode} with "
+                  f"stdout={out.stdout!r} stderr={out.stderr!r}")
+          return lines[0]
 
       # ------------------------------------------------------------------
-      # provenance + licenses
+      # provenance FIRST: the binary assertions below need `head`
       # ------------------------------------------------------------------
       # COMMIT records the pinned upstream base and the fork commit actually
       # packaged; the ancestry assert makes a force-pushed or misdirected tag
@@ -239,9 +307,81 @@ build:
           die("checked-out tree does not descend from the pinned upstream base")
       head = subprocess.run(["git", "-C", str(SRC), "rev-parse", "HEAD"],
                             capture_output=True, text=True, check=True).stdout.strip()
+
+      cvc5_line = first_line(str(dest / plat / "solvers" / f"cvc5{exe}"), "--version")
+      print("cvc5:", cvc5_line)
+      if f"cvc5 {CVC5} " not in cvc5_line:
+          die(f"bundled cvc5 reports '{cvc5_line}', expected cvc5 {CVC5}")
+
+      if can_run_cygwin_abi:
+          smbc_line = first_line(str(dest / plat / "solvers" / f"smbc{exe}"), "--version")
+          print("smbc:", smbc_line)
+          if smbc_line != f"version: {SMBC}":
+              die(f"bundled smbc reports '{smbc_line}', expected 'version: {SMBC}'")
+          nun_line = first_line(str(dest / plat / f"nunchaku-bin{exe}"), "--version")
+          print("nunchaku:", nun_line)
+          if f" {VERSION} " not in nun_line:
+              die(f"nunchaku-bin reports '{nun_line}', expected version {VERSION}")
+          # ...AND from this tag's tree.  src/main/dune generates GitVersion.ml
+          # from `git rev-parse HEAD`, and the binary prints
+          # "nunchaku <version> <40-hex>", so this is the one check that binds
+          # the 20 MB of machine code to the commit the 30 kB of shell is bound
+          # to three ways already.  Without it the release asset -- which the
+          # fork uploads with --clobber, and whose .sha256 sidecar the same job
+          # writes -- only had to be "some 0.5.3-ish build".
+          if not nun_line.endswith(head):
+              die(f"nunchaku-bin reports '{nun_line}'; it was not built from the "
+                  f"packaged tree {head} -- the release asset does not match the tag")
+
+          # The wrapper must FIND its two solvers, not merely start.  Measured
+          # 2026-08-25 on this exact packaged layout: `nunchaku --help` -- which
+          # is all this line used to do -- passes with solvers/smbc at mode 644
+          # AND with solvers/smbc deleted outright, and the frontend run then
+          # still exits 0 and still prints SAT, answered by cvc5 alone, with the
+          # loss visible only as a stderr warning no gate read.  That silent
+          # half-loss is precisely the configuration the wrapper exists to
+          # prevent (component/nunchaku:5-9) and precisely what 0.5.3 exists to
+          # ship.  Both limbs below were measured to discriminate: silent on a
+          # good layout, firing on a missing and on a non-executable smbc.
+          #
+          # It does NOT catch a present-and-executable-but-dead smbc; that one
+          # is the fork's own release smoke (^SAT plus no BACKEND_ERROR on a
+          # --solvers smbc run).  The two are complementary and both are needed.
+          r = subprocess.run([str(dest / plat / "nunchaku"), "--no-color",
+                              "--solvers", "cvc5,smbc", "--timeout", "30",
+                              str(SRC / "regress" / "gold.nun")],
+                             capture_output=True, text=True)
+          print(r.stdout, r.stderr)
+          if "solver not available" in r.stderr:
+              die("the packaged wrapper cannot see its bundled solvers: " + r.stderr.strip())
+          if not r.stdout.startswith("SAT"):
+              die("the packaged component did not answer SAT on gold.nun: " + r.stdout[:200])
+      else:
+          # NOT a claim that someone else already checked these.  On win-64 the
+          # two binaries are Cygwin-ABI: they need cygwin1.dll, which lives in
+          # the base `isabelle` RUN dependency and is absent from a build
+          # environment, so nothing here can execute them.  What stands in for
+          # it is versions-x86_64-cygwin.txt: the fork's win-64 leg captures
+          # both --version lines under Isabelle's own bundled Cygwin, in this
+          # component's layout, and release-nunchaku.yml asserts that record's
+          # version and 40-hex commit fields against the release tag BEFORE it
+          # stages either binary here.  cvc5 is native on every platform, so its
+          # pin is asserted above on all five.
+          print(f"{TARGET}: nunchaku-bin and smbc are Cygwin-ABI binaries and "
+                "cannot run in a build environment; their versions and the "
+                "nunchaku commit are asserted from versions-x86_64-cygwin.txt "
+                "by release-nunchaku.yml's staging step.")
+
+      # ------------------------------------------------------------------
+      # licenses
+      # ------------------------------------------------------------------
+      # Three bundled works, three licence texts.  smbc is the one 0.5.3 starts
+      # redistributing, and its LICENSE is fetched as a pinned source above
+      # because the built binary carries no licence text of its own.
       (dest / "COMMIT").write_text(f"base {BASE}\nbuild {head}\n", newline="\n")
       shutil.copyfile(SRC / "LICENSE", dest / "LICENSE")
       shutil.copyfile(SRC / "cvc5-dist" / "COPYING", dest / "LICENSE-cvc5")
+      shutil.copyfile(SRC / "smbc-LICENSE", dest / "LICENSE-smbc")
 
       # ------------------------------------------------------------------
       # Link hooks: register with `isabelle components -u` on install,
@@ -285,11 +425,16 @@ build:
       for action, verb in [("post-link", "-u"), ("pre-unlink", "-x")]:
           # $PREFIX stays literal: conda expands it at link time, not now.
           sh = PREFIX / "bin" / f".{NAME}-{action}.sh"
+          # stderr goes to $PREFIX/.messages.txt, which conda prints, rather
+          # than to /dev/null: the hook must still exit 0, so discarding the
+          # reason left "may be unavailable" as the entire diagnosis of a failed
+          # registration.
           sh.write_text("\n".join([
               '#!/bin/bash',
-              f'"$PREFIX/isa/bin/isabelle" components {verb} "$PREFIX/share/{NAME}" 2>/dev/null \\',
+              f'"$PREFIX/isa/bin/isabelle" components {verb} "$PREFIX/share/{NAME}" \\',
+              '    2>> "$PREFIX/.messages.txt" \\',
               f'  || echo "warning: \'isabelle components {verb} {NAME}\' failed; '
-              'the nunchaku component may be unavailable"',
+              'the nunchaku component may be unavailable (see .messages.txt)"',
               'exit 0',
           ]) + "\n", newline="\n")
           sh.chmod(0o755)
@@ -308,9 +453,13 @@ build:
           ]), newline="")
 
       # The hooks name the install path as a LITERAL, built from NAME rather
-      # than from `dest`.  The last check is what keeps the two in step: move
-      # the component and the hooks would keep pointing at the old place, which
-      # `exit /b 0` would then hide completely.
+      # than from `dest`.  The three checks below are CANARIES, not gates: as
+      # the code stands each of them compares a value with the expression it was
+      # generated from a few lines earlier, so none of them can fail today.
+      # They exist so that a future edit which moves the component, or which
+      # writes the hook text from something other than NAME, fails here -- where
+      # the diagnosis is one line -- instead of shipping a package whose
+      # `exit /b 0` hook silently points at the old place.  Keep them.
       if f"share/{NAME}" not in (PREFIX / "bin" / f".{NAME}-post-link.sh").read_text():
           die("the post-link hook does not name the component directory")
       if b"\r\n" not in (PREFIX / "Scripts" / f".{NAME}-post-link.bat").read_bytes():
@@ -323,6 +472,20 @@ tests:
   # hand-run `rattler-build build` validates the artifact, not just the build
   # prefix.  (The isabelle end-to-end assertion lives in the release workflow's
   # post-publish smoke; these stay self-contained.)
+  #
+  # A HAND-RUN LEAVES A STALE REGISTRATION IN YOUR OWN ~/.isabelle.  Measured
+  # 2026-08-25, rattler-build 0.69.1: rattler runs the package's automatic
+  # post-link in the test environment with the INVOKING USER'S HOME, and never
+  # runs the matching pre-unlink at teardown -- so every `rattler-build build`
+  # of this recipe adds one entry to
+  #   $HOME/.isabelle/Isabelle2025-2-conda-<envdir>/etc/components
+  # pointing at a rattler temp prefix that is then deleted, after which every
+  # `isabelle` call in a conda environment directory of that name prints
+  # "### Missing Isabelle component: ...".  The round trip inside the test
+  # script below does NOT cure this: it runs under its own HOME inside $PREFIX.
+  # Clean it by hand -- delete the offending lines from that file -- or run
+  # builds in a container.  CI runners are ephemeral, so publish safety is
+  # unaffected.
   - script:
       # Python for the same reason the build script uses it: on win-64 the
       # default test shell is cmd, and `test -x` is not a cmd builtin.  python
@@ -365,7 +528,7 @@ tests:
                     f"solvers/cvc5{exe}", f"solvers/smbc{exe}"]:
             if not (comp / plat / rel).is_file():
                 die(f"{plat}/{rel} is not in the package")
-        for rel in ["LICENSE", "LICENSE-cvc5"]:
+        for rel in ["LICENSE", "LICENSE-cvc5", "LICENSE-smbc"]:
             if not (comp / rel).is_file():
                 die(f"{rel} is not in the package")
 
@@ -385,6 +548,69 @@ tests:
         if b"\r\n" not in (PREFIX / f"Scripts/.{NAME}-post-link.bat").read_bytes():
             die("the .bat hook is not CRLF")
 
+        # ------------------------------------------------------------------
+        # the hooks must REGISTER, not merely exist
+        # ------------------------------------------------------------------
+        # Until this block, nothing anywhere observed a link hook's EFFECT
+        # before the bytes reached an immutable channel.  Every hook exits 0 by
+        # design (a nonzero post-link makes conda roll the whole install back)
+        # and the .bat sends both `call`s to >nul 2>&1, so a registration
+        # failure -- a wrong isabelle.bat path, a lost warm-up line, a lost CRLF
+        # -- was silent by construction on all five subdirs, and the first thing
+        # that would have noticed is the post-publish smoke, which runs after
+        # the channel refuses to let the bytes be replaced.
+        #
+        # The hooks are invoked EXPLICITLY rather than relying on the automatic
+        # post-link rattler-build already runs: rattler does run link scripts in
+        # the test environment, but it gives the hook the INVOKING USER'S HOME
+        # and this script a different one (measured 2026-08-25, rattler-build
+        # 0.69.1), so the automatic run's effect is invisible from here and
+        # asserting on it would be a false red.  One environment for hook and
+        # probe, with a HOME inside $PREFIX, and the round trip is observable.
+        #
+        # This does NOT cure the stale registration a hand-run leaves in the
+        # BUILDER's own ~/.isabelle (see the note above `tests:`): that comes
+        # from rattler's automatic post-link under the real HOME, and nothing
+        # here runs the matching pre-unlink for it.
+        #
+        # Entry point is <prefix>/bin/isabelle or <prefix>/Scripts/isabelle.bat,
+        # never <prefix>/isa/bin/isabelle -- the distribution's unix launcher
+        # ships on Windows too and Git-Bash calls it executable
+        # (RELEASE_CHECKLIST.md section 7).  `cmd /c` is safe from python: no
+        # MSYS path rewriting, so the Git-Bash trap in that same section does
+        # not apply.
+        env = dict(os.environ)
+        env["PREFIX"] = str(PREFIX)
+        home = PREFIX / ".test-home"
+        home.mkdir(exist_ok=True)
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
+        if exe:                                   # x86_64-cygwin
+            isa  = ["cmd", "/c", str(PREFIX / "Scripts" / "isabelle.bat")]
+            post = ["cmd", "/c", str(PREFIX / "Scripts" / f".{NAME}-post-link.bat")]
+            pre  = ["cmd", "/c", str(PREFIX / "Scripts" / f".{NAME}-pre-unlink.bat")]
+        else:
+            isa  = [str(PREFIX / "bin" / "isabelle")]
+            post = ["bash", str(PREFIX / "bin" / f".{NAME}-post-link.sh")]
+            pre  = ["bash", str(PREFIX / "bin" / f".{NAME}-pre-unlink.sh")]
+
+        def registered_version():
+            r = subprocess.run(isa + ["getenv", "-b", "NUNCHAKU_VERSION"],
+                               capture_output=True, text=True, env=env)
+            return r.stdout.strip().replace("\r", "")
+
+        subprocess.run(post, env=env, check=True)
+        after_post = registered_version()
+        print("after post-link: NUNCHAKU_VERSION =", repr(after_post))
+        if after_post != WANT_VERSION:
+            die("the post-link hook ran but did not register the component: "
+                "NUNCHAKU_VERSION is '" + after_post + "'")
+        subprocess.run(pre, env=env, check=True)
+        after_pre = registered_version()
+        print("after pre-unlink: NUNCHAKU_VERSION =", repr(after_pre))
+        if after_pre == WANT_VERSION:
+            die("the pre-unlink hook ran but left the component registered")
+
         # cvc5 is native everywhere and must satisfy the pin.  nunchaku-bin and
         # smbc are Cygwin-ABI on x86_64-cygwin and need cygwin1.dll from the
         # base isabelle package's own Cygwin, so they are exercised by the
@@ -393,7 +619,10 @@ tests:
                              capture_output=True, text=True, check=True)
         cvc5_line = out.stdout.splitlines()[0]
         print("cvc5:", cvc5_line)
-        if "cvc5 " + WANT_CVC5 not in cvc5_line:
+        # The trailing space is measured: the line is
+        # "cvc5 1.3.4 [git f3b21c4 on branch HEAD]".  Without it the test also
+        # accepts cvc5 1.3.44.
+        if "cvc5 " + WANT_CVC5 + " " not in cvc5_line:
             die("bundled cvc5 reports '" + cvc5_line + "', expected cvc5 " + WANT_CVC5)
 
         if exe == "":
@@ -401,12 +630,14 @@ tests:
                                   capture_output=True, text=True, check=True)
             smbc_line = (smbc.stdout + smbc.stderr).splitlines()[0]
             print("smbc:", smbc_line)
-            if WANT_SMBC not in smbc_line:
-                die("bundled smbc reports '" + smbc_line + "', expected " + WANT_SMBC)
+            # Exact, not a substring: the measured line is "version: 0.6.1", and
+            # a substring test also accepts "version: 0.6.11".
+            if smbc_line != "version: " + WANT_SMBC:
+                die("bundled smbc reports '" + smbc_line + "', expected 'version: " + WANT_SMBC + "'")
             subprocess.run([str(comp / plat / "nunchaku"), "--help"],
                            check=True, stdout=subprocess.DEVNULL)
 
-        print("  OK ", plat, "layout, both hook families, solver pins")
+        print("  OK ", plat, "layout, both hook families round-tripped, solver pins")
     requirements:
       run:
         - python
@@ -434,5 +665,16 @@ about:
     static cvc5 and smbc and registered as an Isabelle component.  Makes the
     Isabelle2025-2 `nunchaku` command work out of the box; sets
     NUNCHAKU_VERSION for version-gated programmatic consumers.
-  license: BSD-2-Clause
+  # The BUNDLE's licence, not the fork's alone: this package redistributes three
+  # works.  Measured 2026-08-25: the fork's own LICENSE is two-clause BSD;
+  # c-cube/smbc@v0.6.1's LICENSE is two-clause (no "Neither the name" clause);
+  # cvc5-1.3.4's COPYING is the modified, three-clause BSD.  `BSD-2-Clause`
+  # alone was wrong for the bundle even before smbc joined it.
+  license: BSD-2-Clause AND BSD-3-Clause
+  # Without this, info/licenses/ is absent from the built package, which is
+  # where conda tooling looks for the texts.
+  license_file:
+    - LICENSE
+    - cvc5-dist/COPYING
+    - smbc-LICENSE
   repository: https://github.com/xqyww123/nunchaku

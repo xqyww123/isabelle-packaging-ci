@@ -24,6 +24,13 @@
 # NOTE dry_run DEFAULTS TO TRUE: a bare dispatch builds and validates but
 # publishes nothing.
 #
+# DO NOT DISPATCH UNTIL THE FORK'S RELEASE IS OUT OF DRAFT.  The fork's legs
+# create v<version> as a draft and its release-gate job asserts all twenty-five
+# assets before un-drafting; a draft release is NOT served at
+# releases/download/..., so every leg here would 404 in its staging step, five
+# legs deep, looking like "the fork's CI is broken".  The full six-step run plan
+# is RELEASE_CHECKLIST.md section 9.
+#
 # Secrets: the shared CONDA_R2_* channel credentials.
 name: release-nunchaku
 
@@ -44,6 +51,9 @@ on:
         default: true
 
 concurrency:
+  # Deliberately not keyed on the version: serialising two releases of the same
+  # package is the behaviour we want, and cancel-in-progress: false means a
+  # second dispatch waits rather than tearing a publish in half.
   group: release-nunchaku
   cancel-in-progress: false
 
@@ -80,10 +90,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The solver versions this workflow asserts come from the recipe's own
+      # `context:`, which the recipe's build script in turn asserts against the
+      # fork's component/solvers.pins.  Before, they were four literals here
+      # with no relation to either.
+      - name: Read the solver pins
+        run: .github/scripts/nunchaku-pins.sh "$RECIPE_DIR/recipe.yaml" >> "$GITHUB_ENV"
+
       - name: Stage this platform's CI-built binaries from the fork release
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          base="https://github.com/xqyww123/nunchaku/releases/download/v${{ inputs.version }}"
+          # A shape check on the dispatch input, first thing.  A dispatcher
+          # typing `v0.5.3` otherwise produces `vv0.5.3` and a 404 five legs
+          # deep; and passing the input through `env:` rather than interpolating
+          # it into every `run:` body removes the expression-injection shape the
+          # rest of this file already avoids for ISA_COMPONENT_VERSION.
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || { echo "::error::version must be X.Y.Z, got '$VERSION'"; exit 1; }
+          base="https://github.com/xqyww123/nunchaku/releases/download/v$VERSION"
+          # A DRAFT release does not serve this URL -- see the header comment.
 
           # macOS runners have no sha256sum; both tools print "<hash>  <name>".
           sha256_check () {  # <expected-hash> <file>
@@ -98,7 +125,12 @@ jobs:
             asset="$stem-$ISA_PLATFORM"
             dst="$RECIPE_DIR/$stem"
             curl -fsSL -o "$dst" "$base/$asset"
-            # release assets are mutable (same-name re-upload); pin by digest
+            # The sidecar catches a torn or corrupted DOWNLOAD -- and nothing
+            # more.  It is written and uploaded by the same fork job that
+            # uploads the payload, with --clobber, so it cannot bind the asset
+            # to the tag; what does that is the git sha the binary itself
+            # reports, asserted below on win-64 and in the recipe's build script
+            # on the other four.
             curl -fsSL -o "$dst.sha256.txt" "$base/$asset.sha256"
             sha256_check "$(cut -d' ' -f1 "$dst.sha256.txt")" "$dst"
             chmod +x "$dst"
@@ -111,9 +143,13 @@ jobs:
                 # INTERP is an ELF program-header NAME -- locale- and
                 # wording-independent, unlike ldd's message.  The fork builds
                 # these musl-static, so there must be no program interpreter.
-                readelf -l "$dst" > readelf.out
-                ! grep -q INTERP readelf.out \
+                # A private temp file, not a fixed name in the workspace reused
+                # across loop iterations.
+                rl=$(mktemp)
+                readelf -l "$dst" > "$rl"
+                ! grep -q INTERP "$rl" \
                   || { echo "::error::$asset is dynamically linked"; exit 1; }
+                rm -f "$rl"
                 ;;
               *-darwin)
                 # macOS has no static libSystem; "static enough" means nothing
@@ -136,16 +172,55 @@ jobs:
             esac
           done
 
-          # Self-reported versions.  On x86_64-cygwin these are Cygwin-ABI
-          # binaries needing cygwin1.dll, which lives in the base isabelle
-          # package and not on this runner -- the fork's win-64 leg asserted
-          # both under Isabelle's own Cygwin before attaching them.
-          if [ "$ISA_PLATFORM" = "x86_64-cygwin" ]; then
-            echo "x86_64-cygwin: version assertions were made by the fork's win-64 release leg"
-          else
-            "$RECIPE_DIR/nunchaku-bin" --version | grep -q " ${{ inputs.version }} "
+          # ---------------------------------------------------------------
+          # the version record, asserted -- on ALL FIVE legs
+          # ---------------------------------------------------------------
+          # versions-<platform>.txt is written by the fork's release-smoke.sh on
+          # the leg itself, under that platform's own runtime, and attached with
+          # the binaries.  On the four unix legs this cross-checks assertions
+          # that also run directly (here, and again in the recipe's build
+          # script).  On x86_64-cygwin it is the ONLY binding there is: those two
+          # binaries are Cygwin-ABI, they need cygwin1.dll from the base
+          # `isabelle` package, and no runner in this repository has it -- so
+          # without this file the entire content check on them is the two bytes
+          # "MZ" above.
+          tag_sha=$(git ls-remote https://github.com/xqyww123/nunchaku.git \
+                      "refs/tags/v$VERSION^{}" | cut -f1)
+          [ -n "$tag_sha" ] \
+            || { echo "::error::annotated tag v$VERSION not found upstream"; exit 1; }
+          echo "TAG_SHA=$tag_sha" >> "$GITHUB_ENV"
+
+          vf="$RUNNER_TEMP/versions-$ISA_PLATFORM.txt"
+          curl -fsSL -o "$vf" "$base/versions-$ISA_PLATFORM.txt"
+          echo "===== versions-$ISA_PLATFORM.txt ====="; cat "$vf"
+          nun_line=$(sed -n 's/^nunchaku-bin --version: //p' "$vf")
+          smbc_line=$(sed -n 's/^smbc-bin --version: //p' "$vf")
+          # "nunchaku <version> <40-hex>" -- src/main/dune generates
+          # GitVersion.ml from `git rev-parse HEAD`.
+          # Deliberately unquoted: the line is being split into its three fields.
+          # shellcheck disable=SC2086
+          set -- $nun_line
+          if [ "$#" -ne 3 ] || [ "$1" != nunchaku ]; then
+            echo "::error::unreadable nunchaku version line: '$nun_line'"; exit 1
+          fi
+          [ "$2" = "$VERSION" ] \
+            || { echo "::error::the fork's $ISA_PLATFORM leg built version $2, not $VERSION"; exit 1; }
+          [ "$3" = "$tag_sha" ] \
+            || { echo "::error::the fork's $ISA_PLATFORM binary was built from $3, not from tag v$VERSION ($tag_sha)"; exit 1; }
+          [ "$smbc_line" = "version: $SMBC_VERSION" ] \
+            || { echo "::error::the fork's $ISA_PLATFORM leg bundled smbc '$smbc_line', expected 'version: $SMBC_VERSION'"; exit 1; }
+          echo "  OK  $ISA_PLATFORM: nunchaku $VERSION @ $tag_sha, smbc $SMBC_VERSION"
+
+          # Executing the binaries adds nothing on win-64 (see above) and is a
+          # direct check on the other four.
+          if [ "$ISA_PLATFORM" != "x86_64-cygwin" ]; then
+            "$RECIPE_DIR/nunchaku-bin" --version > nun-version.txt
+            grep -Fqx "$nun_line" nun-version.txt \
+              || { echo "::error::the staged binary reports '$(cat nun-version.txt)', not the attached record '$nun_line'"; exit 1; }
             "$RECIPE_DIR/nunchaku-bin" --help > /dev/null
-            "$RECIPE_DIR/smbc-bin" --version 2>&1 | grep -q '0\.6\.1'
+            "$RECIPE_DIR/smbc-bin" --version > smbc-version.txt 2>&1
+            grep -Fqx "version: $SMBC_VERSION" smbc-version.txt \
+              || { echo "::error::staged smbc reports '$(cat smbc-version.txt)', expected version: $SMBC_VERSION"; exit 1; }
           fi
 
       - name: Install rattler-build
@@ -174,6 +249,8 @@ jobs:
           find out -name '*.conda' -print
 
       - name: "Sanity: layout, hooks, version injection, dependency bound"
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           pkg=$(find out -name 'isabelle-nunchaku-*.conda' | head -1)
@@ -192,16 +269,25 @@ jobs:
                   tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])
           PY
 
-          # the packaged tree must be the live tag's commit.  `^{}` is the
-          # PEELED ref, which only ANNOTATED tags have -- a lightweight
-          # v<version> fails here with "tag not found upstream", which is the
-          # intended prompt to re-tag with `git tag -a`.
-          tag_sha=$(git ls-remote https://github.com/xqyww123/nunchaku.git \
-                      "refs/tags/v${{ inputs.version }}^{}" | cut -f1)
-          [ -n "$tag_sha" ] || { echo "::error::annotated tag v${{ inputs.version }} not found upstream"; exit 1; }
+          # info/recipe/ cleanliness.  rattler-build copies the recipe directory
+          # into the package, honouring the enclosing git work tree's ignore
+          # rules -- so this rests on two things nothing used to record:
+          # conda/components/isabelle-nunchaku/.gitignore, and the build
+          # happening inside a checkout.  Measured 2026-08-25: with both, three
+          # yaml files; with either missing, the two staged binaries as well --
+          # a second compressed copy of ~20 MB in each of the five packages.
+          find "$work/info/recipe" -type f | sort
+          stray=$(find "$work/info/recipe" -type f ! -name '*.yaml' | head -5)
+          [ -z "$stray" ] \
+            || { echo "::error::info/recipe carries non-yaml files (a lost .gitignore line, or a build outside a git checkout):"; echo "$stray"; exit 1; }
 
-          WORK="$work" PLAT="$ISA_PLATFORM" SUBDIR="$SUBDIR" \
-          VERSION="${{ inputs.version }}" TAG_SHA="$tag_sha" python3 - <<'PY'
+          # The peeled tag was resolved and asserted in the staging step; TAG_SHA
+          # comes from there rather than being resolved a second time, so the
+          # binaries and the packaged tree are checked against ONE value.
+          # (`^{}` is the PEELED ref, which only ANNOTATED tags have -- a
+          # lightweight v<version> fails there with "tag not found upstream",
+          # which is the intended prompt to re-tag with `git tag -a`.)
+          WORK="$work" PLAT="$ISA_PLATFORM" SUBDIR="$SUBDIR" python3 - <<'PY'
           import json, os, pathlib, re
 
           work = pathlib.Path(os.environ["WORK"])
@@ -236,7 +322,7 @@ jobs:
                       f"solvers/cvc5{exe}", f"solvers/smbc{exe}"]:
               if not (comp / plat / rel).is_file():
                   die(f"{plat}/{rel} is not in the payload")
-          for rel in ["LICENSE", "LICENSE-cvc5"]:
+          for rel in ["LICENSE", "LICENSE-cvc5", "LICENSE-smbc"]:
               if not (comp / rel).is_file():
                   die(f"{rel} is not in the payload")
 
@@ -264,7 +350,9 @@ jobs:
           idx = json.loads((work / "info" / "index.json").read_text())
           deps = idx.get("depends", [])
           print("depends =", deps)
-          names = sorted(re.split(r"[ <>=!]", d, 1)[0] for d in deps)
+          # maxsplit by keyword: passing it positionally is deprecated since
+          # python 3.13 (the runners are on 3.12 today).
+          names = sorted(re.split(r"[ <>=!]", d, maxsplit=1)[0] for d in deps)
           if names != ["isabelle"]:
               die(f"expected exactly the isabelle series bound, got {deps}")
           if idx.get("subdir") != subdir:
@@ -293,6 +381,7 @@ jobs:
         with:
           pattern: nunchaku-*
           path: ${{ runner.temp }}/legs
+      - uses: actions/checkout@v4
       - name: Merge into <subdir>/ layout
         run: |
           set -euo pipefail
@@ -305,12 +394,29 @@ jobs:
           done
           echo "===== merged ====="
           find "$RUNNER_TEMP/merged" -name '*.conda' | sort
+
+          # The expected subdir list comes from the BUILD MATRIX in this same
+          # file, read out of it rather than restated: it used to be a literal
+          # `linux-64 linux-aarch64 osx-64 osx-arm64 win-64` here plus a literal
+          # `5`, a third and fourth copy of a list that also lives in the matrix
+          # and in the recipe's own PLATFORMS table.  (Those first two duplicate
+          # deliberately -- the sanity step cross-checks them, and a cross-check
+          # needs two independent statements.  These two bought nothing.)
+          expected=$(python3 - <<'PY'
+          import re, yaml
+          w = yaml.safe_load(open(".github/workflows/release-nunchaku.yml"))
+          rows = w["jobs"]["build"]["strategy"]["matrix"]["target"]
+          print(" ".join(sorted(r["subdir"] for r in rows)))
+          PY
+          )
+          echo "the matrix names: $expected"
           n=$(find "$RUNNER_TEMP/merged" -name '*.conda' | wc -l)
-          # Exactly five, one per platform.  A partial publish is the failure
-          # this catches: fail-fast is off, so a red leg leaves four good
+          # One per platform, no more and no fewer.  A partial publish is the
+          # failure this catches: fail-fast is off, so a red leg leaves four good
           # packages that would otherwise go out as if the release were whole.
-          [ "$n" -eq 5 ] || { echo "::error::expected exactly 5 packages, found $n"; exit 1; }
-          for sub in linux-64 linux-aarch64 osx-64 osx-arm64 win-64; do
+          want=$(echo "$expected" | wc -w)
+          [ "$n" -eq "$want" ] || { echo "::error::expected exactly $want packages, found $n"; exit 1; }
+          for sub in $expected; do
             ls "$RUNNER_TEMP/merged/$sub"/*.conda > /dev/null \
               || { echo "::error::no package for $sub"; exit 1; }
           done
@@ -320,6 +426,12 @@ jobs:
           path: ${{ runner.temp }}/merged/**/*.conda
           if-no-files-found: error
 
+  # RECOVERY, if this job fails partway: re-run FAILED JOBS, or bump
+  # build_number.  A fresh dispatch does NOT substitute -- it rebuilds, and a
+  # rebuilt .conda is not byte-identical (info/index.json carries a timestamp),
+  # so the channel's content-comparing immutability guard correctly refuses it
+  # and the re-dispatch dead-ends.  Same rule as RELEASE_CHECKLIST.md section 9
+  # item 4.
   publish:
     needs: collect
     if: ${{ !inputs.dry_run }}
@@ -350,16 +462,36 @@ jobs:
         # `conda` on PATH via the profile a login shell sources.
         shell: bash -l {0}
     steps:
+      - uses: actions/checkout@v4
       - uses: conda-incubator/setup-miniconda@v3
         with:
+          # ubuntu-24.04-arm, macos-15 and macos-15-intel ship NO conda.  Checked
+          # 2026-08-25 against actions/runner-images: the arm64 Ubuntu image's
+          # README has an EMPTY `CONDA` row, and neither macOS 15 README mentions
+          # conda at all, while the x64 Ubuntu and Windows images do ship
+          # Miniconda.  Without this the action keeps useBundled, resolves its
+          # base path to an empty $CONDA and throws "No installed conda 'base'
+          # environment found" (setup-miniconda src/setup.ts) -- i.e. three of
+          # the five smoke legs could never start.  The one other workflow here
+          # with an ARM smoke leg (release.yml) already spells it this way; the
+          # bare spelling was copied from two ubuntu-latest-only jobs.
+          miniforge-version: latest
           auto-update-conda: true
-          python-version: "3.12"
+          # No python-version: the job immediately creates its own `smoke`
+          # environment and never uses setup-miniconda's base.
+
+      # The two solver versions asserted below, from the recipe's context via
+      # the fork's solvers.pins -- not literals.  See the build job.
+      - name: Read the solver pins
+        run: .github/scripts/nunchaku-pins.sh >> "$GITHUB_ENV"
 
       - name: Install and verify the component end-to-end
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           conda create -y -n smoke -c https://conda.qiyuan.me -c conda-forge \
-            "isabelle-nunchaku=${{ inputs.version }}"
+            "isabelle-nunchaku=$VERSION"
           conda activate smoke
           comp="$CONDA_PREFIX/share/isabelle-nunchaku"
           # Windows puts the entry point in Scripts/, everyone else in bin/.
@@ -381,9 +513,11 @@ jobs:
           # (win-crlf-hunt) about that class of defect.
           getenv () { "$ISA" getenv -b "$1" | tr -d '\r'; }
 
+          # This half is sound and non-vacuous: measured, the base distribution
+          # answers 0.5, so 0.5.3 is unreachable without a real registration.
           v_now=$(getenv NUNCHAKU_VERSION)
-          [ "$v_now" = "${{ inputs.version }}" ] \
-            || { echo "::error::NUNCHAKU_VERSION is '$v_now', expected ${{ inputs.version }}"; exit 1; }
+          [ "$v_now" = "$VERSION" ] \
+            || { echo "::error::NUNCHAKU_VERSION is '$v_now', expected $VERSION"; exit 1; }
           nun_home=$(getenv NUNCHAKU_HOME)
           echo "NUNCHAKU_HOME=$nun_home"
           # The settings point at the one platform directory this package ships,
@@ -398,27 +532,66 @@ jobs:
               || { echo "::error::$plat/$rel is missing from the installed component"; exit 1; }
           done
 
+          # Redirect and then grep the file, never `prog | grep -q`: grep exits
+          # on the first match and a still-writing producer dies of SIGPIPE,
+          # which under `set -o pipefail` fails the step.  The versions come
+          # from the pins, never from a literal here.
           if [ "$plat" = "x86_64-cygwin" ]; then
-            # cvc5 is a native Windows binary and runs here; nunchaku-bin and
+            # cvc5 is a native Windows binary and runs here.  nunchaku-bin and
             # smbc are Cygwin-ABI and need the isabelle package's own Cygwin,
-            # which is not what a Git-Bash step provides.  They were run under
-            # exactly that Cygwin, in this component's layout, by the fork's
-            # win-64 release leg.
-            "$comp/$plat/solvers/cvc5.exe" --version | head -1 | grep -q 'cvc5 1.3.4'
+            # which a Git-Bash step is not; the fork's win-64 release leg runs
+            # them under exactly that Cygwin and records the result in
+            # versions-x86_64-cygwin.txt, which the build job asserted against
+            # the release tag before packaging.  The one thing still not
+            # measured anywhere is the INSTALLED wrapper on Windows resolving
+            # its two solvers -- RELEASE_CHECKLIST.md section 9 step 5 schedules
+            # that measurement inside the dry-run window, and the invocation
+            # gets folded in here once it has been made.
+            "$comp/$plat/solvers/cvc5.exe" --version > cvc5-version.txt
           else
             "$comp/$plat/nunchaku" --help > /dev/null
-            "$comp/$plat/solvers/cvc5" --version | head -1 | grep -q 'cvc5 1.3.4'
-            "$comp/$plat/solvers/smbc" --version 2>&1 | grep -q '0\.6\.1'
+            "$comp/$plat/solvers/cvc5" --version > cvc5-version.txt
+            "$comp/$plat/solvers/smbc" --version > smbc-version.txt 2>&1
+            grep -Fqx "version: $SMBC_VERSION" smbc-version.txt \
+              || { echo "::error::installed smbc reports '$(head -1 smbc-version.txt)', expected version: $SMBC_VERSION"; exit 1; }
           fi
+          # -F and the trailing space: the measured line is
+          # "cvc5 1.3.4 [git f3b21c4 on branch HEAD]", and `grep 'cvc5 1.3.4'`
+          # with unescaped dots also matches `cvc5 1x3y4` and `cvc5 1.3.44`.
+          grep -Fq "cvc5 $CVC5_VERSION " cvc5-version.txt \
+            || { echo "::error::installed cvc5 reports '$(head -1 cvc5-version.txt)', expected cvc5 $CVC5_VERSION"; exit 1; }
 
-          # The uninstall half of the design: removing the package must close
-          # the version gate, non-vacuously.  NUNCHAKU_VERSION afterwards is
-          # whatever the base distribution leaves -- since scripts/pack.sh
-          # unregisters the dead contrib/nunchaku-0.5, that is the empty string
-          # rather than "0.5"; either way it must not still be this release.
-          conda remove -y isabelle-nunchaku
-          v_after=$(getenv NUNCHAKU_VERSION || true)
-          [ "$v_after" != "${{ inputs.version }}" ] \
-            || { echo "::error::NUNCHAKU_VERSION still ${{ inputs.version }} after conda remove"; exit 1; }
-          echo "after remove: NUNCHAKU_VERSION='$v_after'"
+          # ---------------------------------------------------------------
+          # the uninstall half: READ the registration, never infer it
+          # ---------------------------------------------------------------
+          # The check that used to stand here compared NUNCHAKU_VERSION before
+          # and after, and could not fail.  Two independent reasons, both
+          # measured 2026-08-25:
+          #
+          #   * `conda remove` deletes share/isabelle-nunchaku/etc/settings
+          #     whether or not the pre-unlink ran, so NUNCHAKU_VERSION stops
+          #     being this release UNCONDITIONALLY -- measured v_after='0.5'
+          #     with the registration still sitting in etc/components, after
+          #     which every later `isabelle` call prints "### Missing Isabelle
+          #     component: ...".  A package shipping NO .bat pre-unlink at all
+          #     passed that check.
+          #   * without --force, conda prunes base `isabelle` as an orphaned
+          #     dependency (conda 25.11.1), and ITS pre-unlink deletes the
+          #     namespaced ISABELLE_HOME_USER -- after which $ISA does not
+          #     exist, `getenv` fails, `|| true` swallows it, and the assertion
+          #     passes on an empty string produced by a missing interpreter.
+          #
+          # (The old comment here also claimed NUNCHAKU_VERSION falls back to
+          # the empty string because scripts/pack.sh unregisters the dead
+          # contrib/nunchaku-0.5.  Measured against both the Isabelle2025-2
+          # distribution and the published isabelle 2025.2: it is `0.5`.)
+          comps="$(getenv ISABELLE_HOME_USER)/etc/components"
+          # On Windows `isabelle getenv` answers /cygdrive/c/...; Git-Bash needs /c/...
+          case "$comps" in /cygdrive/*) comps="/${comps#/cygdrive/}" ;; esac
+          echo "components file: $comps"
+          grep -qF "share/isabelle-nunchaku" "$comps" \
+            || { echo "::error::post-link did not register the component in $comps"; exit 1; }
+          conda remove -y --force isabelle-nunchaku
+          ! grep -qF "share/isabelle-nunchaku" "$comps" \
+            || { echo "::error::pre-unlink left a stale registration in $comps"; exit 1; }
           echo "smoke OK"

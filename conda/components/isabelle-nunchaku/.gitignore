@@ -1,3 +1,10 @@
+# Not only tidiness: rattler-build copies this directory into the built
+# package's info/recipe/, honouring the enclosing git work tree's ignore rules.
+# Measured 2026-08-25 -- without these three lines (or when building outside a
+# git checkout) info/recipe/ also carries both staged binaries, a second
+# compressed copy of ~20 MB in each of the five packages.  release-nunchaku.yml
+# asserts info/recipe holds nothing but *.yaml, so a lost line here is a red
+# leg rather than a silent doubling.
 nunchaku-bin
 smbc-bin
 *.sha256.txt

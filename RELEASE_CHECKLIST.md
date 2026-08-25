@@ -378,12 +378,38 @@ One recipe per platform tag. Record why we carry it and when to drop it.
 
    1. **Rehearse the fork, before any tag exists.**
       `gh workflow run build --repo xqyww123/nunchaku --ref main` — `main.yml` has
-      `workflow_dispatch`, and both release job families run on a dispatch. This is the
-      *first* execution of the five release legs in their current form, and it is what
-      proves the things no local check can: `dune runtest` with the three hermetic
-      suites on macOS and under Isabelle's Cygwin, the musl-static link of **both**
-      binaries, `git` plus the pinned-commit smbc build inside Isabelle's Cygwin, and
-      `.exe`-appending end to end on win-64. Do not tag until both families are green.
+      `workflow_dispatch`, and both release job families **and the `release-assets`
+      job's collect step** run on a dispatch. This is the *first* execution of the five
+      release legs in their current form, and it is what proves the things no local
+      check can: `dune runtest` with the three hermetic suites on macOS and under
+      Isabelle's Cygwin, the musl-static link of **both** binaries, `git` plus the
+      pinned-commit smbc build inside Isabelle's Cygwin, `.exe`-appending end to end on
+      win-64, and — since the collect step is deliberately *not* tag-gated — that all
+      five legs really produced their three files and that the twenty-five contracted
+      names are exactly assemblable from them, including
+      `versions-x86_64-cygwin.txt`. Read that job's log, not just its check mark: it
+      prints all five version records. Do not tag until every job is green.
+
+      **What step 1 still does not reach.** The second step of `release-assets` —
+      `release-attach.sh publish` — needs a tag and a release object, so it sits behind
+      `if: startsWith(github.ref, 'refs/tags/v')` and **its first execution is the tag
+      push itself**. Unexecuted until then: `gh release create <tag> --draft`, `gh
+      release upload --clobber`, the `gh api .../releases` reads that count the release
+      objects carrying the tag and then diff the release's asset list against the
+      twenty-five names, the `PATCH .../releases/<id> draft=false` that un-drafts it,
+      and the `VERSION`-file-versus-tag check (there is no tag to compare against on a
+      dispatch). What those calls might get *wrong* is asserted at runtime rather than
+      assumed — `publish` counts the release objects before creating and again after,
+      and refuses to upload unless the count is exactly one, then re-reads the release
+      and refuses to un-draft unless it carries exactly the contracted names — but the
+      calls themselves have not run.
+
+      A throwaway pre-release tag on the **fork** is the only way to rehearse
+      `publish`. The objection to throwaway tags recorded at `main.yml:12-18` is about the
+      *packaging* half — the recipe asserts the fork's `VERSION` file against the
+      dispatched version — and does not apply to the fork's own release-assets job.
+      To see the contract without running anything:
+      `.github/scripts/release-attach.sh --list <isabelle-platform>`.
    2. **Tag** `v<VERSION>` on `xqyww123/nunchaku`, **annotated** — `git tag -a`, never a
       lightweight tag. The provenance check in `release-nunchaku.yml` resolves the tag
       with `git ls-remote … "refs/tags/v<VERSION>^{}"`, and that peeled ref exists only
@@ -394,14 +420,21 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       moving the tag.** A moved tag makes `git ls-remote …^{}` name a different commit
       than the already-attached assets were built from, and the fork attaches with
       `--clobber`, so the difference would be hidden rather than caught.
-   3. **Wait for the fork's `release-gate` job.** Every release leg creates
-      `v<VERSION>` as a **draft** and attaches its own five files:
+   3. **Wait for the fork's `release-assets` job.** The five release legs do not touch
+      the release at all — they upload run artifacts. `release-assets` then runs once,
+      on one runner, and assembles each platform's five files:
       `nunchaku-bin-<isabelle-platform>`, `smbc-bin-<isabelle-platform>`, a `.sha256`
       for each, and `versions-<isabelle-platform>.txt` — where `<isabelle-platform>` is
       one of `x86_64-linux`, `arm64-linux`, `x86_64-darwin`, `arm64-darwin`,
       `x86_64-cygwin`. **Twenty-five assets: ten binaries, ten sidecars, five version
-      records.** The `release-gate` job diffs the release's asset list against that
-      contract and only then runs `gh release edit --draft=false`.
+      records.** It creates `v<VERSION>` as a **draft**, uploads, re-reads the release
+      and diffs its asset list against that contract, and only then un-drafts it.
+
+      There is exactly one `gh release create` in that workflow because there is
+      exactly one job that runs it, and `publish` still counts the release objects
+      carrying the tag before and after creating — so "five legs each raced to create
+      the release, and we assumed the loser's create was a no-op" is not a thing that
+      can happen, and is not a thing anyone has to believe.
 
       **Do not dispatch packaging until the release is out of draft.** A draft release
       is not served at `releases/download/…`, which is the URL

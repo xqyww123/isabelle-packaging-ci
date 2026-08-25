@@ -29,9 +29,10 @@
 # NOTE dry_run DEFAULTS TO TRUE: a bare dispatch builds and validates but
 # publishes nothing.
 #
-# DO NOT DISPATCH UNTIL THE FORK'S RELEASE IS OUT OF DRAFT.  The fork's legs
-# create v<version> as a draft and its release-gate job asserts all twenty-five
-# assets before un-drafting; a draft release is NOT served at
+# DO NOT DISPATCH UNTIL THE FORK'S RELEASE IS OUT OF DRAFT.  The fork's
+# release-assets job creates v<version> as a draft, uploads all twenty-five
+# assets, asserts that the release carries exactly them, and only then
+# un-drafts; a draft release is NOT served at
 # releases/download/..., so every leg here would 404 in its staging step, five
 # legs deep, looking like "the fork's CI is broken".  The full six-step run plan
 # is RELEASE_CHECKLIST.md section 9.
@@ -209,9 +210,23 @@ jobs:
             echo "::error::unreadable nunchaku version line: '$nun_line'"; exit 1
           fi
           [ "$2" = "$VERSION" ] \
-            || { echo "::error::the fork's $ISA_PLATFORM leg built version $2, not $VERSION"; exit 1; }
+            || { echo "::error::the fork's $ISA_PLATFORM leg built version '$2', not '$VERSION'"; exit 1; }
+          # Shape before comparison, and both values QUOTED in the message.
+          # Without the shape check a CR at the end of the record (a CRLF
+          # checkout on the win-64 leg) prints two shas that look identical:
+          # measured 2026-08-25, `built from ddcbdcf... , not from tag v0.5.3
+          # (ddcbdcf...)`.  The fork asserts the same shape where the record is
+          # written (release-smoke.sh); this is the reading end of it.
+          case "$3" in
+            *[!0123456789abcdef]*) hex=no ;;
+            *)                     hex=yes ;;
+          esac
+          if [ "$hex" != yes ] || [ "${#3}" -ne 40 ]; then
+            echo "::error::the record's commit field is not 40 lowercase hex; it is ${#3} characters: '$3'"
+            exit 1
+          fi
           [ "$3" = "$tag_sha" ] \
-            || { echo "::error::the fork's $ISA_PLATFORM binary was built from $3, not from tag v$VERSION ($tag_sha)"; exit 1; }
+            || { echo "::error::the fork's $ISA_PLATFORM binary was built from '$3', not from tag v$VERSION ('$tag_sha')"; exit 1; }
           [ "$smbc_line" = "version: $SMBC_VERSION" ] \
             || { echo "::error::the fork's $ISA_PLATFORM leg bundled smbc '$smbc_line', expected 'version: $SMBC_VERSION'"; exit 1; }
           echo "  OK  $ISA_PLATFORM: nunchaku $VERSION @ $tag_sha, smbc $SMBC_VERSION"
@@ -411,7 +426,9 @@ jobs:
           # rather than bet the gate on it.  Parsing the YAML, not grepping it:
           # a regex over the matrix would keep working until someone reformats
           # the block and then silently return an empty list.
-          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 -c "import yaml" 2>/dev/null \
+            || python3 -m pip install --quiet pyyaml \
+            || python3 -m pip install --quiet --break-system-packages pyyaml
           expected=$(python3 - <<'PY'
           import yaml
           w = yaml.safe_load(open(".github/workflows/release-nunchaku.yml"))

@@ -1,3 +1,11 @@
+# Shell scripts are checked out with LF everywhere.  release-nunchaku.yml runs
+# .github/scripts/*.sh from a `bash -l {0}` step on windows-latest (Git-Bash),
+# and a CRLF `set -euo pipefail\r` fails that shell before it does anything.
+# Today the runner leaves core.autocrlf off, so the leg is green -- but that is
+# a runner-image default, not a guarantee.
+*.sh text eol=lf
+
 # The Windows launcher must ship BYTE FOR BYTE: it is CRLF and was verified as-is
-# on a real Windows VM.  Never let git normalise it.
+# on a real Windows VM.  Never let git normalise it.  LAST, so it wins over any
+# rule above.
 *.bat -text

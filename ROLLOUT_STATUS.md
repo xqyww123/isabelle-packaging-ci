@@ -30,10 +30,12 @@ has a PyPI presence.
 | `isabelle-nunchaku` | 0.5.2 | component, **linux-64 only** — binaries come from the `xqyww123/nunchaku` fork's release, not built here |
 
 `isabelle-nunchaku` is the one package still published on a single subdir. 0.5.3 changes
-that: the fork's CI builds nunchaku **and the smbc 0.6.1 the component now bundles** on
-all five platforms and attaches ten release assets, and `release-nunchaku.yml` builds the
-five subdirs on native runners. Until 0.5.3 is published this row stays at 0.5.2 /
-linux-64.
+that: the fork's CI builds nunchaku **and the smbc the component now bundles** on all five
+platforms and attaches twenty-five release assets (ten binaries, ten `.sha256` sidecars,
+five `versions-<platform>.txt` records), and `release-nunchaku.yml` builds the five subdirs
+on native runners. Which solver versions and which bytes is not restated here — it is
+`component/solvers.pins` in the fork, and both repositories assert against that one file.
+Until 0.5.3 is published this row stays at 0.5.2 / linux-64.
 
 **The rollout is complete.** Every package in the original plan is published, and every one
 of them has been installed from the live channel on Linux and on Windows.

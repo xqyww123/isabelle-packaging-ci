@@ -427,7 +427,8 @@ build:
           # those digests after the artifact round trip and re-uses the same hex
           # under the released names; release-nunchaku.yml's staging step
           # verifies that sidecar again after downloading from the release, and
-          # checks the two bytes `MZ`.  So build -> artifact -> release ->
+          # checks the PE machine field and the architecture table above.  So
+          # build -> artifact -> release ->
           # packaging is covered by digest at every hop; what no digest can say
           # is whether the bytes RUN, and that is what the run plan's
           # installed-wrapper step on a real Windows box is for.

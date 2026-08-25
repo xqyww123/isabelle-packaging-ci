@@ -469,9 +469,15 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       reports `found 0` release objects for the tag, the create it just made was
       not visible to the listing that followed it: nothing was uploaded, and
       each further re-run leaves one more orphan draft. Delete the orphans by
-      hand and re-run once; if `found 0` repeats, the API is not showing drafts
-      to this token and the release must be created by hand as a draft before
-      re-running. If it reports `found 2`, delete the stray by hand:
+      hand and re-run once. If `found 0` repeats, do **not** create a draft by hand
+      and re-run: `publish` decides whether to create by counting what the
+      listing returns, so a listing that does not show it the hand-made draft
+      will make one more (measured: one orphan in, two orphans out, same
+      error). Finish that release by hand instead — upload the twenty-five
+      names (`release-attach.sh --list <platform>` in the fork's checkout
+      prints them) to the object you made and take it out of draft — and then
+      re-run: `publish` finds it, sees the full contract, and exits 0 with
+      nothing to do (measured). If it reports `found 2`, delete the stray by hand:
       it refuses while there are two, and will not choose between them.  With
       exactly one it adopts that one rather than creating another (measured:
       zero `gh release create` calls on `found 1`), so a re-run is safe there. **A published release is never overwritten in place.** If it

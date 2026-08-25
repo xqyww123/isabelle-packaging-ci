@@ -27,6 +27,13 @@ has a PyPI presence.
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
 | `isabelle-semantic-embedding` | 0.2.0 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.2.0 (lockstep) |
 | `isabelle-ai` | 0.1.0 | noarch generic, **metapackage** — minilang + mcp, no files of its own |
+| `isabelle-nunchaku` | 0.5.2 | component, **linux-64 only** — binaries come from the `xqyww123/nunchaku` fork's release, not built here |
+
+`isabelle-nunchaku` is the one package still published on a single subdir. 0.5.3 changes
+that: the fork's CI builds nunchaku **and the smbc 0.6.1 the component now bundles** on
+all five platforms and attaches ten release assets, and `release-nunchaku.yml` builds the
+five subdirs on native runners. Until 0.5.3 is published this row stays at 0.5.2 /
+linux-64.
 
 **The rollout is complete.** Every package in the original plan is published, and every one
 of them has been installed from the live channel on Linux and on Windows.

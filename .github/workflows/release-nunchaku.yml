@@ -2,17 +2,25 @@
 #
 # The release chain (NUNCHAKU_FORK_PLAN.md in the MLML workspace): the fork
 # xqyww123/nunchaku is tagged v<version> (VERSION file = single source); its CI
-# builds the musl-static binary, smokes it against the exact Isabelle frontend
-# flag table, and attaches it to the GitHub release as
-# `nunchaku-bin-x86_64-linux`.  This workflow stages that asset next to the
-# recipe, rattler-builds the component package (recipe:
-# conda/components/isabelle-nunchaku/recipe.yaml -- it pulls the fork at the
-# tag and the sha256-pinned static cvc5 itself), sanity-checks the layout, and
-# publishes through the shared publish path.  linux-64 only, by design.
+# builds, on each of five platforms, the nunchaku binary and the smbc 0.6.1 the
+# component bundles, smokes the assembled component against the exact Isabelle
+# frontend flag table, and attaches both to the GitHub release as
+# `nunchaku-bin-<isabelle-platform>` and `smbc-bin-<isabelle-platform>` (plus
+# .sha256 for each).  This workflow stages that platform's pair next to the
+# recipe, rattler-builds the component package on a native runner (the recipe
+# runs the binaries it packages, so it cannot cross-build), sanity-checks the
+# layout, and publishes all five subdirs through the shared publish path.
+#
+#   conda subdir    Isabelle platform   runner
+#   linux-64        x86_64-linux        ubuntu-latest
+#   linux-aarch64   arm64-linux         ubuntu-24.04-arm
+#   osx-64          x86_64-darwin       macos-15-intel
+#   osx-arm64       arm64-darwin        macos-15
+#   win-64          x86_64-cygwin       windows-latest
 #
 # Dispatch:
 #     gh workflow run release-nunchaku --repo xqyww123/isabelle-packaging-ci \
-#       -f version=0.5.1 -f dry_run=false
+#       -f version=0.5.3 -f dry_run=false
 # NOTE dry_run DEFAULTS TO TRUE: a bare dispatch builds and validates but
 # publishes nothing.
 #
@@ -41,32 +49,114 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: "isabelle-nunchaku ${{ matrix.target.subdir }}"
+    runs-on: ${{ matrix.target.runner }}
     timeout-minutes: 60
+    strategy:
+      # One platform's failure must not hide the others'; `collect` below
+      # refuses to publish unless all five arrived.
+      fail-fast: false
+      matrix:
+        # An object-valued key, NOT `include:`.  `include` entries whose keys do
+        # not appear in the base matrix are merged into every combination in
+        # order, each overwriting the last -- so five of them yield legs all
+        # wearing the LAST platform.  Measured in release-rocksdict, where the
+        # first run produced three win-64 legs.
+        target:
+          - {subdir: linux-64,      isa_platform: x86_64-linux,   runner: ubuntu-latest,    rattler: rattler-build-x86_64-unknown-linux-musl}
+          - {subdir: linux-aarch64, isa_platform: arm64-linux,    runner: ubuntu-24.04-arm, rattler: rattler-build-aarch64-unknown-linux-musl}
+          # macos-15-intel, not macos-13: the macos-13 label is retired, so
+          # those legs queue forever without ever being scheduled.
+          - {subdir: osx-64,        isa_platform: x86_64-darwin,  runner: macos-15-intel,   rattler: rattler-build-x86_64-apple-darwin}
+          - {subdir: osx-arm64,     isa_platform: arm64-darwin,   runner: macos-15,         rattler: rattler-build-aarch64-apple-darwin}
+          - {subdir: win-64,        isa_platform: x86_64-cygwin,  runner: windows-latest,   rattler: rattler-build-x86_64-pc-windows-msvc.exe}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ISA_PLATFORM: ${{ matrix.target.isa_platform }}
+      SUBDIR: ${{ matrix.target.subdir }}
+      RECIPE_DIR: conda/components/isabelle-nunchaku
     steps:
       - uses: actions/checkout@v4
 
-      - name: Stage the CI-built static binary from the fork release
+      - name: Stage this platform's CI-built binaries from the fork release
         run: |
           set -euo pipefail
           base="https://github.com/xqyww123/nunchaku/releases/download/v${{ inputs.version }}"
-          dst=conda/components/isabelle-nunchaku/nunchaku-bin
-          curl -fsSL -o "$dst" "$base/nunchaku-bin-x86_64-linux"
-          # release assets are mutable (same-name re-upload); pin by digest
-          curl -fsSL -o nunchaku-bin.sha256 "$base/nunchaku-bin-x86_64-linux.sha256"
-          echo "$(cut -d' ' -f1 nunchaku-bin.sha256)  $dst" | sha256sum -c
-          chmod +x "$dst"
-          # really static (INTERP is an ELF program-header name, locale-free),
-          # self-reports the release version, and answers --help
-          ! readelf -l "$dst" | grep -q INTERP
-          "$dst" --version | grep -q " ${{ inputs.version }} "
-          "$dst" --help > /dev/null
+
+          # macOS runners have no sha256sum; both tools print "<hash>  <name>".
+          sha256_check () {  # <expected-hash> <file>
+            if command -v sha256sum > /dev/null 2>&1; then
+              echo "$1  $2" | sha256sum -c
+            else
+              echo "$1  $2" | shasum -a 256 -c
+            fi
+          }
+
+          for stem in nunchaku-bin smbc-bin; do
+            asset="$stem-$ISA_PLATFORM"
+            dst="$RECIPE_DIR/$stem"
+            curl -fsSL -o "$dst" "$base/$asset"
+            # release assets are mutable (same-name re-upload); pin by digest
+            curl -fsSL -o "$dst.sha256.txt" "$base/$asset.sha256"
+            sha256_check "$(cut -d' ' -f1 "$dst.sha256.txt")" "$dst"
+            chmod +x "$dst"
+
+            # The link footprint that makes the artifact redistributable on this
+            # platform.  Same three checks the fork's own release legs run, from
+            # the other side of the handover.
+            case "$ISA_PLATFORM" in
+              *-linux)
+                # INTERP is an ELF program-header NAME -- locale- and
+                # wording-independent, unlike ldd's message.  The fork builds
+                # these musl-static, so there must be no program interpreter.
+                readelf -l "$dst" > readelf.out
+                ! grep -q INTERP readelf.out \
+                  || { echo "::error::$asset is dynamically linked"; exit 1; }
+                ;;
+              *-darwin)
+                # macOS has no static libSystem; "static enough" means nothing
+                # outside /usr/lib.  otool's first line is the file's own name.
+                rest=$(otool -L "$dst" | tail -n +2 | grep -v '/usr/lib/' || true)
+                [ -z "$rest" ] \
+                  || { echo "::error::$asset links outside /usr/lib:"; echo "$rest"; exit 1; }
+                ;;
+              *-cygwin)
+                # cygcheck is a Cygwin tool and this runner has no Cygwin; the
+                # fork's win-64 leg ran it there, under the runtime these
+                # binaries actually use.  What IS checkable here is that the
+                # payload is a PE at all, so a truncated download or an HTML
+                # error page fails loudly instead of being packaged.
+                python3 -c "import sys; sys.exit(0 if open(sys.argv[1],'rb').read(2)==b'MZ' else 1)" "$dst" \
+                  || { echo "::error::$asset is not a PE executable"; exit 1; }
+                ;;
+              *)
+                echo "::error::unhandled platform $ISA_PLATFORM"; exit 1 ;;
+            esac
+          done
+
+          # Self-reported versions.  On x86_64-cygwin these are Cygwin-ABI
+          # binaries needing cygwin1.dll, which lives in the base isabelle
+          # package and not on this runner -- the fork's win-64 leg asserted
+          # both under Isabelle's own Cygwin before attaching them.
+          if [ "$ISA_PLATFORM" = "x86_64-cygwin" ]; then
+            echo "x86_64-cygwin: version assertions were made by the fork's win-64 release leg"
+          else
+            "$RECIPE_DIR/nunchaku-bin" --version | grep -q " ${{ inputs.version }} "
+            "$RECIPE_DIR/nunchaku-bin" --help > /dev/null
+            "$RECIPE_DIR/smbc-bin" --version 2>&1 | grep -q '0\.6\.1'
+          fi
 
       - name: Install rattler-build
         run: |
           set -euo pipefail
+          # Mapped explicitly in the matrix; do NOT interpolate `uname -m`.
+          # rattler-build's assets say `aarch64` while macOS reports `arm64`,
+          # so the uname form 404s there while working by coincidence on
+          # linux-aarch64 -- a bug that shows up on one platform only.
           curl -fsSL -o rattler-build \
-            https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/rattler-build-x86_64-unknown-linux-musl
+            "https://github.com/prefix-dev/rattler-build/releases/download/v0.69.1/${{ matrix.target.rattler }}"
           chmod +x rattler-build
           ./rattler-build --version
 
@@ -76,8 +166,9 @@ jobs:
         run: |
           set -euo pipefail
           ./rattler-build build \
-            --recipe conda/components/isabelle-nunchaku/recipe.yaml \
+            --recipe "$RECIPE_DIR/recipe.yaml" \
             --output-dir out \
+            --target-platform "$SUBDIR" \
             --build-num "${{ inputs.build_number }}" \
             -c https://conda.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
@@ -87,7 +178,10 @@ jobs:
           set -euo pipefail
           pkg=$(find out -name 'isabelle-nunchaku-*.conda' | head -1)
           [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
-          python3 -m pip install --quiet zstandard
+          # macOS runners' system python is PEP 668 "externally managed", so a
+          # plain pip install fails there while working on linux and windows.
+          python3 -m pip install --quiet zstandard \
+            || python3 -m pip install --quiet --break-system-packages zstandard
           work=$(mktemp -d)
           python3 - "$pkg" "$work" <<'PY'
           import io, sys, tarfile, zipfile, zstandard
@@ -97,62 +191,137 @@ jobs:
                   r = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(member)))
                   tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])
           PY
-          comp="$work/share/isabelle-nunchaku"
-          grep -q "NUNCHAKU_VERSION=\"${{ inputs.version }}\"" "$comp/etc/settings" \
-            || { echo "::error::etc/settings does not carry NUNCHAKU_VERSION=${{ inputs.version }}"; exit 1; }
-          grep -Eq '^base [0-9a-f]{40}$' "$comp/COMMIT" \
-            || { echo "::error::COMMIT lacks the upstream base line"; exit 1; }
-          grep -Eq '^build [0-9a-f]{40}$' "$comp/COMMIT" \
-            || { echo "::error::COMMIT lacks the build line"; exit 1; }
-          # the packaged tree must be the live tag's commit
+
+          # the packaged tree must be the live tag's commit.  `^{}` is the
+          # PEELED ref, which only ANNOTATED tags have -- a lightweight
+          # v<version> fails here with "tag not found upstream", which is the
+          # intended prompt to re-tag with `git tag -a`.
           tag_sha=$(git ls-remote https://github.com/xqyww123/nunchaku.git \
                       "refs/tags/v${{ inputs.version }}^{}" | cut -f1)
-          [ -n "$tag_sha" ] || { echo "::error::tag v${{ inputs.version }} not found upstream"; exit 1; }
-          grep -q "^build $tag_sha\$" "$comp/COMMIT" \
-            || { echo "::error::COMMIT build sha does not match tag v${{ inputs.version }} ($tag_sha)"; exit 1; }
-          test -x "$comp/x86_64-linux/nunchaku"
-          test -x "$comp/x86_64-linux/nunchaku-bin"
-          test -x "$comp/x86_64-linux/solvers/cvc5"
-          test -f "$comp/LICENSE" && test -f "$comp/LICENSE-cvc5"
-          # exactly the two unix hooks -- this is a linux-64 package, a .bat
-          # would be dead weight and any other hook is a packaging bug
-          hooks=$(cd "$work" && find . \( -name '.*-post-link*' -o -name '.*-pre-unlink*' \) \
-                    | sed 's|^\./||' | LC_ALL=C sort)
-          expected=$(printf '%s\n' 'bin/.isabelle-nunchaku-post-link.sh' \
-                                   'bin/.isabelle-nunchaku-pre-unlink.sh' | LC_ALL=C sort)
-          if [ "$hooks" != "$expected" ]; then
-            echo "::error::unexpected link hooks"; printf 'got:\n%s\nexpected:\n%s\n' "$hooks" "$expected"; exit 1
-          fi
-          python3 - "$work" <<'PY'
-          import json, pathlib, re, sys
-          idx = json.loads((pathlib.Path(sys.argv[1]) / "info" / "index.json").read_text())
+          [ -n "$tag_sha" ] || { echo "::error::annotated tag v${{ inputs.version }} not found upstream"; exit 1; }
+
+          WORK="$work" PLAT="$ISA_PLATFORM" SUBDIR="$SUBDIR" \
+          VERSION="${{ inputs.version }}" TAG_SHA="$tag_sha" python3 - <<'PY'
+          import json, os, pathlib, re
+
+          work = pathlib.Path(os.environ["WORK"])
+          plat = os.environ["PLAT"]
+          subdir = os.environ["SUBDIR"]
+          version = os.environ["VERSION"]
+          tag_sha = os.environ["TAG_SHA"]
+          exe = ".exe" if plat.endswith("-cygwin") else ""
+          name = "isabelle-nunchaku"
+          comp = work / "share" / name
+
+          def die(msg):
+              raise SystemExit(f"::error::{msg}")
+
+          settings = (comp / "etc" / "settings").read_text()
+          if f'NUNCHAKU_VERSION="{version}"' not in settings:
+              die(f"etc/settings does not carry NUNCHAKU_VERSION={version}")
+          # The platform placeholder must have been substituted with THIS
+          # package's platform -- a package whose settings named another
+          # platform's directory would install and then find nothing.
+          if f'NUNCHAKU_HOME="$COMPONENT/{plat}"' not in settings:
+              die(f"etc/settings does not point NUNCHAKU_HOME at {plat}:\n{settings}")
+
+          commit = (comp / "COMMIT").read_text()
+          for line in ("base", "build"):
+              if not re.search(rf"^{line} [0-9a-f]{{40}}$", commit, re.M):
+                  die(f"COMMIT lacks the {line} line")
+          if f"build {tag_sha}" not in commit:
+              die(f"COMMIT build sha does not match tag v{version} ({tag_sha})")
+
+          for rel in ["nunchaku", f"nunchaku-bin{exe}",
+                      f"solvers/cvc5{exe}", f"solvers/smbc{exe}"]:
+              if not (comp / plat / rel).is_file():
+                  die(f"{plat}/{rel} is not in the payload")
+          for rel in ["LICENSE", "LICENSE-cvc5"]:
+              if not (comp / rel).is_file():
+                  die(f"{rel} is not in the payload")
+
+          # BOTH hook families, on EVERY subdir.  conda picks by the running
+          # platform and returns success in silence when the file is absent, so
+          # a .sh-only package installs cleanly on Windows and is never
+          # registered.  Four hooks, no more and no fewer: anything else is a
+          # packaging bug.
+          hooks = sorted(
+              str(p.relative_to(work)).replace("\\", "/")
+              for p in work.rglob(".*-post-link*")
+          ) + sorted(
+              str(p.relative_to(work)).replace("\\", "/")
+              for p in work.rglob(".*-pre-unlink*")
+          )
+          expected = sorted([f"bin/.{name}-post-link.sh",
+                             f"Scripts/.{name}-post-link.bat",
+                             f"bin/.{name}-pre-unlink.sh",
+                             f"Scripts/.{name}-pre-unlink.bat"])
+          if sorted(hooks) != expected:
+              die(f"unexpected link hooks\ngot:\n{sorted(hooks)}\nexpected:\n{expected}")
+          if b"\r\n" not in (work / "Scripts" / f".{name}-post-link.bat").read_bytes():
+              die("the .bat hook is not CRLF")
+
+          idx = json.loads((work / "info" / "index.json").read_text())
           deps = idx.get("depends", [])
           print("depends =", deps)
           names = sorted(re.split(r"[ <>=!]", d, 1)[0] for d in deps)
           if names != ["isabelle"]:
-              raise SystemExit(f"::error::expected exactly the isabelle series bound, got {deps}")
-          if idx.get("subdir") != "linux-64":
-              raise SystemExit(f"::error::expected linux-64, got {idx.get('subdir')}")
-          print("  OK  linux-64, unix hooks only, isabelle series bound")
+              die(f"expected exactly the isabelle series bound, got {deps}")
+          if idx.get("subdir") != subdir:
+              die(f"expected {subdir}, got {idx.get('subdir')}")
+          print(f"  OK  {subdir}, {plat} payload, four hooks, isabelle series bound")
           PY
 
-      - name: Lay the package out as <subdir>/*.conda for publish-conda.yml
+      # rattler-build already writes out/<subdir>/*.conda; `collect` flattens the
+      # per-leg artifacts into the single <subdir>/ tree publish-conda.yml takes.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nunchaku-${{ matrix.target.subdir }}
+          path: out/**/*.conda
+          if-no-files-found: error
+
+  # publish-conda.yml takes ONE artifact laid out as <subdir>/*.conda, so the
+  # per-leg artifacts are merged into that shape here rather than teaching the
+  # shared workflow about matrices.  Deliberately NOT gated on dry_run: the
+  # "all five subdirs arrived" assertion is exactly what a dry run is for, and
+  # uploading an artifact nobody publishes costs nothing.
+  collect:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nunchaku-*
+          path: ${{ runner.temp }}/legs
+      - name: Merge into <subdir>/ layout
         run: |
           set -euo pipefail
-          mkdir -p pkgs/linux-64
-          find out -name '*.conda' -exec cp {} pkgs/linux-64/ \;
-          n=$(find pkgs -name '*.conda' | wc -l)
-          [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 package, found $n"; exit 1; }
-          ls -l pkgs/linux-64/
-
+          mkdir -p "$RUNNER_TEMP/merged"
+          # each leg already contains out/<subdir>/<pkg>.conda; flatten one level
+          find "$RUNNER_TEMP/legs" -name '*.conda' | while read -r f; do
+            sub=$(basename "$(dirname "$f")")
+            mkdir -p "$RUNNER_TEMP/merged/$sub"
+            cp "$f" "$RUNNER_TEMP/merged/$sub/"
+          done
+          echo "===== merged ====="
+          find "$RUNNER_TEMP/merged" -name '*.conda' | sort
+          n=$(find "$RUNNER_TEMP/merged" -name '*.conda' | wc -l)
+          # Exactly five, one per platform.  A partial publish is the failure
+          # this catches: fail-fast is off, so a red leg leaves four good
+          # packages that would otherwise go out as if the release were whole.
+          [ "$n" -eq 5 ] || { echo "::error::expected exactly 5 packages, found $n"; exit 1; }
+          for sub in linux-64 linux-aarch64 osx-64 osx-arm64 win-64; do
+            ls "$RUNNER_TEMP/merged/$sub"/*.conda > /dev/null \
+              || { echo "::error::no package for $sub"; exit 1; }
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: conda-packages
-          path: pkgs/**/*.conda
+          path: ${{ runner.temp }}/merged/**/*.conda
           if-no-files-found: error
 
   publish:
-    needs: build
+    needs: collect
     if: ${{ !inputs.dry_run }}
     uses: ./.github/workflows/publish-conda.yml
     with:
@@ -163,10 +332,23 @@ jobs:
       CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
 
   smoke:
-    name: "Smoke: conda install from conda.qiyuan.me"
+    name: "Smoke: conda install from conda.qiyuan.me (${{ matrix.runner }})"
     needs: publish
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false          # one platform's failure must not hide the others
+      # One runner per published subdir.  windows-latest is mandatory, not
+      # optional: a win-64 registration failure is silent and cannot be inferred
+      # from a green Linux leg (RELEASE_CHECKLIST.md section 10, and the history
+      # in ROLLOUT_STATUS.md).
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15, windows-latest]
+    defaults:
+      run:
+        # bash -l (LOGIN shell), not plain bash: setup-miniconda only puts
+        # `conda` on PATH via the profile a login shell sources.
+        shell: bash -l {0}
     steps:
       - uses: conda-incubator/setup-miniconda@v3
         with:
@@ -174,24 +356,68 @@ jobs:
           python-version: "3.12"
 
       - name: Install and verify the component end-to-end
-        shell: bash -l {0}
         run: |
           set -euo pipefail
           conda create -y -n smoke -c https://conda.qiyuan.me -c conda-forge \
             "isabelle-nunchaku=${{ inputs.version }}"
           conda activate smoke
           comp="$CONDA_PREFIX/share/isabelle-nunchaku"
-          # the post-link hook registered the component with the base isabelle
-          "$CONDA_PREFIX/isa/bin/isabelle" getenv -b NUNCHAKU_VERSION | grep -qx "${{ inputs.version }}"
-          "$CONDA_PREFIX/isa/bin/isabelle" getenv -b NUNCHAKU_HOME | grep -qx "$comp/x86_64-linux"
-          # the wrapper runs, and its cvc5 satisfies the version floor
-          "$comp/x86_64-linux/nunchaku" --help > /dev/null
-          "$comp/x86_64-linux/solvers/cvc5" --version | head -1 | grep -q 'cvc5 1.3.4'
-          # the uninstall half of the design: removing the package must
-          # close the version gate (NUNCHAKU_VERSION falls back to the
-          # distribution's "0.5"), non-vacuously
+          # Windows puts the entry point in Scripts/, everyone else in bin/.
+          if [ -x "$CONDA_PREFIX/bin/isabelle" ]; then
+            ISA="$CONDA_PREFIX/bin/isabelle"
+          else
+            ISA="$CONDA_PREFIX/Scripts/isabelle.bat"
+          fi
+          echo "entry point: $ISA"
+
+          # The post-link hook registered the component with the base isabelle.
+          # This is the assertion that carries the whole Windows leg: read the
+          # registration, never infer it.
+          #
+          # `tr -d '\r'` on every reading: isabelle.bat's output reaches a
+          # Git-Bash step with CRLF line endings, and an exact-match assertion
+          # would fail on the carriage return alone -- a Windows-only red on a
+          # perfectly good package.  This repository has a whole probe workflow
+          # (win-crlf-hunt) about that class of defect.
+          getenv () { "$ISA" getenv -b "$1" | tr -d '\r'; }
+
+          v_now=$(getenv NUNCHAKU_VERSION)
+          [ "$v_now" = "${{ inputs.version }}" ] \
+            || { echo "::error::NUNCHAKU_VERSION is '$v_now', expected ${{ inputs.version }}"; exit 1; }
+          nun_home=$(getenv NUNCHAKU_HOME)
+          echo "NUNCHAKU_HOME=$nun_home"
+          # The settings point at the one platform directory this package ships,
+          # and that directory is really there with both bundled solvers in it.
+          case "$nun_home" in
+            *"/share/isabelle-nunchaku/"*) ;;
+            *) echo "::error::NUNCHAKU_HOME is not this component: $nun_home"; exit 1 ;;
+          esac
+          plat=${nun_home##*/}
+          for rel in nunchaku solvers/cvc5 solvers/smbc; do
+            ls "$comp/$plat/$rel"* > /dev/null \
+              || { echo "::error::$plat/$rel is missing from the installed component"; exit 1; }
+          done
+
+          if [ "$plat" = "x86_64-cygwin" ]; then
+            # cvc5 is a native Windows binary and runs here; nunchaku-bin and
+            # smbc are Cygwin-ABI and need the isabelle package's own Cygwin,
+            # which is not what a Git-Bash step provides.  They were run under
+            # exactly that Cygwin, in this component's layout, by the fork's
+            # win-64 release leg.
+            "$comp/$plat/solvers/cvc5.exe" --version | head -1 | grep -q 'cvc5 1.3.4'
+          else
+            "$comp/$plat/nunchaku" --help > /dev/null
+            "$comp/$plat/solvers/cvc5" --version | head -1 | grep -q 'cvc5 1.3.4'
+            "$comp/$plat/solvers/smbc" --version 2>&1 | grep -q '0\.6\.1'
+          fi
+
+          # The uninstall half of the design: removing the package must close
+          # the version gate, non-vacuously.  NUNCHAKU_VERSION afterwards is
+          # whatever the base distribution leaves -- since scripts/pack.sh
+          # unregisters the dead contrib/nunchaku-0.5, that is the empty string
+          # rather than "0.5"; either way it must not still be this release.
           conda remove -y isabelle-nunchaku
-          v_after=$("$CONDA_PREFIX/isa/bin/isabelle" getenv -b NUNCHAKU_VERSION || true)
+          v_after=$(getenv NUNCHAKU_VERSION || true)
           [ "$v_after" != "${{ inputs.version }}" ] \
             || { echo "::error::NUNCHAKU_VERSION still ${{ inputs.version }} after conda remove"; exit 1; }
           echo "after remove: NUNCHAKU_VERSION='$v_after'"

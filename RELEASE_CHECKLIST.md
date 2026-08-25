@@ -354,11 +354,27 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    already be published. Order: `isabelle` → `isabelle-performant-ml` →
    `auto-sledgehammer` → `isabelle-rpc` → `isabelle-semantic-embedding` →
    `isabelle-minilang`. `isabelle-nunchaku` depends only on `isabelle` and can go
-   any time after it: certify per the fork's `regress/README.md` (gate PASS), tag
-   `v<VERSION>` on `xqyww123/nunchaku` (its CI attaches the static binary + .sha256
-   to the release), then
-   `gh workflow run release-nunchaku --repo xqyww123/isabelle-packaging-ci -f version=<VERSION> -f dry_run=false`
-   (dry_run defaults to true; run that first).
+   any time after it:
+
+   - Certify per the fork's `regress/README.md` (gate PASS). The gate is now **two
+     things**, not one: the Isabelle goal sweep *and* `dune runtest`, which since 0.5.3
+     carries three hermetic suites (`regress/cvc5_guard/`, `regress/soundness_guard/`,
+     `regress/smbc_models/`) that need no solver and run on every platform's own
+     toolchain.
+   - Tag `v<VERSION>` on `xqyww123/nunchaku`, **annotated** — `git tag -a`, never a
+     lightweight tag. The provenance check in `release-nunchaku.yml` resolves the tag
+     with `git ls-remote … "refs/tags/v<VERSION>^{}"`, and that peeled ref exists only
+     for annotated tags; a lightweight tag fails with "annotated tag not found upstream".
+   - The fork's CI then attaches **two artifact families**, for five platforms —
+     `nunchaku-bin-<isabelle-platform>` and `smbc-bin-<isabelle-platform>`, each with a
+     `.sha256`, where `<isabelle-platform>` is one of `x86_64-linux`, `arm64-linux`,
+     `x86_64-darwin`, `arm64-darwin`, `x86_64-cygwin`. Ten assets. smbc is not optional:
+     the component's wrapper unconditionally exports `NUNCHAKU_SMBC`, so a package
+     without it runs a configuration the gate never certified.
+   - Then
+     `gh workflow run release-nunchaku --repo xqyww123/isabelle-packaging-ci -f version=<VERSION> -f dry_run=false`
+     (dry_run defaults to true; run that first). It builds all five subdirs on native
+     runners and refuses to publish unless all five arrived.
 2. Dry run: `gh workflow run release-conda.yml -R REPO -f dry_run=true` — stops after
    `verify`, publishes nothing.
 3. Tag: `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`. Some repos use `master`.

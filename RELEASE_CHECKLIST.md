@@ -377,9 +377,16 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    only points at which a broken build can still be stopped rather than published.**
 
    1. **Rehearse the fork, before any tag exists.**
-      `gh workflow run build --repo xqyww123/nunchaku --ref main` — `main.yml` has
-      `workflow_dispatch`, and both release job families **and the `release-assets`
-      job's `release-attach.sh collect` step** run on a dispatch. This is the *first* execution of the five
+      A push to `main` already runs everything a dispatch would: the trigger list
+      is `push: main`, `push: v*`, `pull_request` and `workflow_dispatch`, and
+      nothing in the release path except `publish` is tag-gated. So the rehearsal
+      is normally the merge itself — watch that run. Dispatch
+      (`gh workflow run build --repo xqyww123/nunchaku --ref main`) is for
+      re-running the rehearsal on an unchanged tree; note that it shares the
+      `main` concurrency group with the push, so if one is still running the
+      other queues behind it rather than running beside it. Either way, both
+      release job families **and the `release-assets` job's
+      `release-attach.sh collect` step** run. This is the *first* execution of the five
       release legs in their current form, and it is what proves the things no local
       check can: `dune runtest` with the three hermetic suites on macOS and under
       Isabelle's Cygwin, the musl-static link of **both** binaries, `git` plus the
@@ -449,15 +456,19 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       "Re-run all jobs" on a tag run. A wholesale re-run rebuilds every binary,
       and the rebuilt bytes are not the ones already attached; `publish` refuses
       once the release is out of draft, but before that point `--clobber` would
-      quietly swap them. If the re-run's `release-attach.sh collect` step cannot download a sibling
-      leg's artifact (a 404 across run attempts), give `release-assets`
-      `actions: read` and pass `github-token` to `download-artifact` so it can
-      reach the previous attempt. If `publish` reports `found 0` or `found 2`
-      release objects for the tag, delete the stray drafts by hand and re-run;
-      each attempt creates one when it finds none, so delete the strays first
-      rather than re-running into a second. **An already-published release
-      is never repaired in place** — fix forward with a new patch version, which
-      is also what `publish` will tell you.
+      Reaching the previous attempt's artifacts works without any edit:
+      `release-assets` already carries `actions: read` and passes
+      `github-token` to `download-artifact`, and it has to — a tag re-run uses
+      the workflow file from the tagged commit, so nothing can be added during
+      the incident without moving the tag, which step 2 forbids. If `publish`
+      reports `found 0` or `found 2` release objects for the tag, delete the
+      stray drafts by hand *before* re-running: each attempt creates one when it
+      finds none, so a bare re-run makes a second rather than adopting the
+      first. **A published release is never overwritten in place.** If it
+      already carries all twenty-five assets, `publish` says so and exits 0 —
+      the job is simply done. If it does not, the fix is a new patch version;
+      the one exception is a release object created by hand and carrying no
+      assets at all, which can be deleted and left to `publish`.
 
       smbc is not optional: the component's wrapper unconditionally exports
       `NUNCHAKU_SMBC`, so a package without it runs a configuration the gate never

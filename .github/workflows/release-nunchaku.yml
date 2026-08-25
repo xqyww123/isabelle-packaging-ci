@@ -462,6 +462,11 @@ jobs:
           PY
           )
           echo "the matrix names: $expected"
+          # The python above cannot return an empty list (it asserts >= 2 and
+          # agreement with the recipe), but `want` below is a word count: if
+          # $expected were ever empty, `want` would be 0 and a run that built
+          # nothing would satisfy the gate.  Structural rather than remembered.
+          [ -n "$expected" ] || { echo "::error::the subdir list came back empty"; exit 1; }
           n=$(find "$RUNNER_TEMP/merged" -name '*.conda' | wc -l)
           # One per platform, no more and no fewer.  A partial publish is the
           # failure this catches: fail-fast is off, so a red leg leaves four good

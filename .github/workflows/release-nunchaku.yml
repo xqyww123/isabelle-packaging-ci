@@ -2,14 +2,19 @@
 #
 # The release chain (NUNCHAKU_FORK_PLAN.md in the MLML workspace): the fork
 # xqyww123/nunchaku is tagged v<version> (VERSION file = single source); its CI
-# builds, on each of five platforms, the nunchaku binary and the smbc 0.6.1 the
+# builds, on each of five platforms, the nunchaku binary and the smbc the
 # component bundles, smokes the assembled component against the exact Isabelle
-# frontend flag table, and attaches both to the GitHub release as
-# `nunchaku-bin-<isabelle-platform>` and `smbc-bin-<isabelle-platform>` (plus
-# .sha256 for each).  This workflow stages that platform's pair next to the
-# recipe, rattler-builds the component package on a native runner (the recipe
-# runs the binaries it packages, so it cannot cross-build), sanity-checks the
-# layout, and publishes all five subdirs through the shared publish path.
+# frontend flag table, and attaches to the GitHub release
+# `nunchaku-bin-<isabelle-platform>`, `smbc-bin-<isabelle-platform>`, a .sha256
+# for each, and `versions-<isabelle-platform>.txt` -- the two --version lines
+# that leg captured under its own runtime.  This workflow stages that platform's
+# pair next to the recipe, asserts the version record against the tag,
+# rattler-builds the component package on a native runner (the recipe runs the
+# binaries it packages, so it cannot cross-build), sanity-checks the layout, and
+# publishes all five subdirs through the shared publish path.
+#
+# WHICH SOLVERS, WHICH BYTES: the fork's component/solvers.pins, which the recipe
+# asserts its own pins against.  Nothing in this file is a solver literal.
 #
 #   conda subdir    Isabelle platform   runner
 #   linux-64        x86_64-linux        ubuntu-latest

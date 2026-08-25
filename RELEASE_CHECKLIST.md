@@ -404,10 +404,12 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       and refuses to un-draft unless it carries exactly the contracted names — but the
       calls themselves have not run.
 
-      A throwaway pre-release tag on the **fork** is the only way to rehearse
-      `publish`. The objection to throwaway tags recorded at `main.yml:12-18` is about the
-      *packaging* half — the recipe asserts the fork's `VERSION` file against the
-      dispatched version — and does not apply to the fork's own release-assets job.
+      `publish` cannot be rehearsed at all, and a throwaway pre-release tag does
+      not do it: `release-attach.sh` asserts `refs/tags/v$(cat VERSION)` against
+      the pushed ref before its first `gh` call, so `v<VERSION>-rc1` dies on that
+      line having made none of the five calls — after spending the whole run and
+      leaving a permanent public tag. Its first execution is the real tag push;
+      step 3 below says what to do when one of those calls fails.
       To see the contract without running anything:
       `.github/scripts/release-attach.sh --list <isabelle-platform>` **in the fork's
       checkout** -- this repository has a `.github/scripts/` of its own and does
@@ -442,6 +444,19 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       is not served at `releases/download/…`, which is the URL
       `release-nunchaku.yml`'s staging step fetches — every leg would 404 five legs
       deep and look like "the fork's CI is broken".
+
+      **If `release-assets` goes red.** Re-run **failed jobs only** — never
+      "Re-run all jobs" on a tag run. A wholesale re-run rebuilds every binary,
+      and the rebuilt bytes are not the ones already attached; `publish` refuses
+      once the release is out of draft, but before that point `--clobber` would
+      quietly swap them. If the re-run's `collect` cannot download a sibling
+      leg's artifact (a 404 across run attempts), give `release-assets`
+      `actions: read` and pass `github-token` to `download-artifact` so it can
+      reach the previous attempt. If `publish` reports `found 0` or `found 2`
+      release objects for the tag, delete the stray drafts by hand and re-run;
+      it will not create a second one on its own. **An already-published release
+      is never repaired in place** — fix forward with a new patch version, which
+      is also what `publish` will tell you.
 
       smbc is not optional: the component's wrapper unconditionally exports
       `NUNCHAKU_SMBC`, so a package without it runs a configuration the gate never

@@ -430,11 +430,24 @@ jobs:
             || python3 -m pip install --quiet pyyaml \
             || python3 -m pip install --quiet --break-system-packages pyyaml
           expected=$(python3 - <<'PY'
-          import yaml
+          import re, yaml
           w = yaml.safe_load(open(".github/workflows/release-nunchaku.yml"))
           rows = w["jobs"]["build"]["strategy"]["matrix"]["target"]
           subs = sorted(r["subdir"] for r in rows)
           assert len(subs) >= 2 and len(set(subs)) == len(subs), subs
+          # Derived from the matrix, this count would agree with itself even if
+          # a row were dropped -- four subdirs would publish, green.  So check
+          # it against the recipe's own PLATFORMS table, which is asserted
+          # against component/solvers.pins on every build: the number that
+          # gates publication then descends from the pins file rather than from
+          # the matrix it is checking.
+          src = open("conda/components/isabelle-nunchaku/recipe.yaml").read()
+          body = src[src.index("PLATFORMS = {"):]
+          body = body[:body.index("}") + 1]
+          keys = sorted(re.findall(r'"([a-z0-9_-]+)"\s*:', body))
+          if keys != subs:
+              raise SystemExit(f"::error::the build matrix names {subs} but the "
+                               f"recipe's PLATFORMS names {keys}")
           print(" ".join(subs))
           PY
           )

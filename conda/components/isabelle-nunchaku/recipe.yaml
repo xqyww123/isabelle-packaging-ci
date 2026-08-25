@@ -377,6 +377,17 @@ build:
           # version and 40-hex commit fields against the release tag BEFORE it
           # stages either binary here.  cvc5 is native on every platform, so its
           # pin is asserted above on all five.
+          #
+          # Which hops the win-64 BYTES are covered on, since nothing executes
+          # them: the fork's leg digests both binaries where it built them and
+          # ships the sidecars inside its artifact; release-attach.sh verifies
+          # those digests after the artifact round trip and re-uses the same hex
+          # under the released names; release-nunchaku.yml's staging step
+          # verifies that sidecar again after downloading from the release, and
+          # checks the PE signature.  So build -> artifact -> release ->
+          # packaging is covered by digest at every hop; what no digest can say
+          # is whether the bytes RUN, and that is what the run plan's
+          # installed-wrapper step on a real Windows box is for.
           print(f"{TARGET}: nunchaku-bin and smbc are Cygwin-ABI binaries and "
                 "cannot run in a build environment; their versions and the "
                 "nunchaku commit are asserted from versions-x86_64-cygwin.txt "

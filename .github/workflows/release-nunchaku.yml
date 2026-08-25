@@ -131,12 +131,13 @@ jobs:
             asset="$stem-$ISA_PLATFORM"
             dst="$RECIPE_DIR/$stem"
             curl -fsSL -o "$dst" "$base/$asset"
-            # The sidecar catches a torn or corrupted DOWNLOAD -- and nothing
-            # more.  It is written and uploaded by the same fork job that
-            # uploads the payload, with --clobber, so it cannot bind the asset
-            # to the tag; what does that is the git sha the binary itself
-            # reports, asserted below on win-64 and in the recipe's build script
-            # on the other four.
+            # The sidecar carries the digest the fork's BUILD LEG took of the
+            # binary it had just built (release-smoke.sh), verified again after
+            # the artifact hop by release-attach.sh and once more here -- so it
+            # covers build -> artifact -> release -> this download.  What it
+            # cannot do is bind the bytes to the TAG; that is the git sha the
+            # binary itself reports, asserted below on win-64 and in the
+            # recipe's build script on the other four.
             curl -fsSL -o "$dst.sha256.txt" "$base/$asset.sha256"
             sha256_check "$(cut -d' ' -f1 "$dst.sha256.txt")" "$dst"
             chmod +x "$dst"

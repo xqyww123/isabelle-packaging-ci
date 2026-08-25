@@ -377,10 +377,11 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    only points at which a broken build can still be stopped rather than published.**
 
    1. **Rehearse the fork, before any tag exists.**
-      A push to `main` already runs everything a dispatch would: the trigger list
-      is `push: main`, `push: v*`, `pull_request` and `workflow_dispatch`, and
-      nothing in the release path except `publish` is tag-gated. So the rehearsal
-      is normally the merge itself — watch that run. Dispatch
+      A push to `main` already runs everything a dispatch would: nothing in the
+      release path except `publish` is tag-gated, so the merge itself is the
+      rehearsal — watch that run. A **pull request** is not: both release job
+      families carry `if: github.event_name != 'pull_request'`, so a green PR
+      says nothing about them. Dispatch
       (`gh workflow run build --repo xqyww123/nunchaku --ref main`) is for
       re-running the rehearsal on an unchanged tree; note that it shares the
       `main` concurrency group with the push, so if one is still running the
@@ -456,6 +457,8 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       "Re-run all jobs" on a tag run. A wholesale re-run rebuilds every binary,
       and the rebuilt bytes are not the ones already attached; `publish` refuses
       once the release is out of draft, but before that point `--clobber` would
+      quietly swap them.
+
       Reaching the previous attempt's artifacts works without any edit:
       `release-assets` already carries `actions: read` and passes
       `github-token` to `download-artifact`, and it has to — a tag re-run uses

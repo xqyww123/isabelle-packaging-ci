@@ -454,10 +454,12 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       deep and look like "the fork's CI is broken".
 
       **If `release-assets` goes red.** Re-run **failed jobs only** — never
-      "Re-run all jobs" on a tag run. A wholesale re-run rebuilds every binary,
-      and the rebuilt bytes are not the ones already attached; `publish` refuses
-      once the release is out of draft, but before that point `--clobber` would
-      quietly swap them.
+      "Re-run all jobs" on a tag run. A wholesale re-run repeats a five-hour
+      win-64 leg for nothing, and it replaces every attached asset: `publish`
+      refuses once the release is out of draft, but before that point
+      `--clobber` swaps them silently. (A cold rebuild of one commit is in fact
+      byte-identical — measured three times with `DUNE_CACHE=disabled` — so the
+      objection is the swap and the wasted hours, not differing bytes.)
 
       Reaching the previous attempt's artifacts works without any edit:
       `release-assets` already carries `actions: read` and passes
@@ -482,8 +484,11 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    4. **Packaging dry run.**
       `gh workflow run release-nunchaku --repo xqyww123/isabelle-packaging-ci -f version=<VERSION>`
       (`dry_run` defaults to true). This is the first execution of the recipe's hook
-      round-trip and of the packaged wrapper's `--solvers cvc5,smbc` run, on all five
-      subdirs, inside the build job — so it is a real gate, not a formality.
+      round-trip, and of the packaged wrapper's `--solvers cvc5,smbc` run on the
+      four subdirs whose binaries this runner can execute — win-64's are
+      Cygwin-ABI and are covered by their version record instead, which is why
+      run-plan step 5 exists. Inside the build job, so it is a real gate, not a
+      formality.
 
       What a dry run still does **not** cover: nothing is installed from the channel
       (`publish` and the post-publish `smoke` are both skipped), so `conda`'s own
@@ -513,11 +518,17 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       fresh *dispatch* does not substitute — it rebuilds, and a rebuilt `.conda` is
       not byte-identical (`info/index.json` carries a timestamp), so the channel's
       content-comparing guard correctly refuses it and the re-dispatch dead-ends.
-2. Dry run: `gh workflow run release-conda.yml -R REPO -f dry_run=true` — stops after
-   `verify`, publishes nothing.
-3. Tag: `git tag -a vX.Y.Z -m "…" && git push origin vX.Y.Z`. Some repos use `master`.
-4. If `publish` fails: fix, then **re-run failed jobs** — the guard compares sha256 over
-   https, so a byte-identical re-upload resumes instead of dead-ending.
+2. **Generic notes for the other components' release workflows** (nunchaku's own
+   sequence is the six-step run plan inside item 1 above; these apply to the
+   `release-*.yml` a component actually has — there is no `release-conda.yml`
+   in this repository):
+   - dry run first, with `-f dry_run=true`: it stops after `verify` and
+     publishes nothing;
+   - tag annotated (`git tag -a`), never lightweight — the provenance checks
+     resolve the peeled `^{}` ref, which only annotated tags have;
+   - if `publish` fails partway: fix, then **re-run failed jobs**; where the
+     guard compares sha256 over https, a byte-identical re-upload resumes
+     instead of dead-ending.
 
 ## 10. What verification must assert
 

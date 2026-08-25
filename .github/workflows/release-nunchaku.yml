@@ -488,8 +488,8 @@ jobs:
   # build_number.  A fresh dispatch does NOT substitute -- it rebuilds, and a
   # rebuilt .conda is not byte-identical (info/index.json carries a timestamp),
   # so the channel's content-comparing immutability guard correctly refuses it
-  # and the re-dispatch dead-ends.  Same rule as RELEASE_CHECKLIST.md section 9
-  # item 4.
+  # and the re-dispatch dead-ends.  Same rule as RELEASE_CHECKLIST.md section 9,
+  # run-plan step 4 (packaging dry run).
   publish:
     needs: collect
     if: ${{ !inputs.dry_run }}

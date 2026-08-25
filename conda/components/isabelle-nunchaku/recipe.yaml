@@ -337,8 +337,9 @@ build:
           # "nunchaku <version> <40-hex>", so this is the one check that binds
           # the 20 MB of machine code to the commit the 30 kB of shell is bound
           # to three ways already.  Without it the release asset -- which the
-          # fork uploads with --clobber, and whose .sha256 sidecar the same job
-          # writes -- only had to be "some 0.5.3-ish build".
+          # fork uploads with --clobber, and whose .sha256 sidecar binds it only
+          # back to the leg that built it, not to any commit -- would only have
+          # to be "some 0.5.3-ish build".
           if not nun_line.endswith(head):
               die(f"nunchaku-bin reports '{nun_line}'; it was not built from the "
                   f"packaged tree {head} -- the release asset does not match the tag")

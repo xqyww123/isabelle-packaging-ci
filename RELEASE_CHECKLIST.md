@@ -373,7 +373,7 @@ One recipe per platform tag. Record why we carry it and when to drop it.
      `regress/smbc_models/`) that need no solver and run on every platform's own
      toolchain.
 
-   **The six steps, in this order. The order is load-bearing — three of these are the
+   **The release run plan — six steps, in this order; "run-plan step N" below always means one of these, never the numbered list this section opens with. The order is load-bearing — three of these are the
    only points at which a broken build can still be stopped rather than published.**
 
    1. **Rehearse the fork, before any tag exists.**
@@ -398,7 +398,7 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       `versions-x86_64-cygwin.txt`. Read that job's log, not just its check mark: it
       prints all five version records. Do not tag until every job is green.
 
-      **What step 1 still does not reach.** The second step of `release-assets` —
+      **What run-plan step 1 (rehearse the fork) still does not reach.** The second step of `release-assets` —
       `release-attach.sh publish` — needs a tag and a release object, so it sits behind
       `if: startsWith(github.ref, 'refs/tags/v')` and **its first execution is the tag
       push itself**. Unexecuted until then: `gh release create <tag> --draft`, `gh
@@ -414,10 +414,10 @@ One recipe per platform tag. Record why we carry it and when to drop it.
 
       `publish` cannot be rehearsed at all, and a throwaway pre-release tag does
       not do it: `release-attach.sh` asserts `refs/tags/v$(cat VERSION)` against
-      the pushed ref before its first `gh` call, so `v<VERSION>-rc1` dies on that
-      line having made none of the five calls — after spending the whole run and
-      leaving a permanent public tag. Its first execution is the real tag push;
-      step 3 below says what to do when one of those calls fails.
+      the pushed ref before its first `gh` call, so `v<VERSION>-rc1` dies there
+      having made **no gh call at all** (measured) — after spending the whole run
+      and leaving a permanent public tag. Its first execution is the real tag push;
+      run-plan step 3 (wait for the fork's `release-assets` job) says what to do when one of those calls fails.
       To see the contract without running anything:
       `.github/scripts/release-attach.sh --list <isabelle-platform>` **in the fork's
       checkout** -- this repository has a `.github/scripts/` of its own and does
@@ -463,11 +463,11 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       `release-assets` already carries `actions: read` and passes
       `github-token` to `download-artifact`, and it has to — a tag re-run uses
       the workflow file from the tagged commit, so nothing can be added during
-      the incident without moving the tag, which step 2 forbids. If `publish`
-      reports `found 0` or `found 2` release objects for the tag, delete the
-      stray drafts by hand *before* re-running: each attempt creates one when it
-      finds none, so a bare re-run makes a second rather than adopting the
-      first. **A published release is never overwritten in place.** If it
+      the incident without moving the tag, which run-plan step 2 (tag) forbids. If `publish`
+      reports `found 2` release objects for the tag, delete the stray by hand:
+      it refuses while there are two, and will not choose between them.  With
+      exactly one it adopts that one rather than creating another (measured:
+      zero `gh release create` calls on `found 1`), so a re-run is safe there. **A published release is never overwritten in place.** If it
       already carries all twenty-five assets, `publish` says so and exits 0 —
       the job is simply done. If it does not, the fix is a new patch version;
       the one exception is a release object created by hand and carrying no

@@ -442,9 +442,19 @@ jobs:
           # gates publication then descends from the pins file rather than from
           # the matrix it is checking.
           src = open("conda/components/isabelle-nunchaku/recipe.yaml").read()
-          body = src[src.index("PLATFORMS = {"):]
+          # Anchor on the assignment at the start of a line, not on the first
+          # occurrence of the text: a mention inside a comment would otherwise
+          # be taken as the table and yield an empty key list, which agrees
+          # with nothing and fails -- or, if a comment ever preceded a real
+          # table, could yield a shorter one that happens to agree.
+          m = re.search(r'^\s*PLATFORMS = \{', src, re.M)
+          if not m:
+              raise SystemExit("::error::recipe.yaml has no PLATFORMS table")
+          body = src[m.start():]
           body = body[:body.index("}") + 1]
           keys = sorted(re.findall(r'"([a-z0-9_-]+)"\s*:', body))
+          if not keys:
+              raise SystemExit("::error::recipe.yaml's PLATFORMS table parsed empty")
           if keys != subs:
               raise SystemExit(f"::error::the build matrix names {subs} but the "
                                f"recipe's PLATFORMS names {keys}")

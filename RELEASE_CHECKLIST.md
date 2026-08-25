@@ -385,7 +385,7 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       Isabelle's Cygwin, the musl-static link of **both** binaries, `git` plus the
       pinned-commit smbc build inside Isabelle's Cygwin, `.exe`-appending end to end on
       win-64, and — since the fork's `release-attach.sh collect` step is deliberately *not* tag-gated — that all
-      five legs really produced their three files and that the twenty-five contracted
+      five legs really produced their five files and that the twenty-five contracted
       names are exactly assemblable from them, including
       `versions-x86_64-cygwin.txt`. Read that job's log, not just its check mark: it
       prints all five version records. Do not tag until every job is green.
@@ -449,12 +449,13 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       "Re-run all jobs" on a tag run. A wholesale re-run rebuilds every binary,
       and the rebuilt bytes are not the ones already attached; `publish` refuses
       once the release is out of draft, but before that point `--clobber` would
-      quietly swap them. If the re-run's `collect` cannot download a sibling
+      quietly swap them. If the re-run's `release-attach.sh collect` step cannot download a sibling
       leg's artifact (a 404 across run attempts), give `release-assets`
       `actions: read` and pass `github-token` to `download-artifact` so it can
       reach the previous attempt. If `publish` reports `found 0` or `found 2`
       release objects for the tag, delete the stray drafts by hand and re-run;
-      it will not create a second one on its own. **An already-published release
+      each attempt creates one when it finds none, so delete the strays first
+      rather than re-running into a second. **An already-published release
       is never repaired in place** — fix forward with a new patch version, which
       is also what `publish` will tell you.
 

@@ -407,11 +407,18 @@ jobs:
           # and in the recipe's own PLATFORMS table.  (Those first two duplicate
           # deliberately -- the sanity step cross-checks them, and a cross-check
           # needs two independent statements.  These two bought nothing.)
+          # PyYAML is not guaranteed on the runner's system python; install it
+          # rather than bet the gate on it.  Parsing the YAML, not grepping it:
+          # a regex over the matrix would keep working until someone reformats
+          # the block and then silently return an empty list.
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet pyyaml
           expected=$(python3 - <<'PY'
-          import re, yaml
+          import yaml
           w = yaml.safe_load(open(".github/workflows/release-nunchaku.yml"))
           rows = w["jobs"]["build"]["strategy"]["matrix"]["target"]
-          print(" ".join(sorted(r["subdir"] for r in rows)))
+          subs = sorted(r["subdir"] for r in rows)
+          assert len(subs) >= 2 and len(set(subs)) == len(subs), subs
+          print(" ".join(subs))
           PY
           )
           echo "the matrix names: $expected"

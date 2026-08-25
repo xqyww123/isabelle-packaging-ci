@@ -22,18 +22,33 @@
 # So a solver bump applied to the fork alone reddens the build; applied to the
 # recipe alone it reddens the build too; and the workflow can no longer disagree
 # with the recipe at all.
+#
+# sed and grep only, deliberately.  This runs in the post-publish smoke as well
+# as in the build job, and that job's shell is Git-Bash on windows-latest, where
+# `python3` is not something to bet a release gate on.
 set -euo pipefail
 
 recipe=${1:-conda/components/isabelle-nunchaku/recipe.yaml}
+[ -f "$recipe" ] || { echo "::error::$recipe not found" >&2; exit 1; }
 
-RECIPE="$recipe" python3 - <<'PY'
-import os, re, sys
+# The `tr -d '\r'`: on Windows the checkout can arrive with CRLF, and the `"$`
+# anchor below would then never match -- a Windows-only failure of exactly the
+# class this repository has a whole probe workflow about.
+body=$(tr -d '\r' < "$recipe")
 
-text = open(os.environ["RECIPE"], encoding="utf-8").read()
-for key, name in (("cvc5_version", "CVC5_VERSION"), ("smbc_version", "SMBC_VERSION")):
-    # The context block's own spelling: two-space indent, a quoted scalar.
-    m = re.search(rf'^  {key}: "([^"]+)"$', text, re.M)
-    if not m:
-        sys.exit(f"::error::{os.environ['RECIPE']} has no context.{key} line")
-    print(f"{name}={m.group(1)}")
-PY
+emit () {  # <context key> <environment variable name>
+  local v n
+  # Anchored on the context block's own spelling: two-space indent, a quoted
+  # scalar.  Exactly one match, or fail -- a renamed key and a half-applied edit
+  # that left two are both errors, and both are silent if the first match wins.
+  v=$(printf '%s\n' "$body" | sed -n "s/^  $1: \"\\([^\"]*\\)\"\$/\\1/p")
+  n=$(printf '%s' "$v" | grep -c '' || true)
+  if [ "$n" -ne 1 ]; then
+    echo "::error::$recipe has $n context.$1 lines, expected exactly one" >&2
+    exit 1
+  fi
+  printf '%s=%s\n' "$2" "$v"
+}
+
+emit cvc5_version CVC5_VERSION
+emit smbc_version SMBC_VERSION

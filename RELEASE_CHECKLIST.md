@@ -466,7 +466,12 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       `github-token` to `download-artifact`, and it has to — a tag re-run uses
       the workflow file from the tagged commit, so nothing can be added during
       the incident without moving the tag, which run-plan step 2 (tag) forbids. If `publish`
-      reports `found 2` release objects for the tag, delete the stray by hand:
+      reports `found 0` release objects for the tag, the create it just made was
+      not visible to the listing that followed it: nothing was uploaded, and
+      each further re-run leaves one more orphan draft. Delete the orphans by
+      hand and re-run once; if `found 0` repeats, the API is not showing drafts
+      to this token and the release must be created by hand as a draft before
+      re-running. If it reports `found 2`, delete the stray by hand:
       it refuses while there are two, and will not choose between them.  With
       exactly one it adopts that one rather than creating another (measured:
       zero `gh release create` calls on `found 1`), so a re-run is safe there. **A published release is never overwritten in place.** If it

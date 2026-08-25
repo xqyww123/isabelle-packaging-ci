@@ -286,6 +286,48 @@ build:
       install(SRC / "cvc5-dist" / "bin" / f"cvc5{exe}", dest / plat / "solvers" / f"cvc5{exe}")
 
       # ------------------------------------------------------------------
+      # the machine code is for THIS platform -- read from the file, not the
+      # file's name
+      # ------------------------------------------------------------------
+      # Until now nothing anywhere asserted an architecture.  A leg that
+      # uploaded the wrong asset, or a table that paired a subdir with the
+      # wrong Isabelle platform, would ship an x86_64 binary inside the arm64
+      # package -- and on macOS Rosetta translates it, so even an install smoke
+      # would answer SAT and look green.  Reading the header costs three bytes
+      # of parsing and needs no tool the runner might not have.
+      ARCH_OF = {
+          "x86_64-linux":  ("elf",   0x3E),
+          "arm64-linux":   ("elf",   0xB7),
+          "x86_64-darwin": ("macho", 0x01000007),
+          "arm64-darwin":  ("macho", 0x0100000C),
+          "x86_64-cygwin": ("pe",    0x8664),
+      }
+
+      def machine_of(path):
+          b = path.read_bytes()[:4096]
+          if b[:4] == b"\x7fELF":
+              return "elf", int.from_bytes(b[18:20], "little")
+          if b[:4] in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"):   # 64/32-bit little-endian Mach-O
+              return "macho", int.from_bytes(b[4:8], "little")
+          if b[:2] == b"MZ":
+              off = int.from_bytes(b[0x3C:0x40], "little")
+              if b[off:off + 4] != b"PE\0\0":
+                  die("the binary starts with MZ but carries no PE header")
+              return "pe", int.from_bytes(b[off + 4:off + 6], "little")
+          die(f"{path.name} is not an ELF, Mach-O or PE executable")
+
+      want_fmt, want_machine = ARCH_OF[plat]
+      for who in (dest / plat / f"nunchaku-bin{exe}",
+                  dest / plat / "solvers" / f"smbc{exe}",
+                  dest / plat / "solvers" / f"cvc5{exe}"):
+          fmt, machine = machine_of(who)
+          if (fmt, machine) != (want_fmt, want_machine):
+              die(f"{who.name} is {fmt}/0x{machine:x}, but {plat} needs "
+                  f"{want_fmt}/0x{want_machine:x} -- this package would carry "
+                  f"machine code for another architecture")
+      print(f"{plat}: all three binaries are {want_fmt}/0x{want_machine:x}")
+
+      # ------------------------------------------------------------------
       # the bundled solver versions, asserted -- not prose
       # ------------------------------------------------------------------
       # The sha256 pins above already pin the artifacts; these assert the pins

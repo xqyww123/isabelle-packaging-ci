@@ -453,9 +453,20 @@ jobs:
               raise SystemExit("::error::recipe.yaml has no PLATFORMS table")
           body = src[m.start():]
           body = body[:body.index("}") + 1]
-          keys = sorted(re.findall(r'"([a-z0-9_-]+)"\s*:', body))
-          if not keys:
+          # Both halves of each row, not just the key: the subdir decides which
+          # channel directory a package lands in, and the Isabelle platform
+          # decides WHICH BINARY goes into it.  A swapped pair of platforms
+          # passes a key-only check and ships, say, an x86_64 binary inside the
+          # arm64 package -- and on macOS Rosetta would translate it, so even a
+          # smoke install would not notice.
+          rows = dict(re.findall(r'"([a-z0-9_-]+)"\s*:\s*\("([a-z0-9_-]+)"', body))
+          if not rows:
               raise SystemExit("::error::recipe.yaml's PLATFORMS table parsed empty")
+          keys = sorted(rows)
+          want_isa = {r["subdir"]: r["isa_platform"] for r in w["jobs"]["build"]["strategy"]["matrix"]["target"]}
+          if want_isa != rows:
+              raise SystemExit(f"::error::the build matrix maps {want_isa} but the "
+                               f"recipe's PLATFORMS maps {rows}")
           if keys != subs:
               raise SystemExit(f"::error::the build matrix names {subs} but the "
                                f"recipe's PLATFORMS names {keys}")
@@ -489,7 +500,7 @@ jobs:
   # rebuilt .conda is not byte-identical (info/index.json carries a timestamp),
   # so the channel's content-comparing immutability guard correctly refuses it
   # and the re-dispatch dead-ends.  Same rule as RELEASE_CHECKLIST.md section 9,
-  # run-plan step 4 (packaging dry run).
+  # run-plan step 6 (publish).
   publish:
     needs: collect
     if: ${{ !inputs.dry_run }}

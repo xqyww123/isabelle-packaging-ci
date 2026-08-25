@@ -379,12 +379,12 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    1. **Rehearse the fork, before any tag exists.**
       `gh workflow run build --repo xqyww123/nunchaku --ref main` — `main.yml` has
       `workflow_dispatch`, and both release job families **and the `release-assets`
-      job's collect step** run on a dispatch. This is the *first* execution of the five
+      job's `release-attach.sh collect` step** run on a dispatch. This is the *first* execution of the five
       release legs in their current form, and it is what proves the things no local
       check can: `dune runtest` with the three hermetic suites on macOS and under
       Isabelle's Cygwin, the musl-static link of **both** binaries, `git` plus the
       pinned-commit smbc build inside Isabelle's Cygwin, `.exe`-appending end to end on
-      win-64, and — since the collect step is deliberately *not* tag-gated — that all
+      win-64, and — since the fork's `release-attach.sh collect` step is deliberately *not* tag-gated — that all
       five legs really produced their three files and that the twenty-five contracted
       names are exactly assemblable from them, including
       `versions-x86_64-cygwin.txt`. Read that job's log, not just its check mark: it
@@ -409,7 +409,9 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       *packaging* half — the recipe asserts the fork's `VERSION` file against the
       dispatched version — and does not apply to the fork's own release-assets job.
       To see the contract without running anything:
-      `.github/scripts/release-attach.sh --list <isabelle-platform>`.
+      `.github/scripts/release-attach.sh --list <isabelle-platform>` **in the fork's
+      checkout** -- this repository has a `.github/scripts/` of its own and does
+      not carry that script.
    2. **Tag** `v<VERSION>` on `xqyww123/nunchaku`, **annotated** — `git tag -a`, never a
       lightweight tag. The provenance check in `release-nunchaku.yml` resolves the tag
       with `git ls-remote … "refs/tags/v<VERSION>^{}"`, and that peeled ref exists only

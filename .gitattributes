@@ -5,7 +5,15 @@
 # a runner-image default, not a guarantee.
 *.sh text eol=lf
 
-# The Windows launcher must ship BYTE FOR BYTE: it is CRLF and was verified as-is
-# on a real Windows VM.  Never let git normalise it.  LAST, so it wins over any
-# rule above.
+# The Windows launcher must ship BYTE FOR BYTE: scripts/pack.sh copies it into
+# the package and `cmp`s the copy, and it was verified as-is on a real Windows
+# VM.  It is LF in the index (measured: `git show :windows/isabelle.bat | od -c`
+# starts `@ e c h o   o f f \n`, and no commit that ever touched it had CRLF),
+# so this rule exists to stop git normalising it in EITHER direction, not to
+# preserve CRLF.  Kept last because git's last matching rule wins, so a future
+# `*` rule above cannot reach it.
+#
+# The files that genuinely must be CRLF are the .bat link hooks the recipe
+# GENERATES at build time; nothing here touches those, and the recipe asserts
+# their line endings itself.
 *.bat -text

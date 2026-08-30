@@ -12,7 +12,7 @@ agent was decoupled from Isa_REPL; see "Isa-Mini" below).
 
 | conda package | repo | ships | arch |
 | --- | --- | --- | --- |
-| `isabelle-performant-ml` | Performant_Isabelle_ML | session | noarch |
+| `isabelle-performant-ml` | Performant_Isabelle_ML | sessions `Performant_Isabelle_ML` (Pure) + `Performant_Isabelle_HOL` (runtime symbols) | noarch |
 | `auto-sledgehammer` | auto_sledgehammer | session | noarch |
 | `isabelle-rpc` | Isabelle_RPC | session + Python `isabelle-rpc` | noarch |
 | `isabelle-semantic-embedding` | Semantic_Embedding | session + Python (native SIMD ext) | **per-platform** |

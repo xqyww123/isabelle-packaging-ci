@@ -113,9 +113,18 @@ static void worker_body(void)
   burn(0.30);
 }
 
+/* Every churn thread records the handle IT was given, so we can say whether the
+   dead worker's handle value was ever handed out again -- the failure mode M4
+   is hunting for is a stale handle silently naming a DIFFERENT thread. */
+#define STORM_N 2000
+static int64_t storm_handles[STORM_N];
+static volatile int storm_i;
+
 static void storm_body(void)          /* short-lived churn thread */
 {
-  volatile int64_t h = tc_self();
+  int64_t h = tc_self();
+  int i = storm_i;
+  if (i >= 0 && i < STORM_N) storm_handles[i] = h;
   burn(0.0005);
   if (h) tc_free(h);
 }
@@ -125,6 +134,28 @@ static void alive_body(void)          /* stays alive burning until told to stop 
   int64_t h = tc_self();
   while (!stop_flag) burn(0.005);
   if (h) tc_free(h);
+}
+
+/* How many of the churn threads were handed the SAME handle value as the dead
+   worker?  (On macOS a handle is a Mach port name, printed in hex too: its low
+   byte is the generation counter and the rest the index, so a recycled index
+   shows up as a name that differs only in the low byte.) */
+static void report_storm(const char *tag, int n, int64_t stale)
+{
+  int same = 0, same_low = 0;
+  int64_t lo = 0, hi = 0;
+  for (int i = 0; i < n; i++) {
+    int64_t h = storm_handles[i];
+    if (h == stale) same++;
+    if ((h >> 8) == (stale >> 8) && h != stale) same_low++;
+    if (i == 0 || h < lo) lo = h;
+    if (i == 0 || h > hi) hi = h;
+  }
+  printf("%s-names     %d churn handles: min %lld (0x%llx) max %lld (0x%llx); %d equal the stale handle %lld (0x%llx); %d share its high bits but not its low byte; first 8:",
+         tag, n, (long long)lo, (unsigned long long)lo, (long long)hi, (unsigned long long)hi,
+         same, (long long)stale, (unsigned long long)stale, same_low);
+  for (int i = 0; i < n && i < 8; i++) printf(" %lld", (long long)storm_handles[i]);
+  printf("\n");
 }
 
 /* ================================================================== main */
@@ -214,17 +245,21 @@ int main(int argc, char **argv)
              reads, (long long)after, after / 1e6);
   }
 
-  /* ---- M4: port-name reuse -- 200 short-lived threads, then read the stale handle ---- */
+  /* ---- M4: handle/port-name reuse -- churn threads, then read the stale handle ---- */
   {
-    for (int i = 0; i < 200; i++) {
+    int made = 0;
+    for (int i = 0; i < STORM_N; i++) {
       thr_t t;
+      storm_i = i;
       if (thr_start(&t, storm_body) != 0) { printf("M4-storm      thread create failed at %d\n", i); break; }
       thr_join(t);
+      made++;
     }
     int64_t v = tc_read(stale);
-    printf("M4a-afterstorm 200 short-lived threads created+joined; stale handle %lld reads %lld ns (%.3f ms); worker's last live read was %lld ns, first read after join %lld ns\n",
-           (long long)stale, (long long)v, v / 1e6,
+    printf("M4a-afterstorm %d short-lived threads created+joined; stale handle %lld reads %lld ns (%.3f ms); worker's last live read was %lld ns, first read after join %lld ns\n",
+           made, (long long)stale, (long long)v, v / 1e6,
            (long long)last_live, (long long)final_total);
+    report_storm("M4a", made, stale);
 
     /* and again with 32 threads still ALIVE, in case the name is handed to a live thread */
     enum { NALIVE = 32 };
@@ -254,6 +289,22 @@ int main(int argc, char **argv)
     }
     int64_t v = tc_read(stale);
     printf("M5-afterfree  stale handle reads %lld ns\n", (long long)v);
+
+    /* Once the handle has been given back its value is free to be recycled --
+       churn again and see whether the released value comes back attached to a
+       different thread. */
+    int made = 0;
+    for (int i = 0; i < 400; i++) {
+      thr_t t;
+      storm_i = i;
+      if (thr_start(&t, storm_body) != 0) break;
+      thr_join(t);
+      made++;
+    }
+    int64_t v2 = tc_read(stale);
+    printf("M5b-freedreuse after tc_free + %d more churn threads, stale handle reads %lld ns (%.3f ms)\n",
+           made, (long long)v2, v2 / 1e6);
+    report_storm("M5b", made, stale);
   }
 
   /* ---- M2/W2 d: cost of one tc_read ---- */

@@ -120,12 +120,24 @@ static void worker_body(void)
 static int64_t storm_handles[STORM_N];
 static volatile int storm_i;
 
+/* THE misattribution test.  g_stale is the dead worker's handle.  If a churn
+   thread is handed that very value, then WHILE IT IS STILL ALIVE a read of the
+   stale handle names this other thread -- so record what such a read returns. */
+static int64_t g_stale;
+static long    g_collisions;
+static int64_t g_collision_reads[8];
+static long    g_collision_n;
+
 static void storm_body(void)          /* short-lived churn thread */
 {
   int64_t h = tc_self();
   int i = storm_i;
   if (i >= 0 && i < STORM_N) storm_handles[i] = h;
   burn(0.0005);
+  if (g_stale != 0 && h == g_stale) {
+    g_collisions++;
+    if (g_collision_n < 8) g_collision_reads[g_collision_n++] = tc_read(g_stale);
+  }
   if (h) tc_free(h);
 }
 
@@ -156,6 +168,12 @@ static void report_storm(const char *tag, int n, int64_t stale)
          same, (long long)stale, (unsigned long long)stale, same_low);
   for (int i = 0; i < n && i < 8; i++) printf(" %lld", (long long)storm_handles[i]);
   printf("\n");
+
+  printf("%s-collision %ld churn thread(s) held the stale handle value while alive;"
+         " reading the STALE handle at that moment returned:", tag, g_collisions);
+  if (g_collision_n == 0) printf(" (never happened)");
+  for (long i = 0; i < g_collision_n; i++) printf(" %lld", (long long)g_collision_reads[i]);
+  printf("   [a non-negative value here is a LIVE, WRONG thread's CPU time]\n");
 }
 
 /* ================================================================== main */
@@ -248,6 +266,7 @@ int main(int argc, char **argv)
   /* ---- M4: handle/port-name reuse -- churn threads, then read the stale handle ---- */
   {
     int made = 0;
+    g_stale = stale; g_collisions = 0; g_collision_n = 0;
     for (int i = 0; i < STORM_N; i++) {
       thr_t t;
       storm_i = i;
@@ -294,6 +313,7 @@ int main(int argc, char **argv)
        churn again and see whether the released value comes back attached to a
        different thread. */
     int made = 0;
+    g_collisions = 0; g_collision_n = 0;
     for (int i = 0; i < 400; i++) {
       thr_t t;
       storm_i = i;

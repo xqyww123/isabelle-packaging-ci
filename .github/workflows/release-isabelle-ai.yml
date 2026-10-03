@@ -148,3 +148,10 @@ jobs:
           isabelle version
           test -f "$CONDA_PREFIX/share/isabelle-semantic-data/MANIFEST.json" \
             || { echo "::error::the semantic-data payload is not on disk"; exit 1; }
+          # The data edge exercised through the library, not just located on disk:
+          # `status` reports the system layer only when the installed library accepts
+          # the payload (manifest schema and vector format).  A rejected payload is a
+          # WARNING plus `system : (none ...)` with exit 0 -- hence the grep.
+          isabelle-semantics status | tee status.txt
+          grep -q '^system : conda' status.txt \
+            || { echo "::error::the embedding library does not see the semantic-data payload"; exit 1; }

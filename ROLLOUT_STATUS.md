@@ -4,12 +4,15 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-07-28 — sweep mechanism landed (`scripts/sweep-old-versions.py`) and
-first owner-selected sweep executed; see "In flight". Before that, 2026-07-22: second
-release wave: rpc 0.4.0 (attached hosts; released by hand), auto-sledgehammer 0.1.1,
-mcp 0.3.1, minilang 0.5.0 (Minilang_AoA renames; PyPI publishing resumed after a 14-month
-stall), semantic-embedding 0.2.0. conda and PyPI are in lockstep for every package that
-has a PyPI presence.
+Last updated: 2026-10-04 — the fourth release wave (2026-10-03/04): performant-ml 0.2.0,
+auto-sledgehammer 0.2.0, rpc 0.5.0 and 0.5.1, semantic-embedding 0.5.0, minilang 0.7.0,
+isabelle-ai 0.3.0; see "Notes from the fourth wave". Between the second wave and this one
+the table below had gone stale: rpc 0.4.1 (2026-08-08), semantic-embedding 0.3.0 and
+minilang 0.6.0 (2026-07-26, the layered semantic DB), isabelle-ai 0.2.0, mcp 0.4.0 and
+0.6.0, and the first `isabelle-semantic-data` were published without moving their rows.
+conda is ahead of PyPI for every package with a PyPI presence (rpc publishes to conda
+only since 0.4.1; the embedding package and minilang stayed at 0.2.0 and 0.5.0 on PyPI,
+by the owner's decision of 2026-10-03).
 
 ---
 
@@ -18,15 +21,16 @@ has a PyPI presence.
 | Package | Version | Shape |
 |---|---|---|
 | `isabelle` | 2025.2 | per-platform, 5 subdirs (predates this rollout) |
-| `isabelle-performant-ml` | 0.1.0 | noarch generic, session |
-| `auto-sledgehammer` | 0.1.1 | noarch generic, session |
-| `isabelle-rpc` | 0.4.0 | noarch python, session + Python host; PyPI 0.4.0 |
-| `isabelle-mcp` | 0.3.1 | noarch python, no session, no hooks; PyPI 0.3.1 |
-| `isabelle-minilang` | 0.5.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (resumed from 0.3.5) |
+| `isabelle-performant-ml` | 0.2.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms |
+| `auto-sledgehammer` | 0.2.0 | noarch generic, session |
+| `isabelle-rpc` | 0.5.1 | noarch python, session + Python host; conda only since 0.4.1 (PyPI stays at 0.4.0) |
+| `isabelle-mcp` | 0.6.0 | noarch python, no session, no hooks; PyPI 0.6.0 |
+| `isabelle-minilang` | 0.7.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (not updated) |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
-| `isabelle-semantic-embedding` | 0.2.0 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.2.0 (lockstep) |
-| `isabelle-ai` | 0.1.0 | noarch generic, **metapackage** — minilang + mcp, no files of its own |
+| `isabelle-semantic-embedding` | 0.5.0 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.2.0 (not updated) |
+| `isabelle-semantic-data` | 2026.07.26.1711 | noarch generic, **data**: the read-only system layer of the semantic DB; version = export timestamp |
+| `isabelle-ai` | 0.3.0 | noarch generic, **metapackage** — minilang + mcp + semantic-data, no files of its own |
 | `isabelle-nunchaku` | 0.5.2 | component, **linux-64 only** — binaries come from the `xqyww123/nunchaku` fork's release, not built here |
 
 `isabelle-nunchaku` is the one package still published on a single subdir. 0.5.3 changes
@@ -59,7 +63,15 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 ## In flight
 
-Nothing.
+- **A new `isabelle-semantic-data`** from the owner's 2026-10-03 database. The snapshot
+  tarball is built (9.98 GB, `contrib/Semantic_Embedding/Isabelle_Semantic_Embedding.tar.zst`
+  in the owner's working tree) but its Hugging Face upload stalled three times on a hotel
+  network (bytes stop flowing after a few hundred MB, no retries logged); it waits for a
+  better network. Then: `release-semantic-db` dry run, then `dry_run=false`. Order
+  matters: the exporter is installed from the channel, and 0.5.0 is on it now, so the
+  export keeps the fields 0.4/0.5 added.
+- **Semantic_Embedding's PyPI gate for 0.5.0** (wheels run 37188265593) is waiting for a
+  decision; the recommendation is to reject it — see the fourth-wave notes.
 
 2026-07-22, after the second wave: the channel was swept — 16 stale files deleted across
 all six subdirs (rpc 0.3.1–0.3.4, mcp 0.3.0, minilang 0.4.0, auto-sledgehammer 0.1.0,
@@ -77,6 +89,54 @@ superseded versions" section of `RELEASE_CHECKLIST.md`. First run deleted 7 file
 (isabelle-ai 0.1.0, isabelle-minilang 0.5.0, isabelle-semantic-embedding 0.2.0 × 5
 platform subdirs), all externally verified; every package on the channel again has
 exactly one version.
+
+## Notes from the fourth wave (2026-10-03/04)
+
+The content released is each repository's state at the moment the owner said "release"
+(2026-10-03), plus the edits approved for the release itself. Order as in
+RELEASE_CHECKLIST.md §9; every package went dry run → annotated tag → tag run, and every
+publish job's audit read `audited 6 subdir(s)`.
+
+- **The isabelle-performant-ml series moved to 0.2.x**, and the three recipes that capped
+  it at `<0.2.0` (auto-sledgehammer, isabelle-rpc, isabelle-semantic-embedding) moved to
+  `>=0.2.0,<0.3.0` in the same wave. Load-bearing for auto-sledgehammer (its session is a
+  child of `Performant_Isabelle_HOL`, new in 0.2.0); for the other two the cap had to move
+  or isabelle-minilang would have been unsolvable.
+- **isabelle-rpc 0.5.1 exists because of a concurrent development commit.** While the
+  wave was running, another session moved `IsaTerm` into `Isabelle_RPC_Host` (rpc
+  `f9896eb`) and made Isa-Mini import it from there (`c402ea8`). Isa-Mini's `main` then
+  needed an rpc newer than the 0.5.0 just published; the owner chose to publish the class
+  as 0.5.1 and release minilang 0.7.0 from `main` with the floor `isabelle-rpc >=0.5.1`,
+  rather than release minilang from a commit off `main`.
+- **minilang's first dry run failed in `verify`**: `Minilang_AoA.thy` had gained
+  `ML_file "proof_store_AoA.ML"` on 2026-08-09 and the recipe's hand-enumerated `Agent/`
+  whitelist had not followed. The verify step ("every shipped session BUILDS from the
+  installed package") is what caught it; nothing broken was published. The enumeration
+  stays (it exists to keep `secret.sh` and dev code out of a public channel), so this is
+  a list to update whenever that theory's `ML_file` lines change.
+- **semantic-embedding's first dry run failed on a timing test**:
+  `test_vecarith.py::test_the_kernel_releases_the_gil` on the macOS universal2 leg
+  (stall 2.65 ms against a 3.50 ms call, threshold 0.5), green on the three other legs
+  and green on a fresh dispatch the next day. A scheduler-jitter flake of a test that
+  already takes the best of three rounds; not changed in this wave.
+- **A `pipefail` SIGPIPE race in `publish-conda.yml`** failed the isabelle-rpc 0.5.1
+  publish once: `rclone version | head -1` exits `head` after one line and rclone dies
+  with 141 if it is still writing. Fixed (`sed -n 1p`, also the four `--version | head -1`
+  lines in `build.yml`); the publish was re-run and succeeded. Nothing had been uploaded.
+- **isabelle-ai 0.3.0's floors are unchanged** (`minilang >=0.6.0`, `mcp >=0.3.0`,
+  `semantic-data >=2026.07.26`): every embedding-library name that minilang 0.6.0's
+  shipped code uses still exists in 0.5.0 with the same signature, so the pair does not
+  stop working and the recipe's floor doctrine says leave it. Its smoke now asserts
+  `isabelle-semantics status` prints `system : conda …` — the installed library really
+  reads the installed data payload — because `status` exits 0 either way.
+- **PyPI was deliberately not updated.** `Isabelle_Semantic_Embedding` 0.5.0 requires
+  `isabelle-rpc>=0.5.0`, which PyPI does not have (rpc is conda-only since 0.4.1), so the
+  post-publish `dependencies resolve` check would fail forever and `pip install ==0.5.0`
+  could never succeed; `IsaMini` 0.7.0 would need that embedding release. conda is ahead,
+  which the rule permits.
+- `main` of Performant_Isabelle_ML carries one commit past the released `ea3fef5`
+  (`67a504b`, Event_Log.never_raising, another session's), unpushed at the time of
+  writing; the superproject's submodule pointer for it was therefore not moved.
 
 ## Notes from the second wave (2026-07-22)
 
@@ -228,15 +288,16 @@ leg is usually the coincidence.
 
 ## Resuming
 
-1. `gh workflow run release-conda.yml -R xqyww123/Isa-Mini -f dry_run=true` and iterate to
-   green. Nothing about it has ever run.
-2. Then the `isabelle-ai` metapackage: `isabelle-minilang` + `isabelle-mcp`, nothing else.
+The two items under "In flight" are what is left of the fourth wave: the data package
+(upload the snapshot to Hugging Face from a network that can carry 4 GB, then
+`release-semantic-db` dry run → `dry_run=false`) and the pending PyPI gate.
 
-**Expect roughly eight dry runs.** semantic-embedding took that many, and the failure point
-moved forward each time rather than any single run being wasted. Two of the defects it
-surfaced were not packaging bugs at all but pre-existing bugs in the project (a
-requires-python floor that had always been wrong, and a dependency down to one call site).
-Budget for that rather than treating a red dry run as a setback.
+**Expect dry runs to fail, and let them.** semantic-embedding's first release took about
+eight; this wave took one or two per package, each failure on something real (a stale
+whitelist, a concurrent commit) or on CI noise (a timing test, a SIGPIPE race). The failure
+point moved forward each time rather than any single run being wasted. Budget for that
+rather than treating a red dry run as a setback. Four of the six `release-conda.yml`
+workflows default `dry_run` to **false** — always pass `-f dry_run=true` explicitly.
 
 Repo notes: `Isabelle_RPC` and `Isabelle_Semantic_Embedding` use `master`, the others use
 `main`. `Semantic_Embedding` was **renamed on GitHub** to `Isabelle_Semantic_Embedding`.

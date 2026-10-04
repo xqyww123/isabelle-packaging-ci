@@ -132,16 +132,17 @@ jobs:
           #                                       Demo_LIPIcs dies with
           #                                       "auto expansion is only possible with
           #                                        scalable fonts"
-          hg --version | head -1
-          patch --version | head -1
-          latexmk --version | head -1
+          # sed, not `head -1`: see publish-conda.yml (SIGPIPE under pipefail).
+          hg --version | sed -n 1p
+          patch --version | sed -n 1p
+          latexmk --version | sed -n 1p
           echo "epstopdf: $(command -v epstopdf || echo MISSING)"
           command -v epstopdf >/dev/null
           kpsewhich stmaryrd.sty
           for f in microtype.sty libertine.sty type1cm.sty; do
             echo "$f -> $(kpsewhich $f || echo '(not found)')"
           done
-          java -version 2>&1 | head -1
+          java -version 2>&1 | sed -n 1p
 
       - name: Restore cached hg clone
         id: hgcache

@@ -92,7 +92,10 @@ jobs:
           # Ubuntu ships rclone 1.60, which is BROKEN against R2: without
           # --s3-no-check-bucket it 403s, and every object's first PUT fails.
           curl -fsSL https://rclone.org/install.sh | sudo bash
-          rclone version | head -1
+          # sed, not `head -1`: head exits after one line, and under pipefail the
+          # SIGPIPE that gives rclone (exit 141) fails the step -- a race that lost
+          # once (isabelle-rpc 0.5.1, run 37221913392).  sed reads to the end.
+          rclone version | sed -n 1p
           # the runner's preinstalled Miniconda is ROOT-owned -- conda install would EACCES
           sudo chown -R "$(id -u):$(id -g)" "$CONDA"
           $CONDA/bin/conda install -y -n base -c conda-forge conda-index -q

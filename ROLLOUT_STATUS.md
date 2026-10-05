@@ -70,8 +70,9 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
   better network. Then: `release-semantic-db` dry run, then `dry_run=false`. Order
   matters: the exporter is installed from the channel, and 0.5.0 is on it now, so the
   export keeps the fields 0.4/0.5 added.
-- **Semantic_Embedding's PyPI gate for 0.5.0** (wheels run 37188265593) is waiting for a
-  decision; the recommendation is to reject it — see the fourth-wave notes.
+- (Closed 2026-10-05.) Semantic_Embedding's PyPI gate for 0.5.0 (wheels run 37188265593)
+  was **rejected** by the owner's decision; that run therefore ends as `failure` with
+  `verify-published` skipped, and PyPI stays at 0.2.0 — see the fourth-wave notes.
 
 2026-07-22, after the second wave: the channel was swept — 16 stale files deleted across
 all six subdirs (rpc 0.3.1–0.3.4, mcp 0.3.0, minilang 0.4.0, auto-sledgehammer 0.1.0,

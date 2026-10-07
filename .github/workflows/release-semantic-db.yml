@@ -140,12 +140,23 @@ jobs:
           # archive itself was already written).  The recipe's tests only assert
           # file presence, which the sanity step below asserts on the unpacked
           # archive and the post-publish smoke asserts on a real install.
+          # A resource monitor beside the build: three runs died here with "the
+          # runner has received a shutdown signal" and no other diagnostic, each
+          # a few minutes into rattler-build's re-index of the output channel.
+          # Memory, swap, disk and the largest process every 15 s, so the log
+          # that survives the next death says what the VM was doing.
+          ( while true; do
+              echo "[mon $(date -u +%H:%M:%S)] $(free -m | awk '/^Mem:/{printf "mem used=%sM avail=%sM", $3, $7} /^Swap:/{printf " swap used=%sM", $3}') $(df -m / | awk 'NR==2{printf "| disk avail=%sM", $4}') | top: $(ps -eo rss,comm --sort=-rss | awk 'NR==2{printf "%s %sM", $2, int($1/1024)}')"
+              sleep 15
+            done ) &
+          MON=$!
           ./rattler-build build \
             --recipe conda/data/isabelle-semantic-data/recipe.yaml \
             --output-dir out \
             --build-num "${{ inputs.build_number }}" \
             --no-test \
             -c https://conda.qiyuan.me -c conda-forge
+          kill "$MON" 2>/dev/null || true
           find out -name '*.conda' -print
           df -h / | tail -1
 

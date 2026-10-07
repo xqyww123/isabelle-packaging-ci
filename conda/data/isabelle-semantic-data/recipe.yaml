@@ -46,10 +46,11 @@ package:
   name: isabelle-semantic-data
   version: ${{ version }}
 
-source:
-  # The exported payload directory, produced earlier in the same workflow run.
-  path: ${{ env.get("SEMANTIC_DATA_PAYLOAD") }}
-  target_directory: payload
+# No `source:`.  The exported payload directory, produced earlier in the same
+# workflow run, is handed to the build script by path (script.env below) and
+# MOVED into the prefix.  A `source: path:` would make rattler-build copy the
+# whole tree into its work directory first, and with a 17 GB vector store that
+# extra copy is what ran the runner out of disk (run 37557142231).
 
 build:
   number: ${{ env.get("SEMANTIC_DATA_BUILD_NUMBER", default="0") }}
@@ -57,30 +58,35 @@ build:
   # no Python ABI story to claim.
   noarch: generic
   script:
-    - mkdir -p "$PREFIX/share/isabelle-semantic-data"
-    - cp -a payload/. "$PREFIX/share/isabelle-semantic-data/"
-    # BOTH hook files, unconditionally.  This is noarch: conda picks by the
-    # RUNNING platform and returns success IN SILENCE when the file is absent,
-    # so a .sh-only package would install cleanly on Windows and simply never
-    # purge anything.  The .bat must be CRLF, and both must exit 0 on every
-    # path: a nonzero post-link makes conda roll the whole install back
-    # (measured, isabelle-packaging-ci run 29637825807) -- which would trade a
-    # stale vector cache for losing the database altogether.
-    #
-    # `isabelle-semantics post-install-system-db` is itself written to exit 0
-    # unconditionally; the `exit 0` here is the second belt, for the case where
-    # the console script cannot be executed at all.
-    - mkdir -p "$PREFIX/bin" "$PREFIX/Scripts"
-    - |
-      cat > "$PREFIX/bin/.isabelle-semantic-data-post-link.sh" <<'HOOK'
-      #!/bin/bash
-      "$PREFIX/bin/isabelle-semantics" post-install-system-db
-      exit 0
-      HOOK
-    - chmod +x "$PREFIX/bin/.isabelle-semantic-data-post-link.sh"
-    - |
-      printf '@echo off\r\ncall "%%PREFIX%%\\Scripts\\isabelle-semantics.exe" post-install-system-db\r\nexit /b 0\r\n' \
-        > "$PREFIX/Scripts/.isabelle-semantic-data-post-link.bat"
+    env:
+      SEMANTIC_DATA_PAYLOAD: ${{ env.get("SEMANTIC_DATA_PAYLOAD") }}
+    content:
+      - mkdir -p "$PREFIX/share"
+      # The payload is single-use: moved, not copied (a rename on the same
+      # filesystem, no second 17 GB).
+      - mv "$SEMANTIC_DATA_PAYLOAD" "$PREFIX/share/isabelle-semantic-data"
+      # BOTH hook files, unconditionally.  This is noarch: conda picks by the
+      # RUNNING platform and returns success IN SILENCE when the file is absent,
+      # so a .sh-only package would install cleanly on Windows and simply never
+      # purge anything.  The .bat must be CRLF, and both must exit 0 on every
+      # path: a nonzero post-link makes conda roll the whole install back
+      # (measured, isabelle-packaging-ci run 29637825807) -- which would trade a
+      # stale vector cache for losing the database altogether.
+      #
+      # `isabelle-semantics post-install-system-db` is itself written to exit 0
+      # unconditionally; the `exit 0` here is the second belt, for the case where
+      # the console script cannot be executed at all.
+      - mkdir -p "$PREFIX/bin" "$PREFIX/Scripts"
+      - |
+        cat > "$PREFIX/bin/.isabelle-semantic-data-post-link.sh" <<'HOOK'
+        #!/bin/bash
+        "$PREFIX/bin/isabelle-semantics" post-install-system-db
+        exit 0
+        HOOK
+      - chmod +x "$PREFIX/bin/.isabelle-semantic-data-post-link.sh"
+      - |
+        printf '@echo off\r\ncall "%%PREFIX%%\\Scripts\\isabelle-semantics.exe" post-install-system-db\r\nexit /b 0\r\n' \
+          > "$PREFIX/Scripts/.isabelle-semantic-data-post-link.bat"
 
 requirements:
   run:

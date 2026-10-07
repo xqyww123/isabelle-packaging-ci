@@ -85,8 +85,15 @@ jobs:
         run: |
           set -euo pipefail
           tarball=$(cat "$RUNNER_TEMP/tarball_path")
+          df -h / | tail -1
           mkdir -p "$RUNNER_TEMP/db"
           tar --zstd -xf "$tarball" -C "$RUNNER_TEMP/db"
+          # Disk is the binding constraint on this runner (the 2026-10-07 dry run,
+          # 37557142231, died in the build step with the tarball, the extracted
+          # database, the payload and a copy of it all on disk at once): drop each
+          # input the moment it is done with.  The tarball lives in the HF cache.
+          rm -rf "$HOME/.cache/huggingface"
+          df -h / | tail -1
           # The tarball holds the whole cache directory under its own name.
           db_dir=$(find "$RUNNER_TEMP/db" -maxdepth 1 -mindepth 1 -type d | head -1)
           [ -d "$db_dir/semantics.lmdb" ] \
@@ -94,6 +101,9 @@ jobs:
 
           export SEMANTIC_DB_DIR="$db_dir"
           isabelle-semantics export "$RUNNER_TEMP/payload"
+          rm -rf "$RUNNER_TEMP/db"                 # the input database, done with
+          du -sh "$RUNNER_TEMP/payload"/* | sort -h | tail -4
+          df -h / | tail -1
 
           version=$(python - <<'PY'
           import json, os
@@ -122,12 +132,14 @@ jobs:
           # Our channel FIRST: the run dependency (isabelle-semantic-embedding)
           # exists nowhere else, and rattler-build resolves the test
           # environment as well as the build one.
+          df -h / | tail -1
           ./rattler-build build \
             --recipe conda/data/isabelle-semantic-data/recipe.yaml \
             --output-dir out \
             --build-num "${{ inputs.build_number }}" \
             -c https://conda.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
+          df -h / | tail -1
 
       - name: "Sanity: link hooks, reader-library floor, payload in place"
         run: |

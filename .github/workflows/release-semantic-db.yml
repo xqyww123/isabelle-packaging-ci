@@ -133,10 +133,18 @@ jobs:
           # exists nowhere else, and rattler-build resolves the test
           # environment as well as the build one.
           df -h / | tail -1
+          # --no-test: rattler-build's own test phase installs the freshly built
+          # package into a scratch environment, and with a 9.5 GiB archive on a
+          # 15 GiB runner that step killed the VM twice, 3-4 minutes in, right
+          # after "Checking for symlinks" (runs 37565271795 and its re-run; the
+          # archive itself was already written).  The recipe's tests only assert
+          # file presence, which the sanity step below asserts on the unpacked
+          # archive and the post-publish smoke asserts on a real install.
           ./rattler-build build \
             --recipe conda/data/isabelle-semantic-data/recipe.yaml \
             --output-dir out \
             --build-num "${{ inputs.build_number }}" \
+            --no-test \
             -c https://conda.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
           df -h / | tail -1

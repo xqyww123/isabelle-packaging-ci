@@ -220,6 +220,12 @@ jobs:
           $CONDA/bin/python -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
             --channel-name conda.qiyuan.me
 
+      - name: "Banner on the root index page (conda-index rewrote it; put the install line back)"
+        run: |
+          set -euo pipefail
+          python3 scripts/banner-index.py "$CH/index.html" conda/channel-banner.html
+          grep -q 'conda install -c https://conda.qiyuan.me' "$CH/index.html"
+
       - name: Push the refreshed index
         run: |
           set -euo pipefail

@@ -204,17 +204,32 @@ jobs:
           [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
           python3 -m pip install --quiet zstandard
           work=$(mktemp -d)
+          # Streamed, never buffered: the payload is ~17 GiB unpacked, and the
+          # earlier `z.read(member)` + `io.BytesIO(r.read())` held all of it in
+          # memory -- the first prebuilt dry run (37868416138) lost its runner
+          # here.  Only the metadata, the hooks and MANIFEST.json are written to
+          # disk; every member's name is recorded for the presence checks.
           python3 - "$pkg" "$work" <<'PY'
-          import io, sys, tarfile, zipfile, zstandard
-          z = zipfile.ZipFile(sys.argv[1])
+          import os, sys, tarfile, zipfile, zstandard
+          z, work = zipfile.ZipFile(sys.argv[1]), sys.argv[2]
+          keep = ("info/", "bin/", "Scripts/", "share/isabelle-semantic-data/MANIFEST.json")
+          names = []
           for member in z.namelist():
-              if member.startswith(("pkg-", "info-")) and member.endswith(".tar.zst"):
-                  r = zstandard.ZstdDecompressor().stream_reader(io.BytesIO(z.read(member)))
-                  tarfile.open(fileobj=io.BytesIO(r.read())).extractall(sys.argv[2])
+              if not (member.startswith(("pkg-", "info-")) and member.endswith(".tar.zst")):
+                  continue
+              with z.open(member) as zf, zstandard.ZstdDecompressor().stream_reader(zf) as r, \
+                   tarfile.open(fileobj=r, mode="r|") as tar:
+                  for ti in tar:
+                      names.append(ti.name)
+                      if ti.name.startswith(keep):
+                          tar.extract(ti, work, filter="data")
+          with open(os.path.join(work, "MEMBERS.txt"), "w") as f:
+              f.write("\n".join(names) + "\n")
+          print(f"{len(names)} members listed; metadata, hooks and MANIFEST extracted")
           PY
           test -f "$work/share/isabelle-semantic-data/MANIFEST.json" \
             || { echo "::error::no MANIFEST.json in the payload"; exit 1; }
-          test -f "$work/share/isabelle-semantic-data/semantics.lmdb/data.mdb" \
+          grep -qx 'share/isabelle-semantic-data/semantics.lmdb/data.mdb' "$work/MEMBERS.txt" \
             || { echo "::error::no semantics.lmdb in the payload"; exit 1; }
           # ONE post-link hook by design (recipe commit c9f5be6, amending the
           # earlier "deliberately hook-less", plan L2): it purges the vectors the

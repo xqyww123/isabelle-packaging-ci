@@ -64,7 +64,7 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 ## In flight
 
 - (Closed 2026-10-09.) The new `isabelle-semantic-data` 2026.10.09.0024 is published
-  (run 37869076040: `audited 6 subdir(s)`, smoke green). It was built on cslh19 and
+  (run 37869695496: `audited 6 subdir(s)`, smoke green). It was built on cslh19 and
   handed to CI through the `prebuilt` input — see the fourth-wave notes for why.
 - (Closed 2026-10-05.) Semantic_Embedding's PyPI gate for 0.5.0 (wheels run 37188265593)
   was **rejected** by the owner's decision; that run therefore ends as `failure` with

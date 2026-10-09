@@ -32,6 +32,10 @@ on:
         description: "Build and test only -- do NOT publish to the channel"
         type: boolean
         default: true
+      prebuilt:
+        description: "Path in the ANTPG/MLML-data dataset of a prebuilt isabelle-semantic-data .conda (same recipe, built on a machine with the memory rattler-build needs: ~2x the archive). When set, export and build are skipped and that file is the package."
+        type: string
+        default: ""
 
 concurrency:
   group: release-semantic-db
@@ -63,6 +67,7 @@ jobs:
           isabelle-semantics --help >/dev/null
 
       - name: Download the HF dev-sync snapshot
+        if: ${{ inputs.prebuilt == '' }}
         shell: bash -l {0}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -80,6 +85,7 @@ jobs:
           PY
 
       - name: Extract and export (tombstones dropped, gates run)
+        if: ${{ inputs.prebuilt == '' }}
         id: export
         shell: bash -l {0}
         run: |
@@ -116,6 +122,7 @@ jobs:
           echo "exported version $version"
 
       - name: Install rattler-build
+        if: ${{ inputs.prebuilt == '' }}
         run: |
           set -euo pipefail
           curl -fsSL -o rattler-build \
@@ -124,6 +131,7 @@ jobs:
           ./rattler-build --version
 
       - name: Build the data package
+        if: ${{ inputs.prebuilt == '' }}
         env:
           SEMANTIC_DATA_VERSION: ${{ steps.export.outputs.version }}
           SEMANTIC_DATA_PAYLOAD: ${{ runner.temp }}/payload
@@ -158,6 +166,35 @@ jobs:
             -c https://conda.qiyuan.me -c conda-forge
           kill "$MON" 2>/dev/null || true
           find out -name '*.conda' -print
+          df -h / | tail -1
+
+      - name: Take the prebuilt package from the HF dataset
+        if: ${{ inputs.prebuilt != '' }}
+        shell: bash -l {0}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PREBUILT: ${{ inputs.prebuilt }}
+        run: |
+          set -euo pipefail
+          # rattler-build cannot package this payload on a hosted runner: its re-index
+          # reads the whole archive into memory (rattler_index reader.bytes().collect(),
+          # ~2x the 8.5 GiB archive; runs 37565271795, 37570530666, 37573774046 each
+          # ended with the VM reclaimed).  The build therefore happens on a machine with
+          # the memory, with this same recipe, and the result enters here; everything
+          # after this step -- the sanity check, the publish guard, the smoke -- is
+          # unchanged.
+          mkdir -p out/noarch
+          python - <<'PY'
+          import os, re, shutil
+          from huggingface_hub import hf_hub_download
+          name = os.path.basename(os.environ["PREBUILT"])
+          if not re.fullmatch(r"isabelle-semantic-data-[0-9.]+-[a-z0-9]+_[0-9]+\.conda", name):
+              raise SystemExit(f"::error::not an isabelle-semantic-data .conda name: {name}")
+          path = hf_hub_download(repo_id="ANTPG/MLML-data", repo_type="dataset",
+                                 filename=os.environ["PREBUILT"], token=os.environ["HF_TOKEN"])
+          shutil.move(os.path.realpath(path), os.path.join("out", "noarch", name))
+          print("prebuilt package:", name, os.path.getsize(os.path.join("out", "noarch", name)), "bytes")
+          PY
           df -h / | tail -1
 
       - name: "Sanity: link hooks, reader-library floor, payload in place"

@@ -4,9 +4,9 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-10-04 — the fourth release wave (2026-10-03/04): performant-ml 0.2.0,
+Last updated: 2026-10-09 — the fourth release wave (2026-10-03..09): performant-ml 0.2.0,
 auto-sledgehammer 0.2.0, rpc 0.5.0 and 0.5.1, semantic-embedding 0.5.0, minilang 0.7.0,
-isabelle-ai 0.3.0; see "Notes from the fourth wave". Between the second wave and this one
+isabelle-ai 0.3.0, semantic-data 2026.10.09.0024; see "Notes from the fourth wave". Between the second wave and this one
 the table below had gone stale: rpc 0.4.1 (2026-08-08), semantic-embedding 0.3.0 and
 minilang 0.6.0 (2026-07-26, the layered semantic DB), isabelle-ai 0.2.0, mcp 0.4.0 and
 0.6.0, and the first `isabelle-semantic-data` were published without moving their rows.
@@ -29,7 +29,7 @@ by the owner's decision of 2026-10-03).
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
 | `isabelle-semantic-embedding` | 0.5.0 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.2.0 (not updated) |
-| `isabelle-semantic-data` | 2026.07.26.1711 | noarch generic, **data**: the read-only system layer of the semantic DB; version = export timestamp |
+| `isabelle-semantic-data` | 2026.10.09.0024 | noarch generic, **data**: the read-only system layer of the semantic DB; version = export timestamp; **8.99 GiB** (1.44M records with their vectors), built off-runner — see the fourth-wave notes |
 | `isabelle-ai` | 0.3.0 | noarch generic, **metapackage** — minilang + mcp + semantic-data, no files of its own |
 | `isabelle-nunchaku` | 0.5.2 | component, **linux-64 only** — binaries come from the `xqyww123/nunchaku` fork's release, not built here |
 
@@ -63,13 +63,9 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 ## In flight
 
-- **A new `isabelle-semantic-data`** from the owner's 2026-10-03 database. The snapshot
-  tarball is built (9.98 GB, `contrib/Semantic_Embedding/Isabelle_Semantic_Embedding.tar.zst`
-  in the owner's working tree) but its Hugging Face upload stalled three times on a hotel
-  network (bytes stop flowing after a few hundred MB, no retries logged); it waits for a
-  better network. Then: `release-semantic-db` dry run, then `dry_run=false`. Order
-  matters: the exporter is installed from the channel, and 0.5.0 is on it now, so the
-  export keeps the fields 0.4/0.5 added.
+- (Closed 2026-10-09.) The new `isabelle-semantic-data` 2026.10.09.0024 is published
+  (run 37869076040: `audited 6 subdir(s)`, smoke green). It was built on cslh19 and
+  handed to CI through the `prebuilt` input — see the fourth-wave notes for why.
 - (Closed 2026-10-05.) Semantic_Embedding's PyPI gate for 0.5.0 (wheels run 37188265593)
   was **rejected** by the owner's decision; that run therefore ends as `failure` with
   `verify-published` skipped, and PyPI stays at 0.2.0 — see the fourth-wave notes.
@@ -135,6 +131,25 @@ publish job's audit read `audited 6 subdir(s)`.
   post-publish `dependencies resolve` check would fail forever and `pip install ==0.5.0`
   could never succeed; `IsaMini` 0.7.0 would need that embedding release. conda is ahead,
   which the rule permits.
+- **The data package is built off-runner now.** Its payload grew twelvefold since July
+  (1.44M records, a 17 GB vector store; the `.conda` is 8.99 GiB). rattler-build 0.69.1
+  packages it fine, then re-indexes the output channel, and rattler_index reads the
+  whole archive into memory (`reader.bytes().collect::<Vec<u8>>()`, then in-memory
+  sha256/md5; the same code in rattler_index 0.33.2) — measured at a 17.2 GiB peak,
+  which reclaimed 15 GiB hosted runners three times (37565271795, 37570530666,
+  37573774046; the VM dies 3–8 min after "Checking for symlinks", with the archive
+  already written). The workflow therefore takes a `prebuilt` dispatch input: the
+  `.conda`, built elsewhere by the same recipe and the channel's own library, is
+  fetched from the ANTPG/MLML-data dataset and goes through the unchanged sanity
+  check, artifact handoff, publish guard and smoke. The 2026.10.09.0024 package was
+  built on cslh19 (export 1 min, rattler-build 8 min, upload ~30 min). Along the way:
+  the recipe moves the payload into the prefix instead of letting rattler-build copy
+  it (a `source: path:` meant a second 19 GB on disk), the workflow deletes the
+  tarball and the extracted database as soon as each is done with and prints `df`
+  at every step, and the sanity check streams the archive instead of buffering
+  17 GiB through `io.BytesIO` (which cost one more runner, 37868416138). Installing
+  the package needs no such memory: measured with micromamba, 614 MiB peak RSS for
+  the whole stack, 56 s from a local channel, 18 GB on disk plus the cached archive.
 - `main` of Performant_Isabelle_ML carries one commit past the released `ea3fef5`
   (`67a504b`, Event_Log.never_raising, another session's), unpushed at the time of
   writing; the superproject's submodule pointer for it was therefore not moved.
@@ -289,9 +304,9 @@ leg is usually the coincidence.
 
 ## Resuming
 
-The two items under "In flight" are what is left of the fourth wave: the data package
-(upload the snapshot to Hugging Face from a network that can carry 4 GB, then
-`release-semantic-db` dry run → `dry_run=false`) and the pending PyPI gate.
+Nothing of the fourth wave is left. A future data release repeats the off-runner
+build (the `prebuilt` input's description says what it expects) until rattler_index
+stops reading packages whole.
 
 **Expect dry runs to fail, and let them.** semantic-embedding's first release took about
 eight; this wave took one or two per package, each failure on something real (a stale

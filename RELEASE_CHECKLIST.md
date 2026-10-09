@@ -586,6 +586,18 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    The script that did it on 2026-10-09 is reproducible from these steps; what it is
    NOT is a build of the owner's local database — the HF snapshot is the input, so what
    was synced is what ships.
+4. **`isabelle-ai` goes last, and its floors are the channel's newest at that moment —
+   every release, no exceptions.** The metapackage has no content: its `depends` list IS
+   the release. Before dispatching `release-isabelle-ai.yml`, set each floor in
+   `conda/metapackage/isabelle-ai/recipe.yaml` (`isabelle-minilang`, `isabelle-mcp`,
+   `isabelle-semantic-data`) to the newest version published on the channel, whether or
+   not the old floor "still works" — a lagging floor means `conda update isabelle-ai`
+   updates nothing and users never see the wave. A version already published whose
+   floors must move is republished under the **same version** with the workflow's
+   `build_number` input bumped (the channel's immutability guard refuses only an
+   identical filename; `conda install isabelle-ai=X` takes the highest build): 0.3.0
+   went out as build 0 with the 0.2.0 floors and again as build 1 with the current ones
+   on 2026-10-09, which is when the owner made this a rule.
 
 ## 10. What verification must assert
 

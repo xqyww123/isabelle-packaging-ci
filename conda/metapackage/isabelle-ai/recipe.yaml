@@ -17,10 +17,13 @@ schema_version: 1
 # source to sit beside.  Same reason conda/third-party/ recipes live here, though this is
 # not third-party, hence its own directory.
 #
-# WHY NOT PIN EXACT VERSIONS: a metapackage that pins `==` has to be republished for every
-# release of either half, and a stale pin silently holds users back.  The floors below are
-# the versions this combination was first shipped and tested with; the solver is free to
-# take newer ones.  Raise a floor only when the pair genuinely stops working below it.
+# WHY FLOORS, AND WHY THEY MOVE AT EVERY RELEASE: a metapackage that pins `==` has to be
+# republished for every release of either half, and a stale pin silently holds users
+# back; a floor lets the solver take newer ones.  A floor that lags holds users back just
+# as silently -- `conda update isabelle-ai` against an old floor updates nothing -- so
+# EVERY isabelle-ai release raises each floor to the newest version on the channel at
+# that moment (RELEASE_CHECKLIST.md §9, owner's rule of 2026-10-09).  The floors below
+# are therefore the versions this release was tested with, and the solver can only go up.
 
 context:
   version: ${{ env.get("ISABELLE_AI_VERSION", default="0.1.0") }}
@@ -42,17 +45,15 @@ requirements:
     # here would be restating what the halves already require, and a metapackage that
     # duplicates its children's dependency lists is a second place for them to drift.
     #
-    # Floors raised 2026-07-26 (layered semantic DB rollout, SEMANTIC_DB_LAYERED_PLAN
-    # §7): minilang <0.6.0 imports the embedding library's deleted r2_sync module on
-    # every `by aoa`, so the pair genuinely stops working below it -- exactly this
-    # file's floor doctrine.
-    - isabelle-minilang >=0.6.0
-    - isabelle-mcp >=0.3.0
+    # Floors as of the 0.3.0 republish (build 1, 2026-10-09): the newest of each on the
+    # channel that day.
+    - isabelle-minilang >=0.7.0
+    - isabelle-mcp >=0.6.0
     # The pre-built semantic database (the read-only system layer).  A hard dependency
     # HERE, deliberately not of isabelle-semantic-embedding: the library stays lean,
     # the batteries-included metapackage carries the batteries (plan L3).  The floor is
-    # the first layered-payload release.
-    - isabelle-semantic-data >=2026.07.26
+    # the newest payload on the channel, like the two above.
+    - isabelle-semantic-data >=2026.10.09
 
 tests:
   # A metapackage's only failure mode is a run requirement that does not solve or does not

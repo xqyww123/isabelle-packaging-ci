@@ -61,9 +61,11 @@ local sqlite.
 automatic retention policy (reworded 2026-07-28; supersedes the 2026-07-22 "keeps only the
 latest version" phrasing). `scripts/sweep-old-versions.py` computes the **candidates** —
 files with a strictly newer `VersionOrder` version of the same package in the same
-subdir — and the owner selects among them. Version ties (`2026.07.26` vs `2026.7.26`,
-`1.0` vs `1.0.0` — conda compares them equal) all survive; a package's newest or only
-version in a subdir is never deletable. Deleting superseded versions deliberately trades
+subdir, or a strictly higher build number of the same version (the build string's
+trailing `_N`; added 2026-10-09 for the isabelle-ai 0.3.0 republish) — and the owner
+selects among them. Version ties (`2026.07.26` vs `2026.7.26`,
+`1.0` vs `1.0.0` — conda compares them equal) all survive; the newest build of a package's newest
+or only version in a subdir is never deletable. Deleting superseded versions deliberately trades
 lockfile reproducibility away; this is a private channel and the owner accepts that.
 
 The script edits the per-subdir metadata surgically and **downloads no package**. Design
@@ -161,6 +163,7 @@ channel must be added both to `PUBLISH_REPOS` in the script and to this list: `I
 | `isabelle-ai` | 0.1.0 | noarch | owner-selected sweep; superseded by 0.2.0 | 2026-07-28 |
 | `isabelle-minilang` | 0.5.0 | noarch | owner-selected sweep; superseded by 0.6.0 | 2026-07-28 |
 | `isabelle-semantic-embedding` | 0.2.0 | all five platform subdirs | owner-selected sweep; superseded by 0.3.0 | 2026-07-28 |
+| `isabelle-ai` | 0.3.0 (build 0) | noarch | owner-selected sweep; superseded by 0.3.0 build 1, the republish with the raised floors (§9 item 4) | 2026-10-09 |
 
 Rows before 2026-07-28 say "policy sweep" — the automatic-retention framing of the time,
 since replaced by the owner-selected manual above.
@@ -597,7 +600,8 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    `build_number` input bumped (the channel's immutability guard refuses only an
    identical filename; `conda install isabelle-ai=X` takes the highest build): 0.3.0
    went out as build 0 with the 0.2.0 floors and again as build 1 with the current ones
-   on 2026-10-09, which is when the owner made this a rule.
+   on 2026-10-09, which is when the owner made this a rule; build 0 was then swept
+   (deletion log above).
 
 ## 10. What verification must assert
 

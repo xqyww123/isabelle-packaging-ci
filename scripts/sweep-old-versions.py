@@ -18,10 +18,12 @@ linger:  (source ~/Current/MLML/secret.sh && python3 sweep-old-versions.py ...))
                                             # this exact plan file
 
 A file is a *candidate* iff a strictly higher version (conda VersionOrder) of
-the same package exists in the same subdir.  Version ties (07 == 7, 1.0 ==
-1.0.0) all survive; the newest (or only) version of a package is never
-deletable.  Only candidates may appear in the plan file; execute aborts on
-anything else.
+the same package exists in the same subdir, or a strictly higher build number
+of the same version does (the trailing _N of the build string; a build string
+without one is neither above nor below anything on that axis).  Version ties
+(07 == 7, 1.0 == 1.0.0) all survive; the newest build of the newest (or only)
+version of a package is never deletable.  Only candidates may appear in the
+plan file; execute aborts on anything else.
 
 Every failure is an abort; the only irreversible step (deletefile) comes last,
 after the owner's plan file and a typed DELETE confirmation.
@@ -163,20 +165,39 @@ def parse_conda_filename(fn):
     return tuple(parts)
 
 
+def build_number_of(build):
+    """The trailing _N of a conda build string (conda-build and rattler-build
+    always emit one), or None when there is none."""
+    m = re.search(r"_(\d+)$", build)
+    return int(m.group(1)) if m else None
+
+
 def compute_candidates(files):
     """files: iterable of .conda filenames in ONE subdir.
-    Returns {filename: newest_version} for every file whose version is
-    STRICTLY below all maximal versions of its package.  Ties survive."""
+    Returns {filename: superseder} for every file STRICTLY below a sibling of
+    its package: by version (all maximal versions survive -- ties are not
+    candidates), or, within one version string, by build number (a file whose
+    build string has no trailing _N neither supersedes nor is superseded)."""
     by_name = {}
     for fn in files:
-        name, version, _build = parse_conda_filename(fn)
-        by_name.setdefault(name, []).append((fn, version))
+        name, version, build = parse_conda_filename(fn)
+        by_name.setdefault(name, []).append((fn, version, build))
     out = {}
-    for name, entries in by_name.items():
-        maxv = max((VersionOrder(v) for _, v in entries))
-        for fn, v in entries:
+    for name, rows in by_name.items():
+        maxv = max((VersionOrder(v) for _, v, _ in rows))
+        for fn, v, _ in rows:
             if VersionOrder(v) < maxv:  # strict; ties are not candidates
                 out[fn] = str(maxv)
+        numbered = {}
+        for fn, v, b in rows:
+            n = build_number_of(b)
+            if n is not None:
+                numbered.setdefault(v, []).append((fn, n))
+        for v, builds in numbered.items():
+            maxn = max(n for _, n in builds)
+            for fn, n in builds:
+                if n < maxn and fn not in out:
+                    out[fn] = f"{v} build {maxn}"
     return out
 
 
@@ -419,8 +440,9 @@ def cmd_plan(planfile):
         "# sweep plan generated {}Z".format(
             datetime.datetime.now(datetime.timezone.utc)
             .strftime("%Y-%m-%d %H:%M:%S")),
-        "# Every line is a CANDIDATE (a strictly newer version exists in the",
-        "# same subdir).  DELETE the lines you do NOT want removed, keep the",
+        "# Every line is a CANDIDATE (a strictly newer version, or a higher",
+        "# build of the same version, exists in the same subdir).  DELETE the",
+        "# lines you do NOT want removed, keep the",
         "# rest, then run:  sweep-old-versions.py execute " + planfile,
     ]
     n = 0
@@ -623,6 +645,12 @@ def cmd_selftest():
     # re-run on already-edited data: plan∩present is empty, nothing deleted
     new2, deleted2 = edit_repodata(new, {"a-1.0-x_0.conda"}, "selftest")
     assert deleted2 == {} and new2 == new
+    assert compute_candidates([
+        "a-1.0-x_0.conda", "a-1.0-x_1.conda", "a-0.9-x_5.conda",  # build axis
+        "b-1.0-x_0.conda",                                        # alone
+        "c-1.0-abc.conda", "c-1.0-x_2.conda",                     # unnumbered
+        "d-1.0-x_0.conda", "d-1.0.0-x_1.conda",                   # version tie
+    ]) == {"a-1.0-x_0.conda": "1.0 build 1", "a-0.9-x_5.conda": "1.0"}
     print("selftest: all assertions passed")
 
 

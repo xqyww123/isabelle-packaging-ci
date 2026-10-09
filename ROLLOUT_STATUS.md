@@ -6,7 +6,7 @@ re-litigating anything.
 
 Last updated: 2026-10-09 — the fourth release wave (2026-10-03..09): performant-ml 0.2.0,
 auto-sledgehammer 0.2.0, rpc 0.5.0 and 0.5.1, semantic-embedding 0.5.0, minilang 0.7.0,
-isabelle-ai 0.3.0, semantic-data 2026.10.09.0024; see "Notes from the fourth wave". Between the second wave and this one
+isabelle-ai 0.3.0 (build 1), semantic-data 2026.10.09.0024; see "Notes from the fourth wave". Between the second wave and this one
 the table below had gone stale: rpc 0.4.1 (2026-08-08), semantic-embedding 0.3.0 and
 minilang 0.6.0 (2026-07-26, the layered semantic DB), isabelle-ai 0.2.0, mcp 0.4.0 and
 0.6.0, and the first `isabelle-semantic-data` were published without moving their rows.
@@ -30,7 +30,7 @@ by the owner's decision of 2026-10-03).
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
 | `isabelle-semantic-embedding` | 0.5.0 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.2.0 (not updated) |
 | `isabelle-semantic-data` | 2026.10.09.0024 | noarch generic, **data**: the read-only system layer of the semantic DB; version = export timestamp; **8.99 GiB** (1.44M records with their vectors), built off-runner — see the fourth-wave notes |
-| `isabelle-ai` | 0.3.0 | noarch generic, **metapackage** — minilang + mcp + semantic-data, no files of its own |
+| `isabelle-ai` | 0.3.0 (build 1) | noarch generic, **metapackage** — minilang + mcp + semantic-data, no files of its own; its floors are the channel's newest at every release (`minilang >=0.7.0`, `mcp >=0.6.0`, `semantic-data >=2026.10.09`) |
 | `isabelle-nunchaku` | 0.5.2 | component, **linux-64 only** — binaries come from the `xqyww123/nunchaku` fork's release, not built here |
 
 `isabelle-nunchaku` is the one package still published on a single subdir. 0.5.3 changes
@@ -87,6 +87,11 @@ superseded versions" section of `RELEASE_CHECKLIST.md`. First run deleted 7 file
 platform subdirs), all externally verified; every package on the channel again has
 exactly one version.
 
+2026-10-09: `isabelle-ai-0.3.0-h4616a5c_0.conda` (build 0, the stale floors) deleted
+with the same tool, whose candidate rule now also covers a lower build number of the
+same version. The 15 other candidates it listed that day (every pre-wave version, see
+the fourth-wave notes) were left in place — the owner's choice, one file only.
+
 ## Notes from the fourth wave (2026-10-03/04)
 
 The content released is each repository's state at the moment the owner said "release"
@@ -120,10 +125,16 @@ publish job's audit read `audited 6 subdir(s)`.
   publish once: `rclone version | head -1` exits `head` after one line and rclone dies
   with 141 if it is still writing. Fixed (`sed -n 1p`, also the four `--version | head -1`
   lines in `build.yml`); the publish was re-run and succeeded. Nothing had been uploaded.
-- **isabelle-ai 0.3.0's floors are unchanged** (`minilang >=0.6.0`, `mcp >=0.3.0`,
-  `semantic-data >=2026.07.26`): every embedding-library name that minilang 0.6.0's
-  shipped code uses still exists in 0.5.0 with the same signature, so the pair does not
-  stop working and the recipe's floor doctrine says leave it. Its smoke now asserts
+- **isabelle-ai 0.3.0 was published twice, and the first one is gone.** Build 0
+  (2026-10-05) kept the 0.2.0 floors (`minilang >=0.6.0`, `mcp >=0.3.0`,
+  `semantic-data >=2026.07.26`) under the recipe's old doctrine of raising a floor only
+  when the pair stops working below it. The owner overruled that on 2026-10-09: a
+  metapackage whose floors lag is one `conda update isabelle-ai` does nothing with, so
+  every isabelle-ai release carries the channel's newest versions — now
+  RELEASE_CHECKLIST §9 item 4. Build 1 (same version, `build_number=1`, the input the
+  workflow has for exactly this; dry run 37886355252, publish 37886735015, smoke green)
+  floors `minilang >=0.7.0`, `mcp >=0.6.0`, `semantic-data >=2026.10.09`; build 0 was
+  deleted the same day with the sweep tool (below). The smoke now also asserts
   `isabelle-semantics status` prints `system : conda …` — the installed library really
   reads the installed data payload — because `status` exits 0 either way.
 - **PyPI was deliberately not updated.** `Isabelle_Semantic_Embedding` 0.5.0 requires
@@ -178,7 +189,10 @@ publish job's audit read `audited 6 subdir(s)`.
 the "recipe beside its source" rule presupposes a source, and this has none. Its own
 directory rather than `conda/third-party/`, whose name carries "upstream's artifact, pinned
 by sha256" — none of which applies. Floors, not exact pins: a metapackage that pins `==`
-must be republished for every release of either half. Empty by construction, and the
+must be republished for every release of either half. (Since 2026-10-09 it is
+republished at every wave regardless, with its floors raised to the channel's newest —
+RELEASE_CHECKLIST §9 item 4; floors rather than `==` still let the solver move up
+between waves.) Empty by construction, and the
 workflow asserts exactly that — no file outside `info/`, `depends` equal to those two and
 nothing more, `subdir: noarch`. Dry-run green on the first attempt.
 

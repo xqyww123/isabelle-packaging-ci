@@ -346,6 +346,16 @@ the divergences are defects.
 - Declare console scripts as recipe `entry_points` — with them, conda generates the wrapper
   at link time and it is correctly *absent* from the payload, so assert its absence, not
   its presence.
+- **rattler-build needs about twice the archive's size in RAM.** After writing the
+  `.conda` it re-indexes the output channel, and rattler_index reads the whole package
+  into a `Vec<u8>` (`reader.bytes().collect()`) to compute sha256/md5 — measured at a
+  17.2 GiB peak for the 8.99 GiB `isabelle-semantic-data`, which reclaimed 15 GiB hosted
+  runners three times with nothing in the log but "the runner has received a shutdown
+  signal" (runs 37565271795, 37570530666, 37573774046; the VM dies 3–8 min after
+  "Checking for symlinks"). `--no-test` does not avoid it (the re-index runs on both
+  paths), and rattler_index 0.33.2 has the same code. Anything over ~5 GiB is built
+  off-runner — §9 item 3. Install clients are unaffected: a `conda`/`micromamba` install
+  of that package peaks at 614 MiB.
 
 ## 8. Repackaging a third-party dependency
 
@@ -540,6 +550,42 @@ One recipe per platform tag. Record why we carry it and when to drop it.
    - if `publish` fails partway: fix, then **re-run failed jobs**; where the
      guard compares sha256 over https, a byte-identical re-upload resumes
      instead of dead-ending.
+3. **The data package (`isabelle-semantic-data`) is built on a big-memory machine,
+   not on the runner** — §7b, last bullet: rattler-build needs ~2× the archive in RAM
+   and the payload is 19 GB. The runner still does everything else; `release-semantic-db`
+   takes the finished `.conda` through its `prebuilt` input and runs the unchanged sanity
+   check, artifact handoff, publish guard and smoke on it. The owner's HF upload is still
+   the input (publish the snapshot first, `sync-semantic-embedding-db` skill). Then, on a
+   machine with ≥ 40 GB RAM, ≥ 60 GB disk and a fast link (cslh19 did it: export 1 min,
+   rattler-build 8 min, upload 30 min):
+
+   1. An environment with the **channel's own library**, so the export is the one CI
+      would have run: `micromamba create -p env --override-channels -c
+      https://conda.qiyuan.me -c conda-forge python=3.12 "isabelle-semantic-embedding>=0.3.0"
+      huggingface_hub zstd`.
+   2. `hf_hub_download` of `contrib/Semantic_Embedding/Isabelle_Semantic_Embedding.tar.zst`
+      from `ANTPG/MLML-data` (the cached HF token). The path it returns is a **symlink** —
+      `readlink -f` it: `zstd` refuses symlinked inputs and `stat` without `-L` reports
+      the link's size. Check the size against `data/manifest.json`.
+   3. `zstd -dc … | tar -x` somewhere with room; `SEMANTIC_DB_DIR=<that dir>
+      env/bin/isabelle-semantics export payload`; delete the extracted database.
+   4. rattler-build **0.69.1, the version the workflow pins**, on the recipe from
+      `main`, with `SEMANTIC_DATA_VERSION` (the manifest's `created_at` through
+      `version_of_created_at`) and `SEMANTIC_DATA_PAYLOAD` set, `--build-num 0`,
+      `--no-test`, `-c https://conda.qiyuan.me -c conda-forge` — and **`TMPDIR` on a
+      real disk**: rattler-build stages the archive under `/tmp`, which on cslh19 is a
+      32 GB tmpfs that a 9 GB archive fills.
+   5. Upload the `.conda` to `ANTPG/MLML-data` under `contrib/Semantic_Embedding/conda/`
+      (`HfApi().upload_file`, commit message naming the machine). This is a release
+      artifact, not a dev-sync file: it is **not** added to `data/manifest.json`.
+   6. `gh workflow run release-semantic-db.yml -R xqyww123/isabelle-packaging-ci
+      -f prebuilt=contrib/Semantic_Embedding/conda/<name>.conda -f dry_run=true`;
+      green → the same with `-f dry_run=false`. Read the publish job's audit line and
+      the smoke as for any other package (§11).
+
+   The script that did it on 2026-10-09 is reproducible from these steps; what it is
+   NOT is a build of the owner's local database — the HF snapshot is the input, so what
+   was synced is what ships.
 
 ## 10. What verification must assert
 

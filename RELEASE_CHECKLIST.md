@@ -8,6 +8,29 @@ Correct a bad release with a **new version**, not a retraction. Deleting from th
 is exceptional; the two grounds that exist, their procedures, and the log of every
 deletion so far are in "Deleting from the channel" below, before the numbered checklist.
 
+## The channel host
+
+conda.qiyuan.me is the R2 bucket `conda` behind a Cloudflare custom domain; the objects are
+exactly what `publish-conda.yml` pushes. Three things about that front door are not visible
+from this repository:
+
+- **Directory URLs serve their `index.html` through a Cloudflare Transform Rule** (zone
+  `qiyuan.me`, phase `http_request_transform`, expression `(http.host eq "conda.qiyuan.me"
+  and ends_with(http.request.uri.path, "/"))`, path rewritten to
+  `concat(http.request.uri.path, "index.html")`; added 2026-10-09). R2 has no index-document
+  notion of its own, so without the rule `https://conda.qiyuan.me/` is a 404 page while
+  `/index.html` is fine — which is how a visitor concluded the channel was not public.
+- **The root `index.html` carries a banner** (what the site is, how to install `isabelle-ai`)
+  from `conda/channel-banner.html`, applied by `scripts/banner-index.py` after every
+  conda-index run. Edit the banner file, never the generated page.
+- **`CLOUDFLARE_GOD_KEY` in `~/Current/MLML/secret.sh` is an account-owned API token**, not
+  a user token and not a Global API Key: `/user/tokens/verify` answers "Invalid API Token"
+  for it, `/accounts/<CLOUDFLARE_ACCOUNT_ID>/tokens/verify` answers `active`, and it can mint
+  further account tokens (`POST /accounts/<id>/tokens`). The rule above was added with a
+  one-hour token minted that way and revoked afterwards. Verify the edge with `curl`: a
+  `Python-urllib` User-Agent gets 403 from Cloudflare's bot protection on every URL, conda's
+  own client and curl do not.
+
 ## Deleting from the channel
 
 A published filename is permanent: `publish-conda.yml`'s immutability guard assumes

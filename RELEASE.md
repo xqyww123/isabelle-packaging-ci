@@ -1,5 +1,12 @@
 # Releasing Isabelle to conda.qiyuan.me
 
+> **Release freeze (2026-10-24).** No `isabelle` build is published until this CI has been
+> changed to build the pristine Isabelle (no patches; the patches move to feature packages
+> applied by `isabelle-patch-control`). This is the owner's ruling of 2026-10-23, recorded in
+> `contrib/my_better_isabelle_prover/ai-artifacts/ISABELLE_PATCH_CONTROL_PLAN.md` §0 item 11;
+> the checklist below describes the current, patched build and is superseded by that plan's
+> decision 12 once the CI change lands.
+
 ### ☐ 1. Are the patches you develop against the ones that will actually ship?
 
 ```bash

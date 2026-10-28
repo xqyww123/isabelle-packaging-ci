@@ -77,6 +77,25 @@ jobs:
       R2_BUCKET: conda
       PKG: ${{ inputs.package_name }}
     steps:
+      # The banner files live in this workflow's own repo; the caller's repo is never checked out.
+      # job.workflow_*, not github.*: in a called workflow github.* names the caller.
+      # (actionlint 1.7.12 does not know job.workflow_* yet: rhysd/actionlint#705.)
+      - name: Check out this workflow's own repo and commit (for the channel banner)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: packaging-ci
+
+      # checkout succeeds without the files (an empty job.workflow_* falls back to the caller),
+      # and a broken banner must fail here, not after the upload: dry-run it on a stub page.
+      - name: "Dry-run the banner (fail before the channel is touched)"
+        run: |
+          set -euo pipefail
+          echo '<html><body></body></html>' > "$RUNNER_TEMP/banner-probe.html"
+          python3 packaging-ci/scripts/banner-index.py "$RUNNER_TEMP/banner-probe.html" packaging-ci/conda/channel-banner.html
+          grep -q 'conda create -n .* -c https://conda.qiyuan.me' "$RUNNER_TEMP/banner-probe.html"
+
       - name: Download the built packages
         uses: actions/download-artifact@v4
         with:
@@ -135,9 +154,9 @@ jobs:
           # A published package is immutable: users and the CDN cache it by name, so
           # republishing CHANGED content under the same name hands people a stale copy
           # forever.  What is NOT a violation is finding our own bytes already up there:
-          # the upload below is the first mutating step and four fallible steps follow it
-          # (the multi-GB pull, conda-index, the index push, verify -- and verify is
-          # DESIGNED to redden when a concurrent publisher wins the repodata race).  A
+          # the upload below is the first mutating step and every step after it can fail
+          # (verify is DESIGNED to redden when a concurrent publisher wins the repodata
+          # race).  A
           # re-run must be able to finish the index instead of dead-ending here, so the
           # test is on CONTENT, not on the filename.
           #
@@ -223,8 +242,7 @@ jobs:
       - name: "Banner on the root index page (conda-index rewrote it; put the install line back)"
         run: |
           set -euo pipefail
-          python3 scripts/banner-index.py "$CH/index.html" conda/channel-banner.html
-          grep -q 'conda install -c https://conda.qiyuan.me' "$CH/index.html"
+          python3 packaging-ci/scripts/banner-index.py "$CH/index.html" packaging-ci/conda/channel-banner.html
 
       - name: Push the refreshed index
         run: |

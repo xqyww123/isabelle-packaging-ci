@@ -45,10 +45,10 @@ requirements:
     # here would be restating what the halves already require, and a metapackage that
     # duplicates its children's dependency lists is a second place for them to drift.
     #
-    # Floors as of the 0.3.0 republish (build 1, 2026-10-09): the newest of each on the
+    # Floors as of the 0.3.0 republish (build 2, 2026-10-28): the newest of each on the
     # channel that day.
     - isabelle-minilang >=0.7.0
-    - isabelle-mcp >=0.6.0
+    - isabelle-mcp >=0.7.0
     # The pre-built semantic database (the read-only system layer).  A hard dependency
     # HERE, deliberately not of isabelle-semantic-embedding: the library stays lean,
     # the batteries-included metapackage carries the batteries (plan L3).  The floor is

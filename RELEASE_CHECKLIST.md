@@ -561,7 +561,9 @@ One recipe per platform tag. Record why we carry it and when to drop it.
       native runners and refuses to publish unless all five arrived. Then read the
       publish job's **audit log** (`audited N subdir(s)`), not its check mark.
 
-      If `publish` fails partway: **re-run failed jobs**, or bump `build_number`. A
+      If `publish` fails partway: **re-run failed jobs** (only for a cause outside the
+      workflow code — a re-run never picks up a workflow fix, see item 2), or bump
+      `build_number`. A
       fresh *dispatch* does not substitute — it rebuilds, and a rebuilt `.conda` is
       not byte-identical (`info/index.json` carries a timestamp), so the channel's
       content-comparing guard correctly refuses it and the re-dispatch dead-ends.
@@ -573,9 +575,18 @@ One recipe per platform tag. Record why we carry it and when to drop it.
      publishes nothing;
    - tag annotated (`git tag -a`), never lightweight — the provenance checks
      resolve the peeled `^{}` ref, which only annotated tags have;
-   - if `publish` fails partway: fix, then **re-run failed jobs**; where the
-     guard compares sha256 over https, a byte-identical re-upload resumes
-     instead of dead-ending.
+   - if `publish` fails partway and the cause is outside the workflow code (a
+     secret, R2, a transient failure): fix it, then **re-run failed jobs**; where
+     the guard compares sha256 over https, a byte-identical re-upload resumes
+     instead of dead-ending. A re-run never picks up a fix to the workflow
+     itself: it keeps the caller's workflow file from the run's commit and
+     `publish-conda.yml` from the first attempt's commit (GitHub: "re-running
+     failed jobs or a specific job in a workflow will use the reusable workflow
+     from the same commit SHA of the first attempt"). For a workflow fix,
+     dispatch again — with the same build number if the failure came before the
+     upload, with `build_number` bumped (the owner's call) if after it; the
+     superseded build is then a sweep candidate. isabelle-mcp 0.7.0 went out
+     this way on 2026-10-28 (run 40616658488 stranded build 0; build 1 published).
 3. **The data package (`isabelle-semantic-data`) is built on a big-memory machine,
    not on the runner** — §7b, last bullet: rattler-build needs ~2× the archive in RAM
    and the payload is 19 GB. The runner still does everything else; `release-semantic-db`

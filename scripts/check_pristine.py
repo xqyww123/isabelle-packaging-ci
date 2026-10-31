@@ -22,7 +22,7 @@ from typing import IO
 EXPECTED = {
     "changed": {"*": ["etc/settings",           # pack.sh 1d: a user directory per environment
                       "etc/components"],        # pack.sh 1e: no bundled nunchaku
-                "win-64": [r"contrib/cygwin/isabelle/permissions/(directories|755|644|444)\.gz"]},  # pack.sh 3
+                "win-64": [r"contrib/cygwin/isabelle/permissions/(directories|755)\.gz"]},  # pack.sh 3
     "added": {"*": [r"(.*/)?\.conda-keep"],     # pack.sh 2: empty directories
               "win-64": ["bin/isabelle.bat"]},  # pack.sh 1c: the Windows launcher
     "missing": {"*": [r"contrib/vscodium-[^/]+/.*/obj/.*",                 # pack.sh 1b: MSBuild scratch

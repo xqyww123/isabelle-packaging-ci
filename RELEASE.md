@@ -1,18 +1,11 @@
 # Releasing Isabelle to conda.qiyuan.me
 
-> **Not usable yet (2026-10-31).** This procedure is for the CI after its planned upgrade: it
-> builds the official Isabelle release with no patches, and `release.yml` and `ci.yml` take the
-> Isabelle release as an input `release` (an addition the owner made on 2026-10-31 to decision
-> 12, which is written for Isabelle2025-2 only). The upgrade has landed when `release.yml` has
-> that input. Until then no `isabelle` build is published, by the owner's ruling of 2026-10-23
-> (the patch tool repository's `ai-artifacts/ISABELLE_PATCH_CONTROL_PLAN.md`, §0 item 11;
-> decision 12 there lists what the upgrade must do).
-
-The `isabelle` package is the official Isabelle release with no patches. Patches ship as
-separate feature packages, released from the patch tool repository
+The `isabelle` package is the official Isabelle release with no patches (`PACKAGING_DESIGN.md`
+§11). Patches ship as separate feature packages, released from the patch tool repository
 `xqyww123/isabelle_patch_control` (its `RELEASE.md`).
 
-Below, `<R>` is the Isabelle release you package, for example `Isabelle2026`.
+Below, `<R>` is the Isabelle release you package, for example `Isabelle2026`. It must be
+registered in `releases/<R>/` (`PACKAGING_DESIGN.md` §11.1 says how).
 
 Pause the download counter while you release (`RELEASE_CHECKLIST.md`, "The channel host").
 

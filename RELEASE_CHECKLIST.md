@@ -291,6 +291,12 @@ the choice to the solver, and the broken version is the one it can reach.
   (`cygpath.exe` prints nothing on the runner). The drive letter needs **no** lowercasing.
 - A package that registers from its **own code** must have **no** hooks (`Isabelle-MCP`) —
   a hook would add a second, competing `etc/components` entry.
+- A package whose post-link touches the Isabelle tree or the Isabelle user directory must
+  depend on `isabelle` **directly**. Check this at every release.
+- The post-link of a package that depends on `isabelle` directly must be safe to re-run at
+  any time: a re-run only restores what installing the package set up (its component
+  registration, its patches), changes nothing else, and is idempotent (running it twice is
+  running it once). The `isabelle` post-link re-runs these (`conda/rerun_post_links.py`).
 
 ## 5. ROOT exposure
 

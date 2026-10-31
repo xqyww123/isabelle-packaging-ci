@@ -308,8 +308,9 @@ for name in sorted(os.listdir(lists)):
     with gzip.open(path) as f:
         listed = [p for p in f.read().split(b"\0") if p]
     kept = [p for p in listed if p in ships]
-    with open(path, "wb") as f:
-        f.write(gzip.compress(b"".join(p + b"\0" for p in kept), mtime=0))
+    if kept != listed:                  # a list that names only what ships keeps its official bytes
+        with open(path, "wb") as f:
+            f.write(gzip.compress(b"".join(p + b"\0" for p in kept), mtime=0))
     print(f"{os.fsdecode(name)}: kept {len(kept)} of {len(listed)} path(s)")
 PY
 fi

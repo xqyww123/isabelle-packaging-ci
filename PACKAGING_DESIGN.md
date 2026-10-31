@@ -3,6 +3,10 @@
 > **本文档地位**:这是打包发布的**权威参考**。2026-07-11/12 的一轮工作把此前的设计**推翻重写**了
 > —— 旧方案(复用用户已装的 Isabelle + conda post-link 写全局 settings)已作废,理由见 §9。
 > 本文档中的每条结论都标注了**证据来源**;凡标「实测」的都是在真机/真 CI 上跑出来的,不是推断。
+>
+> **2026-10-31 起(Isabelle2026)的现状见 §11。** 一句话:`isabelle` 包就是**官方平台包原样**(连同官方自带的
+> Pure/HOL heap),只加几处打包改动;CI 不再自己构建、不打补丁,补丁改由 feature 包分发。§1、§2、§4、§5.0–5.2、
+> §7.9–7.11 写的是 Isabelle2025-2 时"自己构建打补丁版"的做法,留作记录,各节开头有标注。
 
 ---
 
@@ -11,6 +15,8 @@
 把 `contrib/` 下的 AoA 工具链(`Isa-Mini`、`Isa-REPL`、`Isabelle_RPC`、`Semantic_Embedding`、
 `Performant_Isabelle_ML`、`auto_sledgehammer`)发布出去,让用户能装上并在 Isabelle 里 `by aoa`。
 
+【2026-10-31 起不再成立:补丁改由 feature 包分发,`isabelle` 包是原版,见 §11。】
+
 前置事实:AoA 依赖的 Isabelle **必须打过 `my_better_isabelle_prover` 的补丁**
 (`register_thy` 是 Isa-REPL 的硬依赖,`pide_control` 是 Isabelle-MCP 的硬依赖)。
 所以「发布 AoA」不可避免地要「发布一个打过补丁的 Isabelle」。
@@ -18,6 +24,8 @@
 ---
 
 ## 2. 核心决策
+
+【Isabelle2025-2 时的决策,2026-10-31 起被 §11 取代:不再自己构建,直接打包官方平台包。】
 
 **我们自己跑一条「打补丁版 Isabelle」的官方级发布流水线,产出各平台完整包,再发到 conda。**
 
@@ -56,7 +64,8 @@
 
 - 包标识 = **`name-version-build`** 三段,以 `-` 分隔 ⇒ **version 里不能有 `-`**。
 - ⇒ **`Isabelle2025-2` 必须写成 conda version `2025.2`**。
-- 精确上游 changeset(`89701cf1768e`)与补丁信息放 **build string**,不进 version。
+- build string **只是 build 号**(每个字符都占 Windows 的 MAX_PATH,§3.6);官方 changeset 写在包描述和
+  `isa/etc/ISABELLE_ID` 里。版本号由发行版名换算(`Isabelle2026` → `2026`),只在 `scripts/pack.sh` 一处算。
 - **同版本改内容 ⇒ bump build number**(`_0` → `_1`);别原地 `--force` 覆盖(客户端按文件名缓存,用户会吃旧包)。
 - 排序:conda 自己的 VersionOrder(数字段按数值比;`dev` 特殊;epoch `N!` 优先级最高)。
 - **包名 `isabelle` 完全空着**(anaconda.org API 实测:`conda-forge/isabelle` → 404;全站搜 `name=isabelle`
@@ -183,6 +192,8 @@ rclone sync $CH R2:conda/ --s3-no-check-bucket --exclude '.cache/**' \
 
 ### 3.4 Isabelle 的发布机制(源码级,`src/Pure/Admin/build_release.scala`)
 
+【背景知识。2026-10-31 起 CI 不再跑 `build_release`:官方平台包就是它的产物,我们直接下载(§11)。】
+
 - **`Isabelle2025-2` = hg changeset `89701cf1768e`**(`.hgtags`;与发行版 `etc/ISABELLE_ID` 吻合)。
 - **精确源只能走官方 hg**(`https://isabelle.in.tum.de/repos/isabelle`);
   GitHub 镜像 `isabelle-prover/mirror-isabelle` 的 **git tag 只到 2021**,拿不到 2025-2 的树
@@ -244,7 +255,8 @@ rclone sync $CH R2:conda/ --s3-no-check-bucket --exclude '.cache/**' \
 `src/Doc/ROOT:310`:`session Main (doc) in "Main" = HOL +`,含 theory `Main_Doc`。
 `isabelle sessions -a` 里有它,`isabelle sessions -b Main` 给出依赖链 `Pure → HOL → Main`。
 **我们的工具链用 `Main` 作默认 session**(官方发布只 `-b HOL`,不带 `Main`)⇒
-**我们必须 `-b HOL,Main`。**
+~~**我们必须 `-b HOL,Main`。**~~ 【2026-10-31 起包里只有官方自带的 Pure、HOL heap(owner 定):`Main` 由用到它的人
+第一次用时在该环境的用户目录里编,它只是 HOL 之上的一个小 delta。】
 
 #### 🔴🔴 `heaps/*/log/<S>.db` **必须随 heap 一起发**(2026-07-12 实测,差点让整条流水线白做)
 
@@ -508,7 +520,8 @@ conda 包里只有文件、没有目录条目 ⇒ 官方 bundle 里的 **83 个�
 | x86_64-linux | ✅ | `ubuntu-latest` |
 | **arm64-linux** | ✅(2025-08 GA,public repo 免费) | `ubuntu-24.04-arm` |
 | x86_64-windows | ✅ | `windows-latest` |
-| macOS(universal,含两个 darwin 架构) | ✅ | `macos-14`/`macos-15`(Apple Silicon) |
+| arm64-darwin | ✅ | `macos-15`(`macos-14` 2026-11-02 停用) |
+| x86_64-darwin | ✅ | `macos-15-intel`(唯一剩下的 Intel 镜像;`macos-13` 已退役,job 会永远排队) |
 
 ⇒ **全部有免费官方 runner,不需要自建。**
 ⚠️ **GitHub 标准 runner 没有 KVM/嵌套虚拟化 ⇒ QEMU 进不了 CI**(本地 VM 只能是本地验证工具)。
@@ -516,6 +529,8 @@ conda 包里只有文件、没有目录条目 ⇒ 官方 bundle 里的 **83 个�
 ---
 
 ## 4. 发布流水线(端到端蓝图)
+
+【Isabelle2025-2 时的流水线,留作记录。2026-10-31 起的流水线见 §5.5。】
 
 ```
 ① 取源      hg clone https://isabelle.in.tum.de/repos/isabelle   （--stream,实测 226MB / 108s）
@@ -580,6 +595,9 @@ conda 包里只有文件、没有目录条目 ⇒ 官方 bundle 里的 **83 个�
 ---
 
 ## 5. CI 矩阵(**已按实测重新设计**)
+
+【§5.0–5.2 是自己构建时的矩阵,留作记录;其中 Windows 的 `LOCALAPPDATA`、`ML_IDENTIFIER` 为空、`log/<S>.db`
+必须随 heap 走这几条事实仍然成立。2026-10-31 起的矩阵见 §5.5。】
 
 ### 5.0 四条铁律(全部实测,它们唯一地决定了矩阵长相)
 
@@ -719,7 +737,7 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 
 ```
 .github/workflows/
-  build.yml    ← reusable（on: workflow_call）：定义 Job A–F。只定义一次。
+  build.yml    ← reusable（on: workflow_call）：定义 Job A–E（§5.5）。只定义一次。
   ci.yml       ← on: push / pull_request   → 调 build.yml → 本地验证 → 结束。**绝不碰 channel**
   release.yml  ← on: workflow_dispatch → 调 build.yml → 本地验证
                  → 上传 R2 → 发布后校验 → GitHub Release
@@ -728,7 +746,7 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 **为什么选"发布时重建"(方案 A)而不是"提升 CI 产物"(方案 B)**:
 - 发布流程**自包含、无状态**,不依赖"某次 CI run 还在不在";
 - 发出去的**一定是刚刚在同一个 run 里验证过的**字节;
-- 重建 ~2 小时(主要是 macOS 的 HOL×2),对**一年几次**的发布节奏完全可接受;
+- 重建的代价对**一年几次**的发布节奏完全可接受(自己编 heap 时约 2–4 小时;2026 起不编 heap,只剩下载、打包与安装检查);
 - 这也是 PyPI/cargo 生态的**主流写法**。
 - **什么时候改用 B**:发布变频繁,或重建的不确定性开始咬人。现在不必。
 
@@ -775,6 +793,23 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 **Larger runner 用不了也没必要**:个人账号不能用 + 公开仓库要收费,且规格 150 GB ≈ 标准 runner 的 145 GB。
 
 ⚠️ **`macos-14` 只有 3 核 / 7 GB 内存** —— 它还要跑 HOL heap 构建 ×2(双架构),**又慢又可能内存吃紧**。
+
+### 5.5 2026-10-31 起的矩阵(Isabelle2026)
+
+每个 job 做什么、为什么,以 `.github/workflows/build.yml` 文件头与各 job 的注释为准,这里只列形状:
+
+```
+Job A  [ubuntu-latest]       下载五个官方平台包,按 releases/<R>/SHA256SUMS 核对 → 每包一个 artifact
+Job B  [ubuntu-latest]       scripts/pack.sh 逐个打 conda 包(含 check_pristine.py 的断言)
+                             → 本地 channel 装 linux-64 并真跑;两个同名环境的用户目录;post-link 重跑
+Job C  [macos-15, macos-15-intel]   osx-arm64、osx-64 各在原生机器上装和跑(arm 上另有 GUI 检查)
+Job D  [ubuntu-24.04-arm]    linux-aarch64 装、跑、GUI 检查
+Job E  [windows-latest]      win-64 装、跑、post-link 重跑(.bat)
+```
+
+不再编 heap:官方包自带的 Pure、HOL heap 就是官方默认的 32_in_64 变体(`x86_64_32-*`、`arm64_32-*`),原样进包。
+macOS 从 2026 起是两个官方包(`_macos` 是 Intel、`_macos_arm` 是 arm),各对应一个 osx 子目录。
+`release.yml` 照旧先跑整个 `build.yml`、再发布、再从线上渠道冒烟(五个平台,钉住刚发的构建并核对 `ISABELLE_ID`)。
 
 ---
 
@@ -876,6 +911,8 @@ GUI 截图判定),那比 recipe 内测试强得多。
 
 ## 7.9 ✅ 已定案:**只打 `user` 类补丁**(用户 2026-07-12 确认)
 
+【2026-10-31 起作废:`isabelle` 包不打任何补丁,§11。】
+
 **定案**:发布的 Isabelle **只打 `my-better-isabelle-prover` 的 `user` category**。
 
 - **`by aoa` 不需要 `register_thy`**(用户确认——早前"AoA 需要 register_thy"的推断是错的)。
@@ -940,6 +977,8 @@ AoA 用户需自己 `patch --category all`。
 
 ## 7.11 🔴 补丁工具**必须 pin**,以及**更新补丁集的完整流程**
 
+【2026-10-31 起作废:CI 不再安装补丁工具,`MBI_VERSION` 与 `scripts/check_patch_sync.sh` 已删除,§11。】
+
 **曾经的写法(错的)**:`pip install "git+https://github.com/xqyww123/my_better_isabelle_prover"`
 —— **无 pin,取的是 HEAD**。后果:那个 repo 有人一推,**我们发布的 Isabelle 就悄悄变了**,
 而包**还叫同一个名字**(见下)。构建不可复现。
@@ -967,6 +1006,8 @@ CI 装的是 PyPI 的固定版本,**不看** MLML 的 submodule ⇒ 你本地好
 (反过来"本地落后于已发布版本"**不是问题** —— 你是改动的源头。)
 
 ## 8. 待办清单
+
+【2026-07 时的清单,留作记录;其中 CI、recipe、GUI 检查各项早已落地。】
 
 | # | 事项 | 状态 |
 |---|---|---|
@@ -1025,5 +1066,56 @@ CI 装的是 PyPI 的固定版本,**不看** MLML 的 submodule ⇒ 你本地好
 ## 10. 相关文档
 
 - `AOA_DESIGN.md`、`CONDA_ISABELLE_BRIDGE.md`、`RELEASE_PLAN.md` —— **探索期产物,均已被本文档取代**,仅供考古。
-- `contrib/my_better_isabelle_prover/` —— 补丁的权威来源(版本键控 diff,幂等/可逆/状态可查)。
+- `contrib/my_better_isabelle_prover/` —— 补丁工具 `isabelle-patch-control` 与 feature 包的发布(§11);其
+  `ai-artifacts/ISABELLE_PATCH_CONTROL_PLAN.md` 决定 12 是对本仓库的要求。
 - `contrib/Isabelle_RPC/Isabelle_RPC_Host/paths.py` —— Windows 路径归一化(commit `5b9580c`)。
+
+---
+
+## 11. 原版构建与 feature 包(2026-10-31 起,Isabelle2026)
+
+### 11.1 `isabelle` 包是什么
+
+- **官方平台包原样。** CI 从 `https://isabelle.in.tum.de/website-<R>/dist/` 下载五个平台包,按 `releases/<R>/SHA256SUMS`
+  (官方公布的值,每个发行版在仓库里登记一次)核对;`etc/ISABELLE_ID` 必须等于 `releases/<R>/ISABELLE_ID`(官方 changeset)。
+  不再自己 `build_release`(owner 2026-10-31):没有补丁就没有自己构建的理由,而核对"与官方相同"本来就要下载官方包。
+- **heap 是官方自带的** Pure、HOL,即官方默认的 32_in_64 变体(`ML_system_64 = false`),原样进包(owner 2026-10-31)。
+- **macOS** 的 `isa/` 是官方 app 的 `Contents/Resources/`(即 `ISABELLE_HOME`);app 外壳(启动器、`Info.plist`)不进包。
+- **与官方树的全部差别**以 `scripts/check_pristine.py` 的 `EXPECTED` 为准,每个包打完都对它断言;每项改动的理由写在
+  `scripts/pack.sh` 对应步骤的注释里,这里不重复。
+- **只支持 Isabelle2026 起**(owner 2026-10-31)。加一个新发行版:登记 `releases/<R>/`,并按新树核对 `pack.sh` 里的锚点
+  (它们对不上时 `pack.sh` 会直接报错)。版本号由 `pack.sh` 换算(`Isabelle2026` → `2026`)。
+- 补丁工具计划决定 12 第 8 点要求的发布说明("`Foreign`、`RunCall`、`CInterface` 在原版里没了")2026 起不写:原版
+  Isabelle2026 自己就提供 `Foreign`(owner 2026-10-31)。
+
+### 11.2 例外(用户 2026-10-23 裁定):feature 包经 post-link 改写 `$PREFIX/isa`
+
+§3.1 和 §9 的原则——一切随包装进去,post-link 不生成 conda 不跟踪的东西,不原地 patch 用户的 Isabelle——对 `isabelle` 包的**内容**仍然成立:
+它从此是原版构建,不带任何补丁。补丁改由 feature 包分发,每个 feature 一个 conda 包(isabelle-expose-foreign、isabelle-light-locale……),
+由 isabelle-patch-control 在包的 post-link 里打到 `$PREFIX/isa`、在 pre-unlink 里反打。`isabelle` 包的 post-link 也参与这条例外:它重新执行
+直接依赖它的已装包的 post-link(`conda/rerun_post_links.py`)。这一步是必要的,因为 `isabelle` 包的 pre-unlink 删掉整个 Isabelle 用户目录、
+连组件登记一起(`conda/recipe.yaml`),而 conda 只跑本次事务里换了的包的钩子:`--force-reinstall isabelle` 之后,只有 `isabelle` 自己的
+post-link 有机会把 feature 和登记恢复回来;升构建之后 feature 包随之换新、由它们自己的 post-link 重打,只有组件登记还靠 `isabelle` 的
+post-link 恢复。它用 Python 写(`isabelle` 包因此依赖 python,安装时要带 `-c conda-forge`),这是与 §3.1 "post-link 不做事"原则的偏离,和组件包的
+`components -u` 钩子属同一类。这是对 §9 的一条有意的例外,理由:
+
+1. 用包管理系统管补丁,用户自行决定装哪些补丁:装 isabelle-light-locale 就有 light locale,不装就没有;依赖关系(light 依赖
+   future_assign_interrupt 依赖 expose_foreign)由 conda 求解器保证,版本由精确钉死保证,每个 feature 包还精确钉死它所对的 `isabelle` 构建。
+2. `isabelle` 包保持原汁原味:可核对的不变量是 Isabelle 的源码与官方发行版相同、`etc/ISABELLE_ID` 是官方 changeset,CI 用断言保证
+   (§11.1)。与官方发行版的差别只有打包改动,清单就是 `scripts/check_pristine.py` 的 `EXPECTED`;heap 是官方自带的。
+3. 补丁的权威是 Isabelle 源码的 git 仓库(迁移方案),feature 包是从发布 tag 之间的 diff 自动生成的,往返一致由发布门禁保证。
+
+边界与代价:
+- 只改渠道自己发的 `$PREFIX/isa` 那棵树。用户自装的 Isabelle 不支持(工具在非 conda 环境里要显式给 feature 目录才运行)。
+- feature 新建的文件(light 有三个)conda 不跟踪;它们随 pre-unlink 成功反打而消失,这与组件包用 `isabelle components -x` 注销自己登记的
+  做法同类(RELEASE_CHECKLIST.md §4)。pre-unlink 反打不完时留下的改动由钩子当场写进 .messages.txt(文件清单与恢复步骤,分"本次命令卸掉它"
+  与"本次命令替换它"两种情形写);包被卸掉(而不是被替换)之后 status 看不见它们。
+- `$PREFIX/isa` 自带的 heap 在打了改 `src/` 的 feature 之后不再匹配,Isabelle 在首次使用时重建到该环境的用户目录;用户接受。
+- 工具的每次写树都是逐文件的原子替换,工具自己的命令被中断只留下"部分文件已到新层级"的状态,再跑一次 apply 或 unapply 即完成。conda 事务
+  被中断(Ctrl-C)或某个 post-link 失败,则由 conda 整体回滚(conda 打印 `Rolling back transaction`):包被撤掉、post-link 已写的改动留着;
+  恢复是重装 `isabelle`(替换包的每个文件、重打装着的 feature,代价是删掉该环境的用户目录)。
+- `--force-reinstall isabelle` 替换包的每个文件并删掉该环境的用户目录。`$PREFIX/isa` 下的源码一律由 conda 管理,用户不改它们。
+- 钩子一律 exit 0(RELEASE_CHECKLIST.md §4 的规矩不变),exit 0 写在钩子文本里而不是依赖工具。两条契约见 RELEASE_CHECKLIST.md §4:
+  post-link 会动 `$PREFIX/isa` 或 Isabelle 用户目录的包必须直接依赖 `isabelle`;直接依赖 `isabelle` 的包的 post-link 必须能在任何时候重跑。
+  只间接依赖 `isabelle` 的包(isabelle-semantic-data)不被重跑。
+- 每发一个新的 `isabelle` 构建,全部 feature 包都要以新的钉死重发(批量发布 workflow 一次跑完);组件包不钉死构建、不需要重发。

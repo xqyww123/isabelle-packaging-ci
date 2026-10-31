@@ -6,7 +6,7 @@
 >
 > **2026-10-31 起(Isabelle2026)的现状见 §11。** 一句话:`isabelle` 包就是**官方平台包原样**(连同官方自带的
 > Pure/HOL heap),只加几处打包改动;CI 不再自己构建、不打补丁,补丁改由 feature 包分发。§1、§2、§4、§5.0–5.2、
-> §7.9–7.11 写的是 Isabelle2025-2 时"自己构建打补丁版"的做法,留作记录,各节开头有标注。
+> §7.9、§7.11 写的是 Isabelle2025-2 时"自己构建打补丁版"的做法,留作记录,各节开头有标注。
 
 ---
 
@@ -430,11 +430,12 @@ conda create LASTEXITCODE=1  →  env 根本没建出来
 |---|---|---|
 | 1 | **包内根 `opt/Isabelle2025-2/` → `isa/`**(只是我们把树放进 conda prefix 的哪个子目录) | 15 |
 | 2 | **build string `isabelle-2025.2-68fdb1877e0c_0` → `isabelle-2025.2-0`**(changeset 挪进 metadata) | 12 |
-| 3 | **剔掉 vscodium 的 `**/obj/**`**(MSBuild 的 `.tlog`/`.lastbuildstate`,运行时不读) | 那条 208 的 |
+| 3 | **剔掉 vscodium 的 `**/obj/**`**(MSBuild 的 `.tlog`/`.lastbuildstate`,运行时不读)【2026-11-01 删除这一步(owner):Isabelle2026 的官方包里没有 `obj/`,一个也删不到】 | 那条 208 的 |
 | 4 | 注入 `<ISABELLE_HOME>\bin\isabelle.bat` | — |
 | 5 | 补回 83 个空目录 | — |
 
-**结果:包内最长路径 180**(实测,`pack.sh` 里有全平台断言兜底)。
+**结果(Isabelle2025-2):包内最长路径 180**(实测)。Isabelle2026 的值见 `pack.sh` 第 4 步:最长 182(VSCodium 自己的
+路径),上限 183,余量 1,build 号 10 起余量 0;owner 2026-10-31 接受。`pack.sh` 只对 win-64 断言。
 
 #### ✅✅ 真机复测通过(2026-07-14,`LongPathsEnabled = 0`,默认 Windows 11)
 
@@ -453,16 +454,16 @@ env 建在 `C:\Users\isabelle\miniconda3\envs\isabelle\`(典型 "Just Me" 布局
 
 **"75 不是 83" 的决定被实测证实:** `cygwin_init` 之后,`var/lib/rebase/*.d` 那 5 个目录
 **由 `rebaseall` 自己建出来**,且**没有任何 `.conda-keep` 混进去**。当初若放了标记,
-其内容就会被 `cat` 进 rebase 的 DLL 清单。
+其内容就会被 `cat` 进 rebase 的 DLL 清单。【2026-11-01 起改为全部 83 个都放、标记是**空文件**(owner):`rebaselst`
+跳过空内容(`rebaselst:47-48, 54-55`),所以空标记在 rebase 目录里无害;这样 Cygwin 的目录权限清单不用改写。】
 
 #### 🔴 剩余的三条(不是 blocker,但必须写进用户文档)
 
-1. **env 路径前缀不能超过 79 字符**(余量 36,且卡死的那条是 VSCodium 自己的
-   `textMateTokenizationWorker.workerMain.js`,我们控制不了)。env 名太长或建在很深的目录里
-   仍会 `InvalidArchiveError`。**VSCodium 以后升级若把该路径加长一个字符,Windows 安装再次全崩** ——
-   `pack.sh` 的断言会在 CI 里 30 秒内变红,而不是在用户的 `conda create` 里炸。
-   (真要余量,还有 12 字符可拿:把 `contrib/vscodium-1.105.17075/` 改名成 `contrib/vscodium/`,
-   `$COMPONENT` 是自引用的所以安全。**用户目前选择先不做。**)
+1. **env 路径前缀(含末尾的 `\`)加上包内最长路径,不能超过 259 字符。** 包内最长路径是 VSCodium 自己的文件,
+   我们控制不了(Isabelle2025-2 时是 180,前缀因此最多 79;Isabelle2026 是 182,前缀最多 77——`pack.sh` 在 win-64 上
+   每次都打印这个数)。env 名太长或建在很深的目录里仍会 `InvalidArchiveError`;VSCodium 升级把路径加长时,`pack.sh` 的断言
+   会在 CI 里变红,而不是在用户的 `conda create` 里炸。(真要余量,可以把 `contrib/vscodium-<版本>/` 改名成
+   `contrib/vscodium/`,`$COMPONENT` 是自引用的所以安全。**用户目前选择先不做。**)
 2. **安装路径不能含非 ASCII 字符**(上游 JVM 启动器的限制,见上文)。
 3. **🔴 Windows 上文件参数的路径约定是"分裂"的,而且两边都会静默出错**(独立复核时实测):
 
@@ -737,10 +738,10 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 
 ```
 .github/workflows/
-  build.yml    ← reusable（on: workflow_call）：定义 Job A–E（§5.5）。只定义一次。
+  build.yml    ← reusable（on: workflow_call）：定义全部 job（§5.5）。只定义一次。
   ci.yml       ← on: push / pull_request   → 调 build.yml → 本地验证 → 结束。**绝不碰 channel**
   release.yml  ← on: workflow_dispatch → 调 build.yml → 本地验证
-                 → 上传 R2 → 发布后校验 → GitHub Release
+                 → 上传 R2 → 发布后校验
 ```
 
 **为什么选"发布时重建"(方案 A)而不是"提升 CI 产物"(方案 B)**:
@@ -799,13 +800,16 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 每个 job 做什么、为什么,以 `.github/workflows/build.yml` 文件头与各 job 的注释为准,这里只列形状:
 
 ```
-Job A  [ubuntu-latest]       下载五个官方平台包,按 releases/<R>/SHA256SUMS 核对 → 每包一个 artifact
-Job B  [ubuntu-latest]       scripts/pack.sh 逐个打 conda 包(含 check_pristine.py 的断言)
-                             → 本地 channel 装 linux-64 并真跑;两个同名环境的用户目录;post-link 重跑
-Job C  [macos-15, macos-15-intel]   osx-arm64、osx-64 各在原生机器上装和跑(arm 上另有 GUI 检查)
-Job D  [ubuntu-24.04-arm]    linux-aarch64 装、跑、GUI 检查
-Job E  [windows-latest]      win-64 装、跑、post-link 重跑(.bat)
+tests              [ubuntu-latest]   tests/ 的单元测试;conda 等它通过
+bundles            [ubuntu-latest]   下载五个官方平台包,按 releases/<R>/SHA256SUMS 核对 → 一个 artifact
+conda              [ubuntu-latest]   scripts/pack.sh 逐个打 conda 包(含 check_pristine.py 的断言)
+                                     → 本地 channel 装 linux-64 并真跑;两个同名环境的用户目录;post-link 重跑
+install-macos      [macos-15, macos-15-intel]   osx-arm64、osx-64 各在原生机器上装和跑(arm 上另有 GUI 检查)
+install-linux-arm  [ubuntu-24.04-arm]   linux-aarch64 装、跑、GUI 检查
+install-windows    [windows-latest]  win-64 装、首次 `isabelle` 调用(Cygwin 初始化)、post-link 重跑(.bat)
 ```
+
+本文档与注释里一律用 job id(上表左列)称呼这些 job,不用字母(owner 2026-11-01)。
 
 不再编 heap:官方包自带的 Pure、HOL heap 就是官方默认的 32_in_64 变体(`x86_64_32-*`、`arm64_32-*`),原样进包。
 macOS 从 2026 起是两个官方包(`_macos` 是 Intel、`_macos_arm` 是 arm),各对应一个 osx 子目录。
@@ -881,7 +885,7 @@ command -v 7zz >/dev/null || command -v 7z >/dev/null || { echo "::error::no 7z 
 rattler-build 在 Linux 上打 **osx-64 / osx-arm64** 包时,测试走 unix 分支、**在 Linux 上**跑
 macOS 包里的 bash 脚本。而 `isabelle version` 只是回显一个 settings 变量 ——
 **根本不碰任何 Darwin 二进制就"通过"了**。CI 日志里那两个绿勾**什么都没证明**。
-⇒ 用 `--test native`。真正的验收靠 Job F 自己那套(装进 conda env + 真 build 一个 session +
+⇒ 用 `--test native`。真正的验收靠 build.yml 的安装检查(`conda` 与 `install-*` job:装进 conda env + 真 build 一个 session +
 GUI 截图判定),那比 recipe 内测试强得多。
 
 ## 7.10 ✅ GUI 验证:Xvfb + jEdit + Claude Code 判截图(已实现并本机验证)
@@ -900,10 +904,13 @@ GUI 截图判定),那比 recipe 内测试强得多。
   ⇒ **只有"模型给出了判断且判断是坏的"才能让 CI 变红;"模型没能给出判断"
   (限流/掉登录/API 故障)只 `::warning::`。** 真的 GUI 坏了永远以
   `structured_output.started = "no"` 的形式回来,所以判别力没有损失。
-- **必须从包里的 heap 目录名反推 `ML_system_64` 并写进临时 HOME 的 preferences。**
-  变体不匹配时 Isabelle **不报警,直接静默重建 HOL**,而 jEdit 是在 **GUI 对话框**里建的、
+- ~~**必须从包里的 heap 目录名反推 `ML_system_64` 并写进临时 HOME 的 preferences。**~~【2026-10-31 作废(第 13 条:
+  官方默认的 32_in_64 heap 原样进包,没有要钉的变体;那份 preferences 也写进了 conda 里的 Isabelle 从来不读的目录),
+  `pin_ml` 已删。】变体不匹配时 Isabelle **不报警,直接静默重建 HOL**,而 jEdit 是在 **GUI 对话框**里建的、
   输出**不进 `jedit.log`** ⇒ 截图检查会**全绿假通过**而包里的 heap 根本没被用。
-  脚本另外断言 `Isabelle build` 对话框不许出现。
+  所以脚本断言 `Isabelle build` 对话框不许出现;`verify_install.sh` 的真 build 断言 HOL 不重编。
+- **发布时必须有判断**(owner 2026-11-01):`release.yml` 传 `require_gui_verdict: true`,模型没给出判断的 GUI 检查
+  就失败,发布在上传之前停下;额度恢复后对失败的 job 重跑即可。`ci.yml` 照旧只警告。
 - 无头 build 的 `Building HOL` 检查与 GUI 截图检查**互补,不可互相替代**:
   前者确定性、不需要模型在环;后者覆盖 jEdit 那条路径。**两个都要留。**
 
@@ -1081,10 +1088,11 @@ CI 装的是 PyPI 的固定版本,**不看** MLML 的 submodule ⇒ 你本地好
   不再自己 `build_release`(owner 2026-10-31):没有补丁就没有自己构建的理由,而核对"与官方相同"本来就要下载官方包。
 - **heap 是官方自带的** Pure、HOL,即官方默认的 32_in_64 变体(`ML_system_64 = false`),原样进包(owner 2026-10-31)。
 - **macOS** 的 `isa/` 是官方 app 的 `Contents/Resources/`(即 `ISABELLE_HOME`);app 外壳(启动器、`Info.plist`)不进包。
-- **与官方树的全部差别**以 `scripts/check_pristine.py` 的 `EXPECTED` 为准,每个包打完都对它断言;每项改动的理由写在
-  `scripts/pack.sh` 对应步骤的注释里,这里不重复。
-- **只支持 Isabelle2026 起**(owner 2026-10-31)。加一个新发行版:登记 `releases/<R>/`,并按新树核对 `pack.sh` 里的锚点
-  (它们对不上时 `pack.sh` 会直接报错)。版本号由 `pack.sh` 换算(`Isabelle2026` → `2026`)。
+- **与官方树的差别**——哪些文件、文件内容、符号链接目标——以 `scripts/check_pristine.py` 的 `EXPECTED` 为准,每个包打完都
+  对它断言:清单外的差别失败,清单里没用上的条目也失败。官方的空目录要以空标记文件 `.conda-keep` 出现在包里(conda 包里
+  没有目录)。文件权限位不比较(脚本说明里写了原因)。每项改动的理由写在 `scripts/pack.sh` 对应步骤的注释里,这里不重复。
+- **只支持 Isabelle2026 起**(owner 2026-10-31)。加一个新发行版的步骤见 `RELEASE.md` 第 0 步。版本号由 `pack.sh` 换算
+  (`Isabelle2026` → `2026`)。
 - 补丁工具计划决定 12 第 8 点要求的发布说明("`Foreign`、`RunCall`、`CInterface` 在原版里没了")2026 起不写:原版
   Isabelle2026 自己就提供 `Foreign`(owner 2026-10-31)。
 
@@ -1093,8 +1101,9 @@ CI 装的是 PyPI 的固定版本,**不看** MLML 的 submodule ⇒ 你本地好
 §3.1 和 §9 的原则——一切随包装进去,post-link 不生成 conda 不跟踪的东西,不原地 patch 用户的 Isabelle——对 `isabelle` 包的**内容**仍然成立:
 它从此是原版构建,不带任何补丁。补丁改由 feature 包分发,每个 feature 一个 conda 包(isabelle-expose-foreign、isabelle-light-locale……),
 由 isabelle-patch-control 在包的 post-link 里打到 `$PREFIX/isa`、在 pre-unlink 里反打。`isabelle` 包的 post-link 也参与这条例外:它重新执行
-直接依赖它的已装包的 post-link(`conda/rerun_post_links.py`)。这一步是必要的,因为 `isabelle` 包的 pre-unlink 删掉整个 Isabelle 用户目录、
-连组件登记一起(`conda/recipe.yaml`),而 conda 只跑本次事务里换了的包的钩子:`--force-reinstall isabelle` 之后,只有 `isabelle` 自己的
+直接依赖它的已装包的 post-link(`conda/rerun_post_links.py`)。这一步是必要的,因为重装 `isabelle`(`--force-reinstall` 或升构建)时,
+conda 重新链接包里的每个文件,feature 打在 `$PREFIX/isa` 里的补丁随之没了;`isabelle` 包的 pre-unlink 又删掉整个 Isabelle 用户目录、
+连组件登记一起(`conda/recipe.yaml`);而 conda 只跑本次事务里换了的包的钩子:`--force-reinstall isabelle` 之后,只有 `isabelle` 自己的
 post-link 有机会把 feature 和登记恢复回来;升构建之后 feature 包随之换新、由它们自己的 post-link 重打,只有组件登记还靠 `isabelle` 的
 post-link 恢复。它用 Python 写(`isabelle` 包因此依赖 python,安装时要带 `-c conda-forge`),这是与 §3.1 "post-link 不做事"原则的偏离,和组件包的
 `components -u` 钩子属同一类。这是对 §9 的一条有意的例外,理由:
@@ -1102,7 +1111,7 @@ post-link 恢复。它用 Python 写(`isabelle` 包因此依赖 python,安装时
 1. 用包管理系统管补丁,用户自行决定装哪些补丁:装 isabelle-light-locale 就有 light locale,不装就没有;依赖关系(light 依赖
    future_assign_interrupt 依赖 expose_foreign)由 conda 求解器保证,版本由精确钉死保证,每个 feature 包还精确钉死它所对的 `isabelle` 构建。
 2. `isabelle` 包保持原汁原味:可核对的不变量是 Isabelle 的源码与官方发行版相同、`etc/ISABELLE_ID` 是官方 changeset,CI 用断言保证
-   (§11.1)。与官方发行版的差别只有打包改动,清单就是 `scripts/check_pristine.py` 的 `EXPECTED`;heap 是官方自带的。
+   (§11.1)。与官方发行版在文件与内容上的差别只有打包改动,清单就是 `scripts/check_pristine.py` 的 `EXPECTED`;heap 是官方自带的。
 3. 补丁的权威是 Isabelle 源码的 git 仓库(迁移方案),feature 包是从发布 tag 之间的 diff 自动生成的,往返一致由发布门禁保证。
 
 边界与代价:

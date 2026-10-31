@@ -2,17 +2,19 @@ name: build
 
 # Reusable workflow: packages the OFFICIAL Isabelle release, its sources unmodified.
 #
-# Job A   — ubuntu-latest: download the official platform bundles and check them
-#           against releases/<release>/SHA256SUMS, the checksums the Isabelle site
-#           publishes, registered here once per release.  Upstream is downloaded from
-#           once per run; every later job takes its bundle from Job A's artifacts.
-# Job B   — ubuntu-latest: turn each bundle, its own Pure/HOL heaps included, into a
-#           conda package (one per conda subdir), checking that the package is the
-#           official tree plus the packaging changes (scripts/check_pristine.py).  It
-#           VERIFIES by installing from a local channel; it does NOT publish.  Publishing
-#           to R2 lives in release.yml, so that a push can never move the channel
-#           (PACKAGING_DESIGN.md §5.4).
-# Job C-E — install and run the packages on the platforms they are for.
+# tests             — ubuntu-latest: the unit tests (tests/), which `conda` waits for.
+# bundles           — ubuntu-latest: download the official platform bundles and check them
+#                     against releases/<release>/SHA256SUMS, the checksums the Isabelle
+#                     site publishes, registered here once per release.  Upstream is
+#                     downloaded from once per run, so `conda` can be re-run without it.
+# conda             — ubuntu-latest: turn each bundle, its own Pure/HOL heaps included, into
+#                     a conda package (one per conda subdir), checking that the package is
+#                     the official tree plus the packaging changes (scripts/check_pristine.py).
+#                     It VERIFIES by installing from a local channel; it does NOT publish.
+#                     Publishing to R2 lives in release.yml, so that a push can never move
+#                     the channel (PACKAGING_DESIGN.md §5.4).
+# install-macos, install-linux-arm, install-windows
+#                   — install and run the packages on the platforms they are for.
 
 on:
   workflow_call:
@@ -25,21 +27,40 @@ on:
         description: "conda build number -- becomes the package's build string (isabelle-<version>-<N>)"
         type: string
         required: true
+      require_gui_verdict:
+        description: "fail a GUI check that gets no verdict from Claude (release.yml sets it)"
+        type: boolean
+        default: false
+    outputs:
+      version:
+        description: "the conda version of the packages, e.g. 2026"
+        value: ${{ jobs.conda.outputs.version }}
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: >-
           Claude subscription token (`claude setup-token`) for the GUI checks.
-          Optional: without it the screenshot is still taken and uploaded, and only
-          the AI judgement is skipped.  A reusable workflow gets NO secrets unless
-          they are declared here AND passed by the caller (`secrets: inherit`).
-          NB deliberately not ANTHROPIC_API_KEY -- that outranks the OAuth token in
-          Claude Code's auth chain and would bill the metered API instead of the
-          subscription.
+          Without it the screenshot is still taken and uploaded, and only the AI
+          judgement is skipped (a failure under require_gui_verdict).  A reusable
+          workflow gets NO secrets unless they are declared here AND passed by the
+          caller (`secrets: inherit`).  NB deliberately not ANTHROPIC_API_KEY -- that
+          outranks the OAuth token in Claude Code's auth chain and would bill the
+          metered API instead of the subscription.
         required: false
 
 jobs:
+  tests:
+    name: "tests - unit tests"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: pytest
+        run: pipx run --spec pytest==8.4.2 pytest -q -p no:cacheprovider tests/
+
   bundles:
-    name: "Job A - official bundles (download + SHA256)"
+    name: "bundles - the official platform bundles (download + SHA256)"
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -55,7 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           SUMS="ci/releases/$RELEASE/SHA256SUMS"
-          [ -f "$SUMS" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ (add its SHA256SUMS and ISABELLE_ID)"; exit 1; }
+          [ -f "$SUMS" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ (RELEASE.md, step 0)"; exit 1; }
           mkdir -p "$DL"
           while read -r _ f; do
             echo "=== $f ==="
@@ -64,77 +85,32 @@ jobs:
           done < "$SUMS"
           cd "$DL" && sha256sum -c "$GITHUB_WORKSPACE/$SUMS"
 
-      # One artifact PER BUNDLE (not one 7 GB blob): each heap job needs exactly one of
-      # them, and actions/download-artifact cannot fetch a single file out of a larger
-      # artifact.  Artifact names use the official platform names.
-      - name: Upload bundle (linux)
+      - name: Upload the bundles
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.release }}-bundle-linux
-          path: ${{ github.workspace }}/dl/${{ inputs.release }}_linux.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
-      - name: Upload bundle (linux_arm)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.release }}-bundle-linux_arm
-          path: ${{ github.workspace }}/dl/${{ inputs.release }}_linux_arm.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
-      - name: Upload bundle (macos)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.release }}-bundle-macos
-          path: ${{ github.workspace }}/dl/${{ inputs.release }}_macos.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
-      - name: Upload bundle (macos_arm)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.release }}-bundle-macos_arm
-          path: ${{ github.workspace }}/dl/${{ inputs.release }}_macos_arm.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
-      - name: Upload bundle (windows .exe)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.release }}-bundle-windows
-          path: ${{ github.workspace }}/dl/${{ inputs.release }}.exe
+          name: ${{ inputs.release }}-bundles
+          path: ${{ github.workspace }}/dl/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
 
   # ===========================================================================
-  # Job B: conda packaging.
+  # conda: packaging.
   #
   # Everything happens on Linux, for every target platform -- including win-64.
   # Nothing is compiled here; we unpack and zip the result into a .conda
   # (PACKAGING_DESIGN.md §5.0).
   #
-  # Mapping bundle -> conda subdir (the official platform names on the right):
-  #
-  #   linux-64       <- linux
-  #   linux-aarch64  <- linux_arm
-  #   osx-64         <- macos
-  #   osx-arm64      <- macos_arm
-  #   win-64         <- windows
-  #
   # This job PUBLISHES NOTHING.  It verifies the packages against a local channel and
   # uploads them as an artifact; release.yml is what pushes them to R2.
   # ===========================================================================
   conda:
-    name: "Job B - conda packages (all subdirs)"
-    needs: bundles
+    name: "conda - conda packages (all subdirs)"
+    needs: [bundles, tests]
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     env:
       RELEASE: ${{ inputs.release }}
       CH: ${{ github.workspace }}/channel      # local channel, for verification only
@@ -146,6 +122,10 @@ jobs:
     steps:
       - name: Checkout CI repo
         uses: actions/checkout@v4
+
+      - name: The conda version
+        id: version
+        run: echo "version=$(scripts/pack.sh --conda-version)" >> "$GITHUB_OUTPUT"
 
       - name: Disk assertion (+ cleanup only if needed)
         run: |
@@ -168,7 +148,7 @@ jobs:
       - name: Install 7-Zip + rattler-build
         run: |
           set -euo pipefail
-          # 7-Zip: to unpack Job A's Windows SFX .exe.
+          # 7-Zip: to unpack the Windows SFX .exe.
           # !! The binary is `7z` on Debian/Ubuntu, NOT `7zz`.  `7zz` is upstream 7-Zip's
           # !! (and conda-forge's) name; Ubuntu's `7zip` package installs /usr/bin/7z.
           sudo apt-get update -qq
@@ -196,60 +176,36 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/rattler-build" --version
 
-      - name: Download all bundles (Job A)
+      - name: Download the bundles
         uses: actions/download-artifact@v4
         with:
-          pattern: ${{ inputs.release }}-bundle-*
+          name: ${{ inputs.release }}-bundles
           path: ${{ runner.temp }}/bundles
-
-      - name: Survey the inputs
-        run: |
-          set -euo pipefail
-          echo "===== bundles ====="; find "$RUNNER_TEMP/bundles" -type f -printf '%10s  %p\n'
 
       - name: "Build the conda packages"
         run: |
           set -euo pipefail
-          B="$RUNNER_TEMP/bundles"
           export WORK="$RUNNER_TEMP/pack"
           # check_pristine.py reads the .conda's zstd members: the runner's Miniconda has
           # the zstandard module, its system python3 does not.
           export PYTHON="$CONDA/bin/python"
 
-          # subdir | official platform name (bundle artifact) | file inside the bundle artifact
+          # conda subdir | official bundle (releases/<release>/SHA256SUMS lists them)
           for spec in \
-            "linux-64      linux      ${RELEASE}_linux.tar.gz" \
-            "linux-aarch64 linux_arm  ${RELEASE}_linux_arm.tar.gz" \
-            "osx-64        macos      ${RELEASE}_macos.tar.gz" \
-            "osx-arm64     macos_arm  ${RELEASE}_macos_arm.tar.gz" \
-            "win-64        windows    ${RELEASE}.exe"
+            "linux-64      ${RELEASE}_linux.tar.gz" \
+            "linux-aarch64 ${RELEASE}_linux_arm.tar.gz" \
+            "osx-64        ${RELEASE}_macos.tar.gz" \
+            "osx-arm64     ${RELEASE}_macos_arm.tar.gz" \
+            "win-64        ${RELEASE}.exe"
           do
             set -- $spec
-            subdir=$1; platform=$2; file=$3
-            echo "::group::$subdir"
-            scripts/pack.sh \
-              --subdir "$subdir" \
-              --bundle "$B/$RELEASE-bundle-$platform/$file" \
-              --out    "$OUT"
+            echo "::group::$1"
+            scripts/pack.sh --subdir "$1" --bundle "$RUNNER_TEMP/bundles/$2" --out "$OUT"
             # reclaim the unpacked tree + the build prefix before the next platform
             rm -rf "$WORK/stage" "$OUT/bld"
             df -h / | tail -1
             echo "::endgroup::"
           done
-
-      - name: "All five packages present?"
-        run: |
-          set -euo pipefail
-          fail=0
-          for s in linux-64 linux-aarch64 osx-64 osx-arm64 win-64; do
-            f=$(ls "$OUT/$s"/isabelle-*.conda 2>/dev/null || true)
-            if [ -n "$f" ]; then
-              printf '  OK    %-14s %s (%s)\n' "$s" "$(basename "$f")" "$(du -h "$f" | cut -f1)"
-            else
-              echo "::error::no package for $s"; fail=1
-            fi
-          done
-          exit $fail
 
       # -------------------------------------------------------------------------
       # Verify against a LOCAL channel: deterministic, no CDN in the way
@@ -267,8 +223,8 @@ jobs:
           $CONDA/bin/conda install -y -n base -c conda-forge conda-index -q
 
           mkdir -p "$CH/noarch"
-          for s in linux-64 linux-aarch64 osx-64 osx-arm64 win-64; do
-            mkdir -p "$CH/$s"; cp "$OUT/$s"/isabelle-*.conda "$CH/$s/"
+          for f in "$OUT"/*/isabelle-*.conda; do
+            s=$(basename "$(dirname "$f")"); mkdir -p "$CH/$s"; cp "$f" "$CH/$s/"
           done
           # --no-zst: Cloudflare caches repodata.json.zst for 4h but never the plain
           # .json, and conda prefers the .zst -> a fresh publish would be invisible for
@@ -278,9 +234,8 @@ jobs:
 
           echo "===== what the channel advertises ====="
           # Informational only -- must not be able to fail the step.  Uses .get() and a
-          # trailing `|| true`, matching its hardened macOS twin (the "what the channel
-          # advertises" block in Job C): a diagnostic print of channel contents must never
-          # red a job whose packages are already built and indexed correctly.
+          # trailing `|| true`: a diagnostic print of channel contents must never red a
+          # job whose packages are already built and indexed correctly.
           $CONDA/bin/python - <<'PY' || true
           import json, pathlib, os
           ch = pathlib.Path(os.environ["CH"])
@@ -295,65 +250,16 @@ jobs:
           $CONDA/bin/conda create -y -p "$RUNNER_TEMP/isaenv" \
             -c "file://$CH" -c conda-forge --override-channels isabelle
 
-      - name: "Run the installed Isabelle (this is the actual proof)"
+      - name: "linux-64: install and RUN"
         run: |
           set -euo pipefail
-          ENV="$RUNNER_TEMP/isaenv"
-          export PATH="$ENV/bin:$PATH"
-
-          echo "--- conda sees it ---"
-          $CONDA/bin/conda list -p "$ENV" isabelle
-
-          echo "--- bin/isabelle is the relative symlink into isa/ ---"
-          ls -l "$ENV/bin/isabelle"
-
-          echo "--- isabelle version ---"
-          isabelle version
-
-          echo "--- ISABELLE_HOME must resolve INTO the conda prefix ---"
-          # $PREFIX/isa, not $PREFIX/opt/<release>: those 15 characters are charged
-          # against Windows' MAX_PATH on every file in the package (see conda/recipe.yaml).
-          # Isabelle does not care -- ISABELLE_HOME is derived from bin/isabelle's own
-          # location, never from this directory's name.
-          home=$(isabelle getenv -b ISABELLE_HOME)
-          echo "ISABELLE_HOME = $home"
-          [ "$home" = "$ENV/isa" ] || { echo "::error::ISABELLE_HOME is $home, expected $ENV/isa"; exit 1; }
-
-          echo "--- the prebuilt heaps shipped INSIDE the package ---"
-          ls -l "$home"/heaps/*/ "$home"/heaps/*/log/
-
-          # -------------------------------------------------------------------------
-          # The heap must actually be USED.  Build a one-line session on top of Main and
-          # assert that HOL is NOT recompiled.
-          #
-          # Do NOT "verify" this with `isabelle build -n` (a dry run).  It is a FALSE
-          # PASS: with the session databases missing it still printed nothing to build,
-          # while a real build turned around and recompiled the whole of HOL.  Only a
-          # real build tells the truth.
-          # -------------------------------------------------------------------------
-          P="$RUNNER_TEMP/probe"; mkdir -p "$P"
-          printf 'theory T imports Main begin\nlemma "(2::nat) + 2 = 4" by simp\nend\n' > "$P/T.thy"
-          printf 'session Probe = HOL +\n  theories T\n' > "$P/ROOT"
-
-          echo "--- building a session that imports Main ---"
-          t0=$(date +%s)
-          isabelle build -d "$P" Probe 2>&1 | tee "$RUNNER_TEMP/probe.log"
-          echo "took $(( $(date +%s) - t0 ))s"
-
-          if grep -q 'Building HOL' "$RUNNER_TEMP/probe.log"; then
-            echo "::error::Isabelle REBUILT HOL -- the shipped heap was not used."
-            echo "          Almost certainly heaps/<ML_ID>/log/*.db did not make it into"
-            echo "          the package; without the session database the heap is ignored."
-            exit 1
-          fi
-          grep -q 'Finished Probe' "$RUNNER_TEMP/probe.log" || {
-            echo "::error::the probe session did not build"; exit 1; }
-          echo "  -> HOL was NOT rebuilt: the prebuilt heap in the package was loaded."
+          $CONDA/bin/conda list -p "$RUNNER_TEMP/isaenv" isabelle
+          scripts/verify_install.sh "$RUNNER_TEMP/isaenv"
 
       - name: "Two environments of the same name get their own user directory"
         run: |
           set -euo pipefail
-          # scripts/pack.sh 1d: the suffix carries a hash of the whole prefix path.
+          # scripts/pack.sh 1c: the suffix carries a hash of the whole prefix path.
           for d in a b; do
             $CONDA/bin/conda create -y -q -p "$RUNNER_TEMP/$d/env" \
               -c "file://$CH" -c conda-forge --override-channels isabelle > /dev/null
@@ -378,7 +284,7 @@ jobs:
           scripts/check_rerun.sh run "$CONDA/bin/conda" "file://$RUNNER_TEMP/probe-channel" "$RUNNER_TEMP/probe-env"
           rm -rf "$RUNNER_TEMP/probe-env"
 
-      - name: Upload the post-link probe (for Job E)
+      - name: Upload the post-link probe (for install-windows)
         uses: actions/upload-artifact@v4
         with:
           name: rerun-probe
@@ -393,8 +299,7 @@ jobs:
       # it, and have Claude Code look at the pixels.  The verdict is the DISCRIMINATING
       # pair -- an error marker on exactly the bad line -- because "a window appeared"
       # is satisfied by an empty frame.  See scripts/verify_gui.sh for the reasoning
-      # (notably: it pins ML_system_64 from the shipped heap's name, or jEdit silently
-      # rebuilds HOL in a dialog and the screenshot goes falsely green).
+      # (notably: an 'Isabelle build' dialog means HOL is being rebuilt, and fails it).
       # -------------------------------------------------------------------------
       - name: Install GUI-check deps (Xvfb, xdotool, ImageMagick)
         run: |
@@ -409,6 +314,7 @@ jobs:
         env:
           # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          REQUIRE_GUI_VERDICT: ${{ inputs.require_gui_verdict }}
         run: scripts/verify_gui.sh "$RUNNER_TEMP/isaenv" "$RUNNER_TEMP/gui"
 
       - name: Upload the GUI screenshot + verdict
@@ -435,29 +341,27 @@ jobs:
           compression-level: 0
 
   # ===========================================================================
-  # Jobs C, D and E: INSTALL AND RUN the packages Job B built, on the platforms they
-  # are actually for.
+  # install-*: INSTALL AND RUN the packages `conda` built, on the platforms they are
+  # actually for.
   #
-  # Job B can only run what it builds on: linux-64.  The other four are cross-built
+  # `conda` can only run what it builds on: linux-64.  The other four are cross-built
   # from Linux; these jobs run them natively:
   #
-  #   Job C  macos-15          osx-arm64      (+ the GUI check)
-  #   Job C  macos-15-intel    osx-64
-  #   Job D  ubuntu-24.04-arm  linux-aarch64  (+ the GUI check)
-  #   Job E  windows-latest    win-64         (+ the post-link re-run, in .bat)
+  #   install-macos      macos-15          osx-arm64      (+ the GUI check)
+  #   install-macos      macos-15-intel    osx-64
+  #   install-linux-arm  ubuntu-24.04-arm  linux-aarch64  (+ the GUI check)
+  #   install-windows    windows-latest    win-64         (+ the post-link re-run, in .bat)
   #
-  # All consume Job B's `conda-packages` artifact, so what is installed here is the
+  # All consume `conda`'s `conda-packages` artifact, so what is installed here is the
   # EXACT byte-for-byte package that would be published -- not a rebuild of it.
   #
-  # The load-bearing assertion in C and D is the same one as in Job B, for the same
-  # reason: build a real session on top of Main and require that HOL is NOT recompiled.
-  # `isabelle build -n` must never be used for this -- it is a FALSE PASS (with the
-  # session databases missing it happily reports nothing to build, while a real build
-  # turns around and rebuilds the whole of HOL).
+  # The load-bearing assertion of install-macos and install-linux-arm is the one in
+  # scripts/verify_install.sh: build a real session on top of Main and require that HOL
+  # is NOT recompiled.
   # ===========================================================================
 
   install-macos:
-    name: "Job C - install + run (${{ matrix.subdir }}, ${{ matrix.runner }})"
+    name: "install-macos - install + run (${{ matrix.subdir }}, ${{ matrix.runner }})"
     needs: conda
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
@@ -482,7 +386,7 @@ jobs:
           sudo rm -rf /Applications/Xcode_*.app || true
           df -h /
 
-      - name: Download the conda packages (Job B)
+      - name: Download the conda packages
         uses: actions/download-artifact@v4
         with:
           name: conda-packages
@@ -494,7 +398,7 @@ jobs:
           CH="$RUNNER_TEMP/channel"
           S=${{ matrix.subdir }}
           mkdir -p "$CH/noarch" "$CH/$S"
-          [ -d "$RUNNER_TEMP/pkgs/$S" ] || { echo "::error::Job B produced no $S package"; exit 1; }
+          [ -d "$RUNNER_TEMP/pkgs/$S" ] || { echo "::error::conda produced no $S package"; exit 1; }
           cp "$RUNNER_TEMP/pkgs/$S"/isabelle-*.conda "$CH/$S/"
           rm -rf "$RUNNER_TEMP/pkgs"
           ls -lh "$CH/$S"
@@ -530,6 +434,7 @@ jobs:
         env:
           # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          REQUIRE_GUI_VERDICT: ${{ inputs.require_gui_verdict }}
         run: scripts/verify_gui_macos.sh "$RUNNER_TEMP/isaenv" "$RUNNER_TEMP/gui"
 
       - name: Upload the macOS GUI screenshot + verdict
@@ -546,7 +451,7 @@ jobs:
           retention-days: 7
 
   install-linux-arm:
-    name: "Job D - install + run + GUI (linux-aarch64)"
+    name: "install-linux-arm - install + run + GUI (linux-aarch64)"
     needs: conda
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
@@ -554,7 +459,7 @@ jobs:
       - name: Checkout CI repo
         uses: actions/checkout@v4
 
-      - name: Download the conda packages (Job B)
+      - name: Download the conda packages
         uses: actions/download-artifact@v4
         with:
           name: conda-packages
@@ -565,7 +470,7 @@ jobs:
           set -euo pipefail
           CH="$RUNNER_TEMP/channel"
           mkdir -p "$CH/noarch" "$CH/linux-aarch64"
-          [ -d "$RUNNER_TEMP/pkgs/linux-aarch64" ] || { echo "::error::Job B produced no linux-aarch64 package"; exit 1; }
+          [ -d "$RUNNER_TEMP/pkgs/linux-aarch64" ] || { echo "::error::conda produced no linux-aarch64 package"; exit 1; }
           cp "$RUNNER_TEMP/pkgs/linux-aarch64"/isabelle-*.conda "$CH/linux-aarch64/"
           rm -rf "$RUNNER_TEMP/pkgs"
           ls -lh "$CH/linux-aarch64"
@@ -595,13 +500,14 @@ jobs:
             command -v "$t" >/dev/null || { echo "::error::missing $t"; exit 1; }
           done
 
-      # The same GUI check as Job B, on ARM.  jEdit is a JVM app and the bundle carries an
-      # arm64 JDK, so this should just work -- but "should" is exactly the word that has
+      # The same GUI check as `conda`'s, on ARM.  jEdit is a JVM app and the bundle carries
+      # an arm64 JDK, so this should just work -- but "should" is exactly the word that has
       # been wrong every time in this pipeline, so we run it.
       - name: "GUI verification on ARM: jEdit under Xvfb, judged by Claude Code"
         env:
           # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          REQUIRE_GUI_VERDICT: ${{ inputs.require_gui_verdict }}
         run: scripts/verify_gui.sh "$ENV" "$RUNNER_TEMP/gui"
 
       - name: Upload the ARM GUI screenshot + verdict
@@ -619,7 +525,7 @@ jobs:
           retention-days: 7
 
   install-windows:
-    name: "Job E - install + run + post-link re-run (win-64)"
+    name: "install-windows - install + run + post-link re-run (win-64)"
     needs: conda
     runs-on: windows-latest
     timeout-minutes: 90
@@ -630,13 +536,13 @@ jobs:
       - name: Checkout CI repo
         uses: actions/checkout@v4
 
-      - name: Download the conda packages (Job B)
+      - name: Download the conda packages
         uses: actions/download-artifact@v4
         with:
           name: conda-packages
           path: ${{ runner.temp }}/pkgs
 
-      - name: Download the post-link probe (Job B)
+      - name: Download the post-link probe
         uses: actions/download-artifact@v4
         with:
           name: rerun-probe
@@ -654,7 +560,7 @@ jobs:
           T="$(cygpath -m "$RUNNER_TEMP")"        # D:/a/_temp: a form both bash and conda read
           CH="$T/channel"
           mkdir -p "$CH/noarch" "$CH/win-64"
-          [ -d "$T/pkgs/win-64" ] || { echo "::error::Job B produced no win-64 package"; exit 1; }
+          [ -d "$T/pkgs/win-64" ] || { echo "::error::conda produced no win-64 package"; exit 1; }
           cp "$T/pkgs/win-64"/isabelle-*.conda "$CH/win-64/"
           cp "$T/probe"/isabelle-rerun-probe-*.conda "$CH/noarch/"
           rm -rf "$T/pkgs"
@@ -662,18 +568,26 @@ jobs:
           python -m conda_index "$CH" --no-zst --no-bz2
           echo "T=$T" >> "$GITHUB_ENV"
 
-      - name: "win-64: install, run, and re-run the post-links (.bat)"
+      # A fresh install, and the user's first `isabelle` call on it: that call runs
+      # Cygwin's initialization (symlinks, rebaseall, postinstall with the permission
+      # lists pack.sh step 3 rewrites), which deletes its marker first and never retries.
+      - name: "win-64: install, and the first isabelle call"
         run: |
           set -euo pipefail
           ENV="$T/isaenv"
-          scripts/check_rerun.sh run "$CONDA_EXE" "file:///$T/channel" "$ENV"
+          "$CONDA_EXE" create -y -p "$ENV" -c "file:///$T/channel" -c conda-forge --override-channels isabelle
           v=$("$ENV/Scripts/isabelle.bat" version)
           echo "isabelle version -> $v"
           [ -n "$v" ] || { echo "::error::isabelle version printed nothing"; exit 1; }
+          [ ! -e "$ENV/isa/contrib/cygwin/isabelle/uninitialized" ] || {
+            echo "::error::the first isabelle call did not initialize Cygwin"; exit 1; }
           u=$("$ENV/Scripts/isabelle.bat" getenv -b ISABELLE_HOME_USER | tr -d '\r')
           echo "ISABELLE_HOME_USER = $u"
-          # scripts/pack.sh 1d, through Isabelle's own Cygwin (cksum included)
+          # scripts/pack.sh 1c, through Isabelle's own Cygwin (cksum included)
           case "$u" in
             */.isabelle/*-conda-isaenv-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
             *) echo "::error::unexpected user directory $u"; exit 1 ;;
           esac
+
+      - name: "win-64: the isabelle post-link re-runs its dependents' post-links (.bat)"
+        run: scripts/check_rerun.sh run "$CONDA_EXE" "file:///$T/channel" "$T/probe-env"

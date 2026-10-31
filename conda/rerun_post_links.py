@@ -1,15 +1,17 @@
 """Re-run the post-link of every installed package that depends on `isabelle` directly.
 
-The `isabelle` package's post-link runs this.  Its pre-unlink deletes the Isabelle user directory,
-and with it every component registration, while conda runs only the hooks of the packages a
-transaction replaces: after `conda install --force-reinstall isabelle` this is what brings the
-registrations and the feature packages' patches back (PACKAGING_DESIGN.md, "feature packages
-rewrite $PREFIX/isa").  So every such post-link must be safe to re-run (RELEASE_CHECKLIST.md §4).
+The `isabelle` package's post-link runs this.  Re-installing isabelle (`--force-reinstall`, or a
+new build) re-links every file of the package, which undoes the feature packages' patches in
+$PREFIX/isa, and its pre-unlink deletes the Isabelle user directory with every component
+registration in it; but conda runs only the hooks of the packages a transaction replaces, so
+this is what brings them back (PACKAGING_DESIGN.md §11.2).  So every such post-link must be safe
+to re-run (RELEASE_CHECKLIST.md §4).
 
-Only direct dependents count, dependencies first.  Each script runs the way conda's own
-run_script does (conda/core/link.py): `bash <script>` or `cmd /d /c <script>`, from the script's
-directory and with it first on PATH, PKG_NAME, PKG_VERSION and PKG_BUILDNUM set.  Exit codes are
-ignored: one failing package must not keep the others' registrations away.
+Only direct dependents count, dependencies first.  Each script runs as conda runs a post-link
+(run_script in conda/core/link.py): in the activated environment, which it inherits from the
+isabelle post-link that runs this, from the script's directory with it first on PATH, and with
+PKG_NAME, PKG_VERSION and PKG_BUILDNUM set.  Exit codes are ignored: one failing package must not
+keep the others' registrations away.
 """
 import json
 import os

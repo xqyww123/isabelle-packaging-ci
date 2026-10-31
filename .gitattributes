@@ -1,4 +1,4 @@
-# Shell scripts are checked out with LF everywhere.  build.yml's Job I runs
+# Shell scripts are checked out with LF everywhere.  build.yml's install-windows runs
 # scripts/check_rerun.sh from a `bash -l {0}` step on windows-latest (Git-Bash),
 # and a CRLF `set -euo pipefail\r` fails that shell before it does anything.
 # Git for Windows installs with core.autocrlf=true by default, so "it works

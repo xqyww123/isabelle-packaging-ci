@@ -8,8 +8,10 @@
 # green a package a strict Linux judge would have failed.  Those parts are here:
 #
 #   gui_judge.sh theory  <out.thy>              write the canonical Scratch.thy
-#   gui_judge.sh pin-ml  <isa-tree> <clean-home>  pin ML_system_64 to the shipped heap
 #   gui_judge.sh judge   <screenshot> <out-dir>   run Claude Code and apply the criteria
+#
+# A missing verdict (no claude CLI or token, quota exhausted, API error) only warns,
+# unless REQUIRE_GUI_VERDICT=true: release.yml sets it, so nothing is published unjudged.
 #
 # `theory` and `judge` share one source of truth for what the theory contains and what
 # the screenshot is judged against: the theory text below and the prompt below describe
@@ -31,32 +33,6 @@ THY
 }
 
 # --------------------------------------------------------------------------------------
-# Pin the ML variant to the one the SHIPPED heap was built for.
-#
-# Not a nicety.  Isabelle keys its heaps by ML_IDENTIFIER, and ML_system_64 flips it
-# (`..._x86_64-linux` for 64-bit ML, `..._x86_64_32-linux` for 32-bit).  If the running
-# preference disagrees with the shipped heap, Isabelle does not warn -- it SILENTLY
-# rebuilds HOL from source, inside a GUI dialog whose output never reaches any log, so
-# the screenshot check would come up green while the 350 MB heap went unused.  A false
-# pass, and exactly the one this whole check exists to prevent.  Derive it from the
-# artifact, never assume.  Echoes the heap id so the caller can log it.
-# --------------------------------------------------------------------------------------
-pin_ml() {
-  local isa_tree="$1" clean_home="$2"
-  [ -d "$isa_tree" ] || { echo "::error::no Isabelle tree at $isa_tree" >&2; return 1; }
-  local rel heap_id ml64
-  rel=$(cat "$isa_tree/etc/ISABELLE_IDENTIFIER")
-  heap_id=$(basename "$(ls -d "$isa_tree/heaps/"*/ | sed -n 1p)")
-  case "$heap_id" in
-    *_32-*) ml64=false ;;
-    *)      ml64=true  ;;
-  esac
-  mkdir -p "$clean_home/.isabelle/$rel/etc"
-  echo "ML_system_64 = \"$ml64\"" > "$clean_home/.isabelle/$rel/etc/preferences"
-  echo "$heap_id"
-}
-
-# --------------------------------------------------------------------------------------
 # The judgement.  Screenshot in, PASS/FAIL out.  Identical on every platform.
 #
 # Auth: CLAUDE_CODE_OAUTH_TOKEN (a subscription token from `claude setup-token`).
@@ -66,6 +42,12 @@ pin_ml() {
 # not inherit a stray one; so the launcher passes the ORIGINAL home in CRED_HOME and we
 # run claude under that.
 # --------------------------------------------------------------------------------------
+no_verdict() {
+  [ "${REQUIRE_GUI_VERDICT:-false}" = true ] || return 0
+  echo "::error::a release needs a GUI verdict (REQUIRE_GUI_VERDICT): re-run this job once Claude is available"
+  return 1
+}
+
 judge() {
   local shot="$1" out_dir="$2"
   local cred_home="${CRED_HOME:-$HOME}"
@@ -77,7 +59,8 @@ judge() {
   if ! command -v claude >/dev/null 2>&1; then
     echo "::warning::no claude CLI and no CLAUDE_CODE_OAUTH_TOKEN -- the screenshot was taken"
     echo "::warning::and will be uploaded, but NOT judged.  The GUI is UNVERIFIED this run."
-    return 0
+    no_verdict
+    return
   fi
   echo "=== claude $(claude --version) ==="
 
@@ -142,7 +125,8 @@ PROMPT_EOF
     echo "::warning::The GUI is therefore UNVERIFIED this run.  This is NOT a package failure --"
     echo "::warning::it is an auth/quota/API problem.  The screenshot is uploaded; look at it."
     cat "$out_dir/claude.err" 2>/dev/null || true
-    return 0
+    no_verdict
+    return
   fi
 
   echo "=== verdict ==="
@@ -182,7 +166,6 @@ PROMPT_EOF
 
 case "${1:-}" in
   theory)  emit_theory > "${2:?usage: gui_judge.sh theory <out.thy>}" ;;
-  pin-ml)  pin_ml "${2:?usage: gui_judge.sh pin-ml <isa-tree> <clean-home>}" "${3:?}" ;;
   judge)   judge "${2:?usage: gui_judge.sh judge <screenshot> <out-dir>}" "${3:?}" ;;
-  *) echo "usage: gui_judge.sh {theory <out.thy> | pin-ml <isa-tree> <home> | judge <shot> <out-dir>}" >&2; exit 2 ;;
+  *) echo "usage: gui_judge.sh {theory <out.thy> | judge <shot> <out-dir>}" >&2; exit 2 ;;
 esac

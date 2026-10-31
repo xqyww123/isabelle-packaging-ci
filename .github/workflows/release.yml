@@ -10,18 +10,8 @@ name: release
 # The whole distribution is REBUILT here (build.yml runs again) rather than promoting an
 # old CI run's artifacts: what we publish is then exactly the bytes that were just
 # verified, in this run, and the release does not depend on some past run still existing.
-#
-# Rules baked in below, each of which cost real debugging (see §3.3):
-#   * rclone >= 1.74 and --s3-no-check-bucket.  Ubuntu's 1.60 fails the FIRST PUT of
-#     every object against R2 -- on a 1 GB package that means uploading it twice.
-#   * conda index --no-zst.  Cloudflare caches repodata.json.zst for 4h but never the
-#     plain .json, and conda prefers the .zst -> a fresh publish would be invisible for
-#     hours.  Not producing the .zst sidesteps the whole thing.
-#   * PULL the channel down before indexing.  conda-index only indexes what is on disk,
-#     and `rclone sync` DELETES whatever is in the bucket but not locally.  Skipping the
-#     pull would wipe every previously published package.
-#   * Never overwrite a published file.  Changed content => bump the build number
-#     (ISA_BUILD_NUMBER), which changes the file name.
+# The rules of publishing itself (never overwrite a published file, rclone, the index,
+# the CDN) live where they are enforced: publish-conda.yml, its header and its steps.
 
 on:
   workflow_dispatch:
@@ -35,15 +25,23 @@ on:
         type: string
         required: true
 
+# One isabelle release at a time: a second dispatch waits, and then publish-conda's
+# guard refuses to overwrite the first one's files.
+concurrency:
+  group: release-isabelle
+  cancel-in-progress: false
+
 jobs:
-  # Rebuild + verify everything (Jobs A-E).  Jobs B-E already prove the packages
-  # install and run, from a local channel.
+  # Rebuild + verify everything: build.yml's install-* jobs already prove the packages
+  # install and run, from a local channel.  What a release publishes can never be
+  # withdrawn, so here a GUI check that gets no verdict from Claude fails.
   build:
     uses: ./.github/workflows/build.yml
     with:
       release: ${{ inputs.release }}
       build_number: ${{ inputs.build_number }}
-    # the GUI checks in Jobs B-D need CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
+      require_gui_verdict: true
+    # the GUI checks need CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
     # receives NO secrets unless the caller passes them.
     secrets: inherit
 
@@ -68,12 +66,12 @@ jobs:
   # ---------------------------------------------------------------------------
   # The user's command, on a clean machine, on every platform.
   #
-  # This is NOT a repeat of Jobs B-E.  Those install from a LOCAL channel
+  # This is NOT a repeat of build.yml's install checks.  Those install from a LOCAL channel
   # (file://) and prove the PACKAGES work.  This installs from the real URL and
   # proves the CHANNEL works -- that the bytes reached R2, that conda-index wrote
   # a repodata that names them correctly, and that conda's solver can act on it.
   # Those two can fail independently: a package can be perfect while the upload
-  # drops a file or repodata points at a filename that isn't there.  Job B would
+  # drops a file or repodata points at a filename that isn't there.  build.yml would
   # still be green and the user still could not install.
   #
   # Running it immediately after publishing is safe, and that is measured, not
@@ -83,9 +81,13 @@ jobs:
   # ---------------------------------------------------------------------------
   smoke:
     name: "Smoke: conda install from conda.qiyuan.me (${{ matrix.runner }})"
-    needs: publish
+    needs: [build, publish]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      RELEASE: ${{ inputs.release }}
+      BUILD_NUMBER: ${{ inputs.build_number }}
     strategy:
       fail-fast: false          # one platform's failure must not hide the others
       matrix:
@@ -111,20 +113,19 @@ jobs:
       - name: "conda install -c https://conda.qiyuan.me -c conda-forge isabelle"
         run: |
           set -euo pipefail
-          # Pin the build just published: unpinned, conda could quietly pick another
-          # build on the channel and the smoke would test that instead.  The conda
-          # version is scripts/pack.sh's: Isabelle2026 -> 2026.
-          V="${{ inputs.release }}"; V="${V#Isabelle}"; V="${V//-/.}"
+          # Pin the build just published, by the version build.yml reports: unpinned,
+          # conda could quietly pick another build on the channel and test that instead.
+          [ -n "$VERSION" ] || { echo "::error::build reported no conda version"; exit 1; }
           # Capture the install output: conda prints the package's post-link message
           # (its .messages.txt) here, and we assert it appeared -- so this smoke also
           # verifies the post-install hint on every platform, including the Windows .bat.
           conda create -y -p "$RUNNER_TEMP/isa" -c https://conda.qiyuan.me -c conda-forge \
-            --override-channels "isabelle=$V=${{ inputs.build_number }}" 2>&1 | tee "$RUNNER_TEMP/create.log"
+            --override-channels "isabelle=$VERSION=$BUILD_NUMBER" 2>&1 | tee "$RUNNER_TEMP/create.log"
           grep -q "Isabelle is installed" "$RUNNER_TEMP/create.log" \
             || { echo "::error::post-install hint (.messages.txt) did not print"; exit 1; }
           conda list -p "$RUNNER_TEMP/isa" isabelle
           id=$(tr -d '\r\n' < "$RUNNER_TEMP/isa/isa/etc/ISABELLE_ID")
-          want=$(tr -d '\r\n' < "releases/${{ inputs.release }}/ISABELLE_ID")
+          want=$(tr -d '\r\n' < "releases/$RELEASE/ISABELLE_ID")
           echo "etc/ISABELLE_ID = $id (official: $want)"
           [ "$id" = "$want" ] || { echo "::error::installed ISABELLE_ID $id is not the official $want"; exit 1; }
 

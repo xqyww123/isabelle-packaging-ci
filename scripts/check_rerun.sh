@@ -7,7 +7,8 @@
 #   check_rerun.sh build <channel dir>                     build the probe into a local channel
 #   check_rerun.sh run <conda> <channel url> <prefix>      install isabelle + probe, reinstall isabelle
 #
-# `build` needs rattler-build (Job B); `run` needs only conda, so Job E runs it on Windows.
+# `build` needs rattler-build (build.yml's `conda` job); `run` needs only conda, so
+# `install-windows` runs it on Windows too.
 # The probe never leaves CI: it is not in the conda-packages artifact.
 set -euo pipefail
 
@@ -41,7 +42,9 @@ EOF
     "$CONDA" create -y -p "$ENV" -c "$CH" -c conda-forge --override-channels isabelle isabelle-rerun-probe
     before=$(lines)
     echo "probe post-link ran $before time(s) on install"
-    [ "$before" -ge 1 ] || { echo "::error::the probe's own post-link did not run"; exit 1; }
+    # Once, not twice: conda writes a transaction's records only after all its post-links
+    # (conda/core/link.py), so isabelle's post-link does not yet see the probe.
+    [ "$before" -eq 1 ] || { echo "::error::the probe's post-link should run once on install, ran $before time(s)"; exit 1; }
     "$CONDA" install -y -p "$ENV" -c "$CH" -c conda-forge --override-channels --force-reinstall isabelle
     after=$(lines)
     echo "probe post-link ran $after time(s) after reinstalling isabelle"

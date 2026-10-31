@@ -2,13 +2,19 @@
 
     check_pristine.py manifest <tree> <manifest.json>
         record the official tree (pack.sh, right after unpacking, before it changes anything)
+    check_pristine.py permissions <tree>
+        win-64: make Cygwin's permission lists name only what ships (pack.sh step 3)
     check_pristine.py compare <subdir> <manifest.json> <package.conda>
 
 The comparison is against what users get: the sha256 of every file in the package's
-info/paths.json, and the targets of its symlinks.  Every difference must match EXPECTED below;
-any other one fails the check and is listed.  Directories are not compared: a conda payload has
-no directory entries (pack.sh 1a).
+info/paths.json, and the targets of its symlinks.  A conda payload has no directories, so an
+officially empty directory must come back holding pack.sh's empty marker (step 2).  Every other
+difference must be named in EXPECTED, and every entry there must name one: anything else fails
+the check and is listed.  File modes are not compared: rattler-build writes 0644, or 0755 for a
+file its owner may execute, so the release's read-only sources ship writable on Unix (on
+win-64, Cygwin's postinstall sets them from its permission lists).
 """
+import gzip
 import hashlib
 import json
 import os
@@ -16,24 +22,24 @@ import re
 import sys
 import tarfile
 import zipfile
-from typing import IO
+from typing import IO, Iterator
 
-# What the package may differ in, per platform (conda subdir; "*" is every platform).
+MARKER = ".conda-keep"
+EMPTY_FILE = ["file", hashlib.sha256(b"").hexdigest()]
+
+# What the package differs in, per platform (conda subdir; "*" is every platform).
 EXPECTED = {
-    "changed": {"*": ["etc/settings",           # pack.sh 1d: a user directory per environment
-                      "etc/components"],        # pack.sh 1e: no bundled nunchaku
-                "win-64": [r"contrib/cygwin/isabelle/permissions/(directories|755)\.gz"]},  # pack.sh 3
-    "added": {"*": [r"(.*/)?\.conda-keep"],     # pack.sh 2: empty directories
-              "win-64": ["bin/isabelle.bat"]},  # pack.sh 1c: the Windows launcher
-    "missing": {"*": [r"contrib/vscodium-[^/]+/.*/obj/.*",                 # pack.sh 1b: MSBuild scratch
-                      r"contrib/polyml-[^/]+/[^/]+/libpoly(ml|main)\.la"],  # pack.sh 1f: libtool archives
-                "win-64": [r"contrib/cygwin/lib/sasl2_3/lib[^/]+\.la"]},    # pack.sh 1f
+    "changed": {"*": ["etc/settings",           # pack.sh 1c: a user directory per environment
+                      "etc/components"],        # pack.sh 1d: no bundled nunchaku
+                "win-64": [r"contrib/cygwin/isabelle/permissions/755\.gz"]},  # pack.sh 3: no *.la
+    "added": {"win-64": ["bin/isabelle.bat"]},  # pack.sh 1b: the Windows launcher
+    "missing": {"*": [r"contrib/polyml-[^/]+/[^/]+/libpoly(ml|main)\.la"],  # pack.sh 1e: libtool archives
+                "win-64": [r"contrib/cygwin/lib/sasl2_3/lib[^/]+\.la"]},    # pack.sh 1e
 }
 
 
-def entries(kind: str, subdir: str) -> re.Pattern:
-    patterns = EXPECTED[kind].get("*", []) + EXPECTED[kind].get(subdir, [])
-    return re.compile("|".join(f"(?:{p})" for p in patterns))
+def entries(kind: str, subdir: str) -> list:
+    return EXPECTED[kind].get("*", []) + EXPECTED[kind].get(subdir, [])
 
 
 def sha256(path: str) -> str:
@@ -44,18 +50,47 @@ def sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def manifest(tree: str) -> dict:
-    """{relative path: ["file", sha256] | ["link", target]} for every non-directory under tree."""
-    result = {}
+def shipped(tree: str) -> Iterator[tuple]:
+    """(relative path, path) of every file and symlink under tree: what a conda payload carries."""
     for root, dirs, files in os.walk(tree):
         for name in dirs + files:
             path = os.path.join(root, name)
-            rel = os.path.relpath(path, tree).replace(os.sep, "/")
-            if os.path.islink(path):
-                result[rel] = ["link", os.readlink(path)]
-            elif os.path.isfile(path):
-                result[rel] = ["file", sha256(path)]
+            if os.path.islink(path) or os.path.isfile(path):
+                yield os.path.relpath(path, tree).replace(os.sep, "/"), path
+
+
+def manifest(tree: str) -> dict:
+    """{relative path: ["file", sha256] | ["link", target] | ["empty"]}, the last for empty directories."""
+    result = {rel: ["link", os.readlink(path)] if os.path.islink(path) else ["file", sha256(path)]
+              for rel, path in shipped(tree)}
+    for root, dirs, files in os.walk(tree):
+        if root != tree and not dirs and not files:
+            result[os.path.relpath(root, tree).replace(os.sep, "/")] = ["empty"]
     return result
+
+
+def restrict(listed: list, ships: set) -> list:
+    """The entries of a Cygwin permission list that name a shipped path: a file or symlink, a
+    directory with one of them beneath (conda creates no other), or the tree itself."""
+    return [p for p in listed if p == "." or p in ships]
+
+
+def permissions(tree: str) -> None:
+    ships = set()
+    for rel, _ in shipped(tree):
+        while rel:
+            ships.add(rel)
+            rel = rel.rpartition("/")[0]
+    lists = os.path.join(tree, "contrib", "cygwin", "isabelle", "permissions")
+    for name in sorted(os.listdir(lists)):
+        path = os.path.join(lists, name)
+        with gzip.open(path) as f:
+            listed = [os.fsdecode(p) for p in f.read().split(b"\0") if p]
+        kept = restrict(listed, ships)
+        if kept != listed:                      # an unchanged list keeps its official bytes
+            with open(path, "wb") as f:
+                f.write(gzip.compress(b"".join(os.fsencode(p) + b"\0" for p in kept), mtime=0))
+        print(f"{name}: kept {len(kept)} of {len(listed)} path(s)")
 
 
 def unzstd(f: IO[bytes]) -> IO[bytes]:
@@ -69,7 +104,7 @@ def unzstd(f: IO[bytes]) -> IO[bytes]:
 
 
 def package(conda: str) -> dict:
-    """The same shape as manifest(), for the isa/ part of a .conda file."""
+    """The same shape as manifest(), for the isa/ part of a .conda file (which has no ["empty"])."""
     with zipfile.ZipFile(conda) as z:
         names = z.namelist()
         info = next(n for n in names if n.startswith("info-"))
@@ -86,20 +121,31 @@ def package(conda: str) -> dict:
     return result
 
 
-def compare(subdir: str, official: dict, shipped: dict) -> list:
-    """The differences EXPECTED does not allow, one line each."""
-    changed, added, missing = (entries(k, subdir) for k in ("changed", "added", "missing"))
+def as_packaged(official: dict) -> dict:
+    """The official tree as a conda package carries it: each empty directory holds the marker."""
+    return dict((f"{p}/{MARKER}", EMPTY_FILE) if v == ["empty"] else (p, v) for p, v in official.items())
+
+
+def compare(subdir: str, official: dict, packaged: dict) -> list:
+    """The differences EXPECTED does not name, and the entries of EXPECTED that name none, one line each."""
+    expected = as_packaged(official)
+    unused = {(kind, p) for kind in EXPECTED for p in entries(kind, subdir)}
+
+    def named(kind, path):
+        p = next((p for p in entries(kind, subdir) if re.fullmatch(p, path)), None)
+        unused.discard((kind, p))
+        return p is not None
     wrong = []
-    for path in sorted(official.keys() | shipped.keys()):
-        if path not in shipped:
-            if not missing.fullmatch(path):
+    for path in sorted(expected.keys() | packaged.keys()):
+        if path not in packaged:
+            if not named("missing", path):
                 wrong.append(f"missing from the package: {path}")
-        elif path not in official:
-            if not added.fullmatch(path):
+        elif path not in expected:
+            if not named("added", path):
                 wrong.append(f"not in the official tree: {path}")
-        elif official[path] != shipped[path] and not changed.fullmatch(path):
-            wrong.append(f"differs from the official tree: {path}  {official[path]} -> {shipped[path]}")
-    return wrong
+        elif expected[path] != packaged[path] and not named("changed", path):
+            wrong.append(f"differs from the official tree: {path}  {expected[path]} -> {packaged[path]}")
+    return wrong + [f"EXPECTED {kind} entry {p} names nothing in the {subdir} package" for kind, p in sorted(unused)]
 
 
 def main(args: list) -> int:
@@ -108,14 +154,17 @@ def main(args: list) -> int:
             with open(out, "w") as f:
                 json.dump(manifest(tree), f)
             return 0
+        case ["permissions", tree]:
+            permissions(tree)
+            return 0
         case ["compare", subdir, official, conda]:
             with open(official) as f:
                 wrong = compare(subdir, json.load(f), package(conda))
             for line in wrong:
                 print(f"::error::{line}")
             if wrong:
-                print(f"::error::{len(wrong)} difference(s) from the official {subdir} tree that are not "
-                      "packaging changes (scripts/check_pristine.py EXPECTED)")
+                print(f"::error::the {subdir} package's isa/ is not the official tree plus exactly the packaging "
+                      "changes (scripts/check_pristine.py EXPECTED)")
                 return 1
             print(f"OK: the package's isa/ is the official {subdir} tree plus the packaging changes")
             return 0

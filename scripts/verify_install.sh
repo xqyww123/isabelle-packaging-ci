@@ -3,9 +3,9 @@
 #
 #   verify_install.sh <conda-prefix>
 #
-# This is what separates "the package builds" from "the package works".  Job B can only
-# run linux-64 (everything else is cross-built), so osx-64, osx-arm64 and linux-aarch64
-# are executed only here, each on a native runner (Jobs C and D).
+# This is what separates "the package builds" from "the package works": the one
+# install-and-run check for every package a runner can execute natively -- linux-64 in
+# build.yml's `conda` job, osx-64, osx-arm64 and linux-aarch64 in its install-* jobs.
 #
 # The assertion that matters is the LAST one: build a real session on top of Main and
 # require that HOL is not recompiled.  Do NOT be tempted to use `isabelle build -n`

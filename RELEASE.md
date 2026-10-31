@@ -4,10 +4,24 @@ The `isabelle` package is the official Isabelle release with no patches (`PACKAG
 §11). Patches ship as separate feature packages, released from the patch tool repository
 `xqyww123/isabelle_patch_control` (its `RELEASE.md`).
 
-Below, `<R>` is the Isabelle release you package, for example `Isabelle2026`. It must be
-registered in `releases/<R>/` (`PACKAGING_DESIGN.md` §11.1 says how).
+Below, `<R>` is the Isabelle release you package, for example `Isabelle2026`.
 
 Pause the download counter while you release (`RELEASE_CHECKLIST.md`, "The channel host").
+
+## 0. Register the release (once per Isabelle release)
+
+Skip this if `releases/<R>/` exists. Otherwise create, and commit:
+
+- `releases/<R>/SHA256SUMS`: exactly five lines, `<sha256>  <file>`, for `<R>_linux.tar.gz`,
+  `<R>_linux_arm.tar.gz`, `<R>_macos.tar.gz`, `<R>_macos_arm.tar.gz` and `<R>.exe`, copied from
+  `https://isabelle.in.tum.de/website-<R>/dist/`.
+- `releases/<R>/ISABELLE_ID`: the first 12 hex digits of tag `<R>`'s changeset in
+  `https://isabelle.in.tum.de/repos/isabelle/raw-tags`. Never copy it from a bundle: the CI
+  checks the bundles against it.
+
+Then run `ci.yml` (step 2's command). If `scripts/pack.sh` stops at an anchor ("upstream layout
+changed") or `scripts/check_pristine.py` reports a difference, the new release's tree differs
+from what the packaging expects: adapt that step before going on.
 
 ## 1. Pick the build number
 
@@ -41,11 +55,14 @@ gh workflow run release.yml --repo xqyww123/isabelle-packaging-ci -f release=<R>
 ```
 
 The run has three jobs: `build`, `publish`, and `smoke`, which installs the published packages
-from the channel on clean machines. Wait until all three are green.
+from the channel on clean machines. Wait until all three are green. A second dispatch waits
+until the first run has finished.
 
 If a job fails:
 
-- `build`: nothing is published. Fix the cause and dispatch again with the same `<N>`.
+- `build`: nothing is published. If only a GUI check failed with "a release needs a GUI
+  verdict" (Claude's quota was used up), press **Re-run failed jobs** once Claude is available
+  again. Otherwise fix the cause and dispatch again with the same `<N>`.
 - `publish` or `smoke`, for a cause outside the workflow files (a secret, R2, a transient
   failure): fix it and press **Re-run failed jobs** on the same run, within 7 days. The
   `publish` job accepts a file that is already on the channel with the same bytes, so the

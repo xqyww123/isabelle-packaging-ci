@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 #
-# Job B: turn an official platform bundle into a conda package.
+# build.yml's `conda` job: turn an official platform bundle into a conda package.
 #
 #   ISA_RELEASE=Isabelle2026 ISA_BUILD_NUMBER=0 \
 #   pack.sh --subdir linux-64 \
 #           --bundle  <Isabelle2026_linux.tar.gz | Isabelle2026.exe | a directory> \
 #           --out     <output dir for the .conda file>
+#
+#   ISA_RELEASE=Isabelle2026 pack.sh --conda-version      prints the conda version, 2026
 #
 # It runs entirely on Linux, for every target platform -- including win-64: nothing
 # here compiles anything; we only move files and zip them up.  The bundle's own
@@ -15,25 +17,28 @@
 
 set -euo pipefail
 
-SUBDIR="" BUNDLE="" OUT=""
+SUBDIR="" BUNDLE="" OUT="" PRINT_VERSION=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --subdir) SUBDIR="$2"; shift 2 ;;
     --bundle) BUNDLE="$2"; shift 2 ;;
     --out)    OUT="$2";    shift 2 ;;
+    --conda-version) PRINT_VERSION=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+RELEASE="${ISA_RELEASE:?ISA_RELEASE is not set (e.g. Isabelle2026)}"
+# conda versions cannot contain '-':  Isabelle2026 -> 2026,  Isabelle2025-2 -> 2025.2
+VERSION="${RELEASE#Isabelle}"; VERSION="${VERSION//-/.}"
+[ -z "$PRINT_VERSION" ] || { echo "$VERSION"; exit 0; }
+
 for v in SUBDIR BUNDLE OUT; do
   [ -n "${!v}" ] || { echo "::error::--${v,,} is required" >&2; exit 2; }
 done
-
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RELEASE="${ISA_RELEASE:?ISA_RELEASE is not set (e.g. Isabelle2026)}"
 OFFICIAL_ID_FILE="$HERE/../releases/$RELEASE/ISABELLE_ID"
-[ -f "$OFFICIAL_ID_FILE" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ISABELLE_ID"; exit 1; }
-# conda versions cannot contain '-':  Isabelle2026 -> 2026,  Isabelle2025-2 -> 2025.2
-VERSION="${RELEASE#Isabelle}"; VERSION="${VERSION//-/.}"
+[ -f "$OFFICIAL_ID_FILE" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ISABELLE_ID (RELEASE.md, step 0)"; exit 1; }
 PYTHON="${PYTHON:-python3}"           # needs zstandard (or Python >= 3.14) for check_pristine.py
 WORK="${WORK:-$(mktemp -d)}"
 STAGE="$WORK/stage"
@@ -49,12 +54,12 @@ echo "=============================================================="
 # 1. unpack the bundle  ->  $STAGE/<release>/
 # ---------------------------------------------------------------------------
 rm -rf "$STAGE"; mkdir -p "$STAGE"
-# Say so plainly if the bundle is not there.  Otherwise a missing/failed Job A artifact
-# surfaces as a bare `tar: Error is not recoverable: exiting now` (exit 2), which tells
-# whoever reads the CI log nothing about what actually went wrong.
+# Say so plainly if the bundle is not there.  Otherwise a missing bundle surfaces as a
+# bare `tar: Error is not recoverable: exiting now` (exit 2), which tells whoever reads
+# the CI log nothing about what actually went wrong.
 if [ ! -f "$BUNDLE" ] && [ ! -d "$BUNDLE" ]; then
   echo "::error::bundle not found: $BUNDLE"
-  echo "          (is the Job A artifact for this platform missing from the download?)"
+  echo "          (is it listed in releases/$RELEASE/SHA256SUMS?)"
   exit 1
 fi
 case "$BUNDLE" in
@@ -124,37 +129,15 @@ done
 # means /tmp, /var/tmp, /dev/shm, /home and the rebase state dirs are simply gone,
 # and every `isabelle` call greets the user with
 #     bash.exe: warning: could not find /tmp
-# We put them back at step 2 by dropping a marker file in each.
-#
-# Recorded HERE, before the obj/ purge below, on purpose: purging obj/ leaves its
-# parent directories empty, and those we do NOT want to resurrect -- they are build
-# scaffolding, and they sit at exactly the deep paths we are trying to shorten.
+# We put them back at step 2 by dropping a marker file in each.  Recorded here, before
+# any step changes the tree, so that step 2 restores exactly the officially empty ones.
 # ---------------------------------------------------------------------------
 EMPTY_DIRS="$WORK/empty_dirs.txt"
 ( cd "$TREE" && find . -type d -empty | sed 's|^\./||' | sort ) > "$EMPTY_DIRS"
 echo "empty directories in the pristine bundle: $(wc -l < "$EMPTY_DIRS")"
 
 # ---------------------------------------------------------------------------
-# 1b. Drop VSCodium's MSBuild scratch (**/obj/**).
-#
-# node-pty's native addon ships its incremental-build state -- .tlog files and
-# .lastbuildstate -- next to the compiled .node binary.  Nothing reads them at run
-# time; they exist to let MSBuild skip work on a rebuild that will never happen here.
-# They also own the single longest path in the bundle, at 212 characters, which is
-# what actually broke `conda create` on Windows.  The compiled binary itself lives in
-# Release/, not Release/obj/, and stays.
-#
-# We do NOT touch anything else in the Isabelle tree, and VSCodium itself stays --
-# deleting it was considered and rejected: VS Code is the mainstream front end.
-# ---------------------------------------------------------------------------
-n_obj=0
-while IFS= read -r d; do
-  rm -rf "$d"; n_obj=$((n_obj + 1))
-done < <(find "$TREE/contrib" -type d -name obj -path '*vscodium*' 2>/dev/null)
-echo "purged $n_obj VSCodium obj/ directory(ies)"
-
-# ---------------------------------------------------------------------------
-# 1c. Windows: install the real launcher at <ISABELLE_HOME>\bin\isabelle.bat.
+# 1b. Windows: install the real launcher at <ISABELLE_HOME>\bin\isabelle.bat.
 #
 # bin/isabelle is a Cygwin bash script and cmd.exe cannot run it, so without this the
 # package has NO working entry point on Windows: $PREFIX\Scripts\isabelle.bat (written
@@ -180,7 +163,7 @@ if [ "$SUBDIR" = win-64 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1d. Isolate ISABELLE_HOME_USER per conda environment.
+# 1c. Isolate ISABELLE_HOME_USER per conda environment.
 #
 # Stock etc/settings puts USER state -- config, component registrations and
 # on-demand-built session heaps -- in ~/.isabelle/<release>, which is SHARED with any
@@ -210,7 +193,7 @@ cat "$WORK/settings" > "$SETTINGS"
 echo "patched etc/settings: ISABELLE_HOME_USER -> ~/.isabelle/${RELEASE}-conda-<env>-<hash>"
 
 # ---------------------------------------------------------------------------
-# 1e. Unregister the dead bundled nunchaku component.
+# 1d. Unregister the dead bundled nunchaku component.
 #
 # The distribution ships contrib/nunchaku-0.5-1, still the 2017 binary (self-reported
 # 0.1), whose --solvers knows cvc4, kodkod, paradox and smbc but not cvc5.  Nunchaku is
@@ -227,7 +210,7 @@ cat "$WORK/components" > "$COMPONENTS"
 echo "patched etc/components: dropped the $NUNCHAKU_LINE registration"
 
 # ---------------------------------------------------------------------------
-# 1f. Drop the libtool archives (*.la).
+# 1e. Drop the libtool archives (*.la).
 #
 # rattler-build leaves every *.la out of a package anyway (conda's convention: they
 # record absolute build paths, here the upstream build machine's temp dir).  Nothing
@@ -242,42 +225,20 @@ echo "dropped $n_la libtool archive(s) (*.la)"
 # 2. Put the empty directories back (see 1a).
 #
 # conda only creates a directory as the parent of a file it unpacks, so the only way to
-# ship an empty one is to make it non-empty.  A single marker file does that, and unlike
+# ship an empty one is to make it non-empty.  An EMPTY marker file does that, and unlike
 # a post-link `mkdir` it is TRACKED: it shows up in `conda list --explicit`, and
-# `conda remove` takes it away again (PACKAGING_DESIGN.md §3.1).
-#
-# The markers are dotfiles, and every directory that gets one merely ignores them:
-# Cygwin's /tmp, /home, /dev/shm and /var/tmp are scratch; /etc/fstab.d is looked up by
-# user name; /etc/ssl, /etc/sasl2, /lib/security and /usr/share/pkgconfig are matched by
-# extension or exact name.
-#
-# !! EXCEPT var/lib/rebase/*.d -- do NOT mark those. !!
-# rebaselst builds its work list with
-#     dynPaths="$( find ${db} ${lb} ${ub} -type f | sort -u )"   (cygwin/bin/rebaselst:45)
-# and then `cat`s every file it finds, treating each line as a path to rebase.  `find
-# -type f` matches dotfiles, so a marker there would be read as a DLL list and feed this
-# sentence to rebaseall -- during cygwin_init, on the user's first `isabelle` call.
-# They also do not need us: rebaselst re-creates its own directories if they are absent
-# (`mkdir -p`, rebaselst:12-17), which is exactly why rebaseall succeeded on the Windows
-# VM with all of them missing.
+# `conda remove` takes it away again (PACKAGING_DESIGN.md §3.1).  Every directory that
+# gets one ignores it, the Cygwin rebase state dirs included: rebaselst reads each file
+# there as a list of paths and skips empty content (rebaselst:47-48, 54-55).
 # ---------------------------------------------------------------------------
-n_dirs=0 n_skip=0
+n_dirs=0
 while IFS= read -r d; do
   [ -n "$d" ] || continue
-  case "$d" in
-    */var/lib/rebase/*) n_skip=$((n_skip + 1)); continue ;;
-  esac
   mkdir -p "$TREE/$d"
-  # only mark it if it is STILL empty -- one filled in above needs no marker.
-  if [ -z "$(ls -A "$TREE/$d" 2>/dev/null)" ]; then
-    printf 'This file exists so that conda ships this otherwise-empty directory.\n' \
-      > "$TREE/$d/.conda-keep"
-    n_dirs=$((n_dirs + 1))
-  fi
+  : > "$TREE/$d/.conda-keep"
+  n_dirs=$((n_dirs + 1))
 done < "$EMPTY_DIRS"
 echo "restored $n_dirs empty directory(ies) via .conda-keep markers"
-echo "  (skipped $n_skip rebase state dir(s) -- rebaselst re-creates those itself, and a"
-echo "   marker there would be cat'd into rebaseall's DLL list)"
 
 # ---------------------------------------------------------------------------
 # 3. Windows: Cygwin's permission lists name only what ships.
@@ -285,34 +246,11 @@ echo "   marker there would be cat'd into rebaseall's DLL list)"
 # On the first `isabelle` call, Isabelle's Cygwin runs contrib/cygwin/isabelle/postinstall,
 # which under `set -e` runs setfacl/chmod on every path in permissions/*.gz -- lists of
 # every directory and file of the official tree (each one there, measured).  A listed
-# path the package lacks (the *.la of 1f) fails it, and with it the user's first call.
-# So each list keeps only what ships (owner, 2026-10-31): the files and symlinks of the
-# staged tree, and the directories with one of them beneath -- conda creates no other.
-# (The rebase state dirs 2 leaves unmarked drop out; rebaseall, which cygwin_init runs
-# before postinstall, makes them.)
+# path the package lacks (the *.la of 1e) fails it, and with it the user's first call.
+# So each list keeps only what ships (owner, 2026-10-31).
 # ---------------------------------------------------------------------------
 if [ "$SUBDIR" = win-64 ]; then
-  "$PYTHON" - "$TREE" <<'PY'
-import gzip, os, sys
-tree = os.fsencode(sys.argv[1])
-ships = {b"."}
-for root, dirs, files in os.walk(tree):
-    for name in files + [d for d in dirs if os.path.islink(os.path.join(root, d))]:
-        path = os.path.relpath(os.path.join(root, name), tree).replace(os.sep.encode(), b"/")
-        while path:
-            ships.add(path)
-            path = path.rpartition(b"/")[0]
-lists = os.path.join(tree, b"contrib/cygwin/isabelle/permissions")
-for name in sorted(os.listdir(lists)):
-    path = os.path.join(lists, name)
-    with gzip.open(path) as f:
-        listed = [p for p in f.read().split(b"\0") if p]
-    kept = [p for p in listed if p in ships]
-    if kept != listed:                  # a list that names only what ships keeps its official bytes
-        with open(path, "wb") as f:
-            f.write(gzip.compress(b"".join(p + b"\0" for p in kept), mtime=0))
-    print(f"{os.fsdecode(name)}: kept {len(kept)} of {len(listed)} path(s)")
-PY
+  "$PYTHON" "$HERE/check_pristine.py" permissions "$TREE"
 fi
 
 # ---------------------------------------------------------------------------
@@ -321,7 +259,8 @@ fi
 # Windows' MAX_PATH is 259 usable characters, LongPathsEnabled is 0 by default on
 # Windows 11, and turning it on needs admin + a reboot.  It cannot be worked around from
 # inside the package either: `conda create` fails while unpacking into the pkgs cache,
-# long before any post-link script could run.  Measured, before the fixes above:
+# long before any post-link script could run.  Measured on Isabelle2025-2, under the
+# package's old opt/Isabelle2025-2/ root:
 #     InvalidArchiveError ... node_addon_api_except.lastbuildstate   (262 chars)
 #
 # conda lays the payload down at   <pkgs>\<name>-<version>-<build>\<path-in-package>
@@ -364,6 +303,7 @@ longest_path=${longest#* }
 if [ "$SUBDIR" = win-64 ]; then
   echo "longest path in the package: $longest_len chars (budget $MAX_REL under $PKGS_DIR, ENFORCED for win-64)"
   echo "  $longest_path"
+  echo "  so an environment prefix (and a pkgs dir) may be up to $(( 259 - longest_len )) characters, incl. its trailing backslash"
   if [ "$longest_len" -gt "$MAX_REL" ]; then
     echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit under $PKGS_DIR."
     echo "          Windows (MAX_PATH=259, long paths off by default) will fail to unpack this."
@@ -400,8 +340,8 @@ export ISA_BUILD_NUMBER
 #              package into <output-dir>/broken/.
 #   osx-*   -> the test takes the unix branch and PASSES, but it passed by running the
 #              macOS package's bash script on Linux.  A false pass is worse than no test.
-# Only linux-64 can be honestly tested here, and Job B does that far more thoroughly
-# anyway: it installs from a local channel and builds a real session (see build.yml).
+# Only linux-64 can be honestly tested here, and the `conda` job does that far more
+# thoroughly anyway: it installs from a local channel and builds a real session.
 rattler-build build \
   --recipe "$HERE/../conda/recipe.yaml" \
   --target-platform "$SUBDIR" \

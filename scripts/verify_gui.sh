@@ -23,7 +23,7 @@ OUT_DIR="${2:?usage: verify_gui.sh <conda-prefix> <out-dir>}"
 mkdir -p "$OUT_DIR"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JUDGE="$HERE/gui_judge.sh"   # shared theory/pin-ml/judge, so the criteria cannot drift
+JUDGE="$HERE/gui_judge.sh"   # shared theory/judge, so the criteria cannot drift
 
 SHOT="$OUT_DIR/jedit.png"
 DISP=":99"
@@ -42,9 +42,7 @@ GUI_HOME="$OUT_DIR/home"
 rm -rf "$GUI_HOME"; mkdir -p "$GUI_HOME"
 export HOME="$GUI_HOME"
 
-# Pin the ML variant to the shipped heap (shared guard -- prevents a silent HOL rebuild
-# that would false-green this check; see gui_judge.sh:pin_ml for why).
-HEAP_ID=$(bash "$JUDGE" pin-ml "$ENV_PREFIX/isa" "$GUI_HOME")
+HEAP_ID=$(basename "$ENV_PREFIX"/isa/heaps/*/)   # pack.sh asserts exactly one
 echo "=== shipped heap: $HEAP_ID ==="
 
 echo "=== starting Xvfb on $DISP ==="

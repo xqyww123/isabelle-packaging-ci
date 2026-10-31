@@ -12,7 +12,7 @@ schema_version: 1
 # below only prints a hint and re-runs other packages' post-links.
 #
 # The tree to package is handed in via $ISA_STAGE by scripts/pack.sh -- an
-# official platform bundle (Job A) with the packaging changes applied.  We
+# official platform bundle with the packaging changes applied.  We
 # deliberately do NOT use a `source:` entry: that would make
 # rattler-build copy the whole ~2.4 GB tree into its work dir before the build
 # script copies it again into $PREFIX.  Copying straight from $ISA_STAGE halves
@@ -231,7 +231,7 @@ build:
           # Pre-unlink cleanup.  This env's Isabelle user dir
           # (~/.isabelle/<release>-conda-<env>-<hash>: config, component registrations,
           # on-demand-built heaps) lives OUTSIDE the prefix -- the pack.sh etc/settings
-          # change gives every env its own (scripts/pack.sh 1d says why) -- so conda does
+          # change gives every env its own (scripts/pack.sh 1c says why) -- so conda does
           # not track it.  On `conda remove` delete the WHOLE dir (verified: conda runs
           # bin/.<name>-pre-unlink.sh with $PREFIX set).  The path is resolved from
           # isabelle itself (its files are still present at pre-unlink time), and the

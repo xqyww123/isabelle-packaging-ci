@@ -3,8 +3,8 @@
 #
 #   verify_gui_macos.sh <conda-prefix> <out-dir>
 #
-# Same judgement as Linux -- it calls the SHARED scripts/gui_judge.sh for the theory, the
-# ML-variant pinning, and the Claude verdict + criteria, so the standard cannot drift.
+# Same judgement as Linux -- it calls the SHARED scripts/gui_judge.sh for the theory and
+# the Claude verdict + criteria, so the standard cannot drift.
 # What differs is only the LAUNCH: macOS has a real window server (the runner's
 # screencapture probe proved it), so there is no Xvfb; jEdit renders through Quartz and
 # we grab the screen with `screencapture -x`.  There is no xdotool either, so window
@@ -33,9 +33,7 @@ GUI_HOME="$OUT_DIR/home"
 rm -rf "$GUI_HOME"; mkdir -p "$GUI_HOME"
 export HOME="$GUI_HOME"
 
-# Shared guard: pin ML_system_64 to the shipped heap, or Isabelle silently rebuilds HOL
-# in a dialog and the screenshot false-greens.  (gui_judge.sh:pin_ml.)
-HEAP_ID=$(bash "$JUDGE" pin-ml "$ENV_PREFIX/isa" "$GUI_HOME")
+HEAP_ID=$(basename "$ENV_PREFIX"/isa/heaps/*/)   # pack.sh asserts exactly one
 echo "=== shipped heap: $HEAP_ID ==="
 
 # Sanity: the screen really is capturable here (the job's probe asserts this too, but if
@@ -99,7 +97,7 @@ if [ -z "$mapped" ]; then
   echo "::warning::on this runner).  Taking the screenshot regardless; Claude judges the pixels."
 fi
 
-# Secondary guard against a silent HOL rebuild (primary is the ML pinning above): if
+# Guard against a silent HOL rebuild: if
 # AppleScript can see windows and one is an 'Isabelle build' progress dialog, the heap is
 # not being used.  Only acted on when we actually have a window list.
 wins="$(list_windows)"

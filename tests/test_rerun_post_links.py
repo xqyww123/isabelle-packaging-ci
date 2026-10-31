@@ -37,11 +37,14 @@ def test_reruns_the_direct_dependents_dependencies_first(tmp_path):
     install(tmp_path, "isabelle", ["python"])
     install(tmp_path, "a-feature", ["isabelle ==2026 0", "z-base ==1.0 0"], version="2.0", build_number=3)
     install(tmp_path, "z-base", ["isabelle ==2026 0"])
-    install(tmp_path, "semantic-data", ["a-feature"])               # depends on isabelle only indirectly
+    # The real shape of an indirect dependent: its depends name isabelle-* packages, never isabelle.
+    install(tmp_path, "isabelle-semantic-embedding", ["isabelle >=2026"])
+    install(tmp_path, "isabelle-semantic-data", ["isabelle-semantic-embedding >=0.3.0"])
     install(tmp_path, "python", [])
     rerun.main(tmp_path)
     bin_ = tmp_path / "bin"
-    assert ran(tmp_path) == [f"z-base 1.0 0 {tmp_path} {bin_}", f"a-feature 2.0 3 {tmp_path} {bin_}"]
+    assert ran(tmp_path) == [f"z-base 1.0 0 {tmp_path} {bin_}", f"a-feature 2.0 3 {tmp_path} {bin_}",
+                             f"isabelle-semantic-embedding 1.0 0 {tmp_path} {bin_}"]
 
 
 def test_a_failing_post_link_does_not_stop_the_others(tmp_path):

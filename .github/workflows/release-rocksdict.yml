@@ -65,7 +65,7 @@ jobs:
           # finished while these three sat unstarted for half an hour.  This is the label
           # Semantic_Embedding's own wheels.yml already uses for its Intel job.
           - {subdir: osx-64,        runner: macos-15-intel,   plat: macosx_10_14_x86_64}
-          - {subdir: osx-arm64,     runner: macos-14,         plat: macosx_11_0_arm64}
+          - {subdir: osx-arm64,     runner: macos-15,         plat: macosx_11_0_arm64}
           - {subdir: win-64,        runner: windows-latest,   plat: win_amd64}
     defaults:
       run:

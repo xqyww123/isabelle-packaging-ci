@@ -1,26 +1,24 @@
 #!/usr/bin/env bash
 #
-# Job F, step 1+2: inject the natively-built heaps into a platform bundle and turn
-# the result into a conda package.
+# Job F: replace the heaps of an official platform bundle with the natively-built ones
+# and turn the result into a conda package.
 #
+#   ISA_RELEASE=Isabelle2026 ISA_BUILD_NUMBER=0 \
 #   pack.sh --subdir linux-64 \
-#           --bundle  <Isabelle2025-2_linux.tar.gz | Isabelle2025-2.exe | a directory> \
-#           --heaps   <dir containing one or more <ML_IDENTIFIER>/ dirs> \
+#           --bundle  <Isabelle2026_linux.tar.gz | Isabelle2026.exe | a directory> \
+#           --heaps   <dir containing one <ML_IDENTIFIER>/ dir> \
 #           --out     <output dir for the .conda file>
 #
-# It runs entirely on Linux, for every target platform -- including win-64.  That is
-# forced, not chosen: the tools that make a Windows bundle are Unix-only, so Job A
-# already cross-builds the .exe on Linux (PACKAGING_DESIGN.md §5.0 rule 1).  Nothing
-# here compiles anything; we only move files and zip them up.
+# It runs entirely on Linux, for every target platform -- including win-64: nothing
+# here compiles anything; we only move files and zip them up.  Every change it makes to
+# the official tree is one of those scripts/check_pristine.py allows, and the script
+# checks the finished package against the tree as it was unpacked.
 #
-# The heap artifacts are copied WHOLESALE: every <ML_IDENTIFIER>/ directory the heap
-# job produced goes into the bundle's heaps/.  No platform->ML_IDENTIFIER mapping is
+# The heap artifact is copied WHOLESALE: the <ML_IDENTIFIER>/ directory the heap job
+# produced goes into the bundle's heaps/.  No platform->ML_IDENTIFIER mapping is
 # hard-coded anywhere -- `isabelle getenv ML_IDENTIFIER` prints nothing (it is computed
 # Scala-side, PACKAGING_DESIGN.md §5.1.1), so the directory name is the only source of
-# truth and we simply propagate it.  For macOS that means both the x86_64 and the arm64
-# heap ride along in both osx packages; the macOS bundle is universal anyway, and it
-# costs a few hundred MB to be certain that whichever ML_PLATFORM a given Mac resolves
-# to at run time, its heap is there.
+# truth and we simply propagate it.
 
 set -euo pipefail
 
@@ -39,7 +37,12 @@ for v in SUBDIR BUNDLE HEAPS OUT; do
 done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RELEASE="${ISA_RELEASE:-Isabelle2025-2}"
+RELEASE="${ISA_RELEASE:?ISA_RELEASE is not set (e.g. Isabelle2026)}"
+OFFICIAL_ID_FILE="$HERE/../releases/$RELEASE/ISABELLE_ID"
+[ -f "$OFFICIAL_ID_FILE" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ISABELLE_ID"; exit 1; }
+# conda versions cannot contain '-':  Isabelle2026 -> 2026,  Isabelle2025-2 -> 2025.2
+VERSION="${RELEASE#Isabelle}"; VERSION="${VERSION//-/.}"
+PYTHON="${PYTHON:-python3}"           # needs zstandard (or Python >= 3.14) for check_pristine.py
 WORK="${WORK:-$(mktemp -d)}"
 STAGE="$WORK/stage"
 
@@ -69,7 +72,7 @@ case "$BUNDLE" in
     ;;
   *.exe)
     # The Windows bundle is a 7z self-extracting archive: sfx stub + config + a 7z
-    # archive of the whole tree (build_release.scala:820-841).  7-Zip reads it directly.
+    # archive of the whole tree (Isabelle's build_release.scala).  7-Zip reads it directly.
     #
     # Do NOT hard-code `7zz`.  That is upstream 7-Zip's (and conda-forge's) name for the
     # binary; Debian/Ubuntu's `7zip` package installs it as `7z`.  Hard-coding 7zz made
@@ -86,18 +89,31 @@ case "$BUNDLE" in
     ;;
 esac
 
-# macOS bundles are renamed to <release>.app by build_release (build_release.scala:722).
+# The tree is ISABELLE_HOME, which becomes isa/.  On macOS that is the Contents/Resources/
+# of the app; the rest of the app (its launcher, Info.plist, and top-level symlinks into
+# Contents/Resources/) stays out -- conda users start Isabelle with `isabelle`, not the app.
 TREE="$STAGE/$RELEASE"
-[ -d "$TREE" ] || TREE="$STAGE/$RELEASE.app"
+[ -d "$TREE" ] || TREE="$STAGE/$RELEASE.app/Contents/Resources"
 [ -d "$TREE" ] || { echo "::error::no $RELEASE tree in the unpacked bundle"; ls -la "$STAGE"; exit 1; }
 echo "tree: $TREE"
 
-# The bundle must arrive WITHOUT heaps -- Job A builds with no -b flag on purpose.
-# If it ever ships heaps, they would be cross-built garbage; fail loudly.
-if [ -d "$TREE/heaps" ] && [ -n "$(ls -A "$TREE/heaps" 2>/dev/null)" ]; then
-  echo "::error::the bundle already contains heaps -- Job A must not pass -b"
-  ls -R "$TREE/heaps" | head; exit 1
-fi
+OFFICIAL_ID="$(cat "$OFFICIAL_ID_FILE")"
+ISA_ID="$(cat "$TREE/etc/ISABELLE_ID")"
+[ "$ISA_ID" = "$OFFICIAL_ID" ] || {
+  echo "::error::etc/ISABELLE_ID is $ISA_ID, but the official $RELEASE changeset is $OFFICIAL_ID"; exit 1; }
+echo "ISABELLE_ID = $ISA_ID (the official $RELEASE changeset)"
+
+# The official tree as unpacked, for the check at the end.
+OFFICIAL_MANIFEST="$WORK/official-$SUBDIR.json"
+"$PYTHON" "$HERE/check_pristine.py" manifest "$TREE" "$OFFICIAL_MANIFEST"
+
+# The official bundle ships 32-bit-word heaps (x86_64_32-*, arm64_32-*); ours are the
+# 64-bit ones (1e), built by Jobs B-E.  Drop the official ones.
+for d in "$TREE"/heaps/*/; do
+  [ -d "$d" ] || continue
+  echo "removing the official heaps $(basename "$d")"
+  rm -rf "$d"
+done
 
 # ---------------------------------------------------------------------------
 # 1a. Remember the bundle's EMPTY directories, while the tree is still pristine.
@@ -167,26 +183,32 @@ fi
 # ---------------------------------------------------------------------------
 # 1d. Isolate ISABELLE_HOME_USER per conda environment.
 #
-# Stock etc/settings puts USER state -- config and on-demand-built session heaps --
-# in ~/.isabelle/Isabelle2025-2, which is SHARED with any stock Isabelle2025-2 the user
-# also has.  Our Pure is patched (pide_control, expose_foreign, ...), so a heap built
-# here is not interchangeable with a stock one; sharing the directory makes the two
-# clobber each other and churn.  We append `-conda-<env>` so each conda env gets its own
-# ~/.isabelle/Isabelle2025-2-conda-<env>.  The env is derived from the install prefix
+# Stock etc/settings puts USER state -- config, component registrations and
+# on-demand-built session heaps -- in ~/.isabelle/<release>, which is SHARED with any
+# stock Isabelle of that release and with every other conda env.  Feature packages patch
+# an env's isa/ in place, so a heap built in one env is not interchangeable with another's,
+# and `isabelle process` does not check sources against a heap; the isabelle pre-unlink
+# deletes the directory, so sharing it would also let one env's reinstall wipe another's.
+# We append `-conda-<env>-<hash>`: <env> is the prefix's last component, readable, and
+# <hash> is the CRC of the whole prefix path (`cksum`: POSIX, also in Isabelle's Cygwin),
+# so ~/a/env and ~/b/env do not collide.  Both are derived from the install prefix
 # ($ISABELLE_HOME = <prefix>/isa), so it is correct even without `conda activate`.
 #
 # Only ISABELLE_HOME_USER is touched: ISABELLE_HEAPS and everything else keyed off it are
-# set AFTER it in etc/settings and follow along (the 15 lines between are ISABELLE_TOOLS
+# set AFTER it in etc/settings and follow along (the lines between are ISABELLE_TOOLS
 # and ISABELLE_TMP_PREFIX, neither of which reads it -- verified).  ISABELLE_NAME and the
-# rest of the identity stay "Isabelle2025-2".  The base pre-unlink (recipe.yaml) removes
+# rest of the identity stay "<release>".  The base pre-unlink (recipe.yaml) removes
 # this directory on `conda remove`.
 # ---------------------------------------------------------------------------
 SETTINGS="$TREE/etc/settings"
-grep -q 'conda-\$(basename' "$SETTINGS" && { echo "::error::etc/settings already carries the conda HOME_USER patch"; exit 1; }
-grep -q '^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$' "$SETTINGS" || {
-  echo "::error::etc/settings anchor 'ISABELLE_HEAPS=\$ISABELLE_HOME_USER/heaps' not found -- upstream layout changed, re-check the patch"; exit 1; }
-sed -i 's#^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$#ISABELLE_HOME_USER="${ISABELLE_HOME_USER}-conda-$(basename "$(dirname "$ISABELLE_HOME")")"\n&#' "$SETTINGS"
-echo "patched etc/settings: ISABELLE_HOME_USER -> ~/.isabelle/${RELEASE}-conda-<env>"
+HEAPS_LINE='ISABELLE_HEAPS="$ISABELLE_HOME_USER/heaps"'
+USER_LINE='ISABELLE_HOME_USER="${ISABELLE_HOME_USER}-conda-$(basename "$(dirname "$ISABELLE_HOME")")-$(printf %08x "$(printf %s "$(dirname "$ISABELLE_HOME")" | cksum | cut -d" " -f1)")"'
+grep -q -- '-conda-' "$SETTINGS" && { echo "::error::etc/settings already carries the conda HOME_USER patch"; exit 1; }
+grep -q -x -F "$HEAPS_LINE" "$SETTINGS" || {
+  echo "::error::etc/settings anchor '$HEAPS_LINE' not found -- upstream layout changed, re-check the patch"; exit 1; }
+awk -v heaps="$HEAPS_LINE" -v user="$USER_LINE" '$0 == heaps { print user } { print }' "$SETTINGS" > "$WORK/settings"
+cat "$WORK/settings" > "$SETTINGS"
+echo "patched etc/settings: ISABELLE_HOME_USER -> ~/.isabelle/${RELEASE}-conda-<env>-<hash>"
 
 # ---------------------------------------------------------------------------
 # 1e. Default to 64-bit Poly/ML words (ML_system_64 = true).
@@ -197,11 +219,11 @@ echo "patched etc/settings: ISABELLE_HOME_USER -> ~/.isabelle/${RELEASE}-conda-<
 # some of its ML does not fit 31-bit words (e.g. Performant_Isabelle_ML's Knuth hash
 # constant 0x9E3779B9 overflowed there).
 #
-# This flip must move IN LOCKSTEP with the heap jobs: build.yml now builds the heaps with
-# `-o ML_system_64=true` (the x86_64-* variant), and this patch makes the runtime default
-# select that variant.  Only ONE word-size heap ships per (platform, apple) -- flipping
-# this default WITHOUT the matching 64-bit heap would point Isabelle at an absent dir and
-# rebuild HOL on first use.  Covers `isabelle build` and jEdit alike.
+# This flip must move IN LOCKSTEP with the heap jobs: build.yml builds the heaps with
+# `-o ML_system_64=true` (the x86_64-* / arm64-* variant), and this patch makes the
+# runtime default select that variant.  Only ONE word-size heap ships per platform --
+# flipping this default WITHOUT the matching 64-bit heap would point Isabelle at an
+# absent dir and rebuild HOL on first use.  Covers `isabelle build` and jEdit alike.
 # ---------------------------------------------------------------------------
 OPTIONS="$TREE/etc/options"
 grep -q '^public option ML_system_64 : bool = true' "$OPTIONS" && { echo "::error::etc/options ML_system_64 already true"; exit 1; }
@@ -213,22 +235,19 @@ echo "patched etc/options: ML_system_64 default -> true (64-bit words)"
 # ---------------------------------------------------------------------------
 # 1f. Unregister the dead bundled nunchaku component.
 #
-# The distribution ships contrib/nunchaku-0.5, a 2017 binary (self-reported
-# 0.1) that does not know the `cvc5` solver name the 2025-2 frontend sends:
-# every `nunchaku` invocation dies in ~4ms with "unknown solver 'cvc5'".  Its
-# etc/settings also unconditionally sets NUNCHAKU_HOME, so "NUNCHAKU_HOME is
-# set" can never distinguish a working install from this corpse.  Dropping the
-# registration line removes both; a working nunchaku comes from the
-# `isabelle-nunchaku` component package (which sets NUNCHAKU_VERSION for
-# version-gated consumers).  The contrib/nunchaku-0.5 directory itself stays --
-# unregistered, it is inert, and deleting payload is not this script's job.
+# The distribution ships contrib/nunchaku-0.5-1, still the 2017 binary (self-reported
+# 0.1), whose --solvers knows cvc4, kodkod, paradox and smbc but not cvc5.  Nunchaku is
+# not supported in our packages (owner, 2026-10-31), so we unregister it.  The directory
+# itself stays -- unregistered, it is inert, and the tree keeps the official files.
 # ---------------------------------------------------------------------------
 COMPONENTS="$TREE/etc/components"
+NUNCHAKU_LINE='contrib/nunchaku-0.5-1'
 grep -q 'nunchaku' "$COMPONENTS" || { echo "::error::etc/components already lacks the nunchaku registration -- patch applied twice?"; exit 1; }
-grep -q '^contrib/nunchaku-0.5$' "$COMPONENTS" || {
-  echo "::error::etc/components anchor 'contrib/nunchaku-0.5' not found -- upstream layout changed, re-check the patch"; exit 1; }
-sed -i '\#^contrib/nunchaku-0.5$#d' "$COMPONENTS"
-echo "patched etc/components: dropped dead contrib/nunchaku-0.5 registration"
+grep -q -x -F "$NUNCHAKU_LINE" "$COMPONENTS" || {
+  echo "::error::etc/components anchor '$NUNCHAKU_LINE' not found -- upstream layout changed, re-check the patch"; exit 1; }
+grep -v -x -F "$NUNCHAKU_LINE" "$COMPONENTS" > "$WORK/components"
+cat "$WORK/components" > "$COMPONENTS"
+echo "patched etc/components: dropped the $NUNCHAKU_LINE registration"
 
 # ---------------------------------------------------------------------------
 # 2. inject the heaps
@@ -241,7 +260,7 @@ for d in "$HEAPS"/*/; do
   cp -a "$d" "$TREE/heaps/$id"
   n=$((n + 1))
 done
-[ "$n" -gt 0 ] || { echo "::error::no <ML_IDENTIFIER>/ directory found under $HEAPS"; ls -la "$HEAPS"; exit 1; }
+[ "$n" -eq 1 ] || { echo "::error::expected one <ML_IDENTIFIER>/ directory under $HEAPS, found $n"; ls -la "$HEAPS"; exit 1; }
 
 echo "--- heaps now in the tree ---"
 find "$TREE/heaps" -type f -printf '  %-64p %s bytes\n' | sed "s|$TREE/||"
@@ -333,10 +352,13 @@ echo "   marker there would be cat'd into rebaseall's DLL list)"
 #     InvalidArchiveError ... node_addon_api_except.lastbuildstate   (262 chars)
 #
 # conda lays the payload down at   <pkgs>\<name>-<version>-<build>\<path-in-package>
-# so what we control is the length of <path-in-package>.  180 leaves room for
-#     C:\Users\<name>\AppData\Local\miniconda3\pkgs\isabelle-2025.2-0\
-# with a user name of up to ~21 characters -- and a Windows local account name maxes out
-# at 20.  So: every normal user installs without touching the registry.
+# so the assertion is on that whole path, for
+#     C:\Users\<20 characters>\AppData\Local\miniconda3\pkgs\isabelle-<version>-<build>\
+# -- a Windows local account name maxes out at 20 -- so that every normal user installs
+# without touching the registry.  The budget for <path-in-package> follows from the
+# version and build number: 180 for isabelle-2025.2-0, 182 for isabelle-2026-0..9.
+# Isabelle2026's own VSCodium has a 182-character path in it, so 2026 fits with no
+# margin; the owner accepted that (2026-10-31).
 #
 # ENFORCED FOR win-64 ONLY.  Measured and printed for every platform, but only Windows
 # can fail on it, because only Windows has the limit: PATH_MAX is 1024 on macOS and 4096
@@ -354,7 +376,9 @@ echo "   marker there would be cat'd into rebaseall's DLL list)"
 # NB: `sed -n 1p`, never `head -1`.  Under `set -o pipefail`, `head` closes the pipe
 # after one line, `sort` (28k lines) dies of SIGPIPE=141, and the whole script exits --
 # silently, right here, with the package never built.  `sed -n` reads its input to the end.
-MAX_REL=180
+ISA_BUILD_NUMBER="${ISA_BUILD_NUMBER:?ISA_BUILD_NUMBER is not set}"
+PKGS_DIR='C:\Users\12345678901234567890\AppData\Local\miniconda3\pkgs\'"isabelle-$VERSION-$ISA_BUILD_NUMBER\\"
+MAX_REL=$(( 259 - ${#PKGS_DIR} ))
 path_lengths() {
   ( cd "$TREE" && find . -mindepth 1 | sed 's|^\./||' \
       | awk -v p="isa/" '{ print length(p $0), p $0 }' | sort -rn )
@@ -364,10 +388,10 @@ longest_len=${longest%% *}
 longest_path=${longest#* }
 
 if [ "$SUBDIR" = win-64 ]; then
-  echo "longest path in the package: $longest_len chars (budget $MAX_REL, ENFORCED for win-64)"
+  echo "longest path in the package: $longest_len chars (budget $MAX_REL under $PKGS_DIR, ENFORCED for win-64)"
   echo "  $longest_path"
   if [ "$longest_len" -gt "$MAX_REL" ]; then
-    echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit."
+    echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit under $PKGS_DIR."
     echo "          Windows (MAX_PATH=259, long paths off by default) will fail to unpack this."
     echo "          The ten longest:"
     path_lengths | sed -n 1,10p | while read -r l q; do echo "::error::  $l  $q"; done
@@ -383,18 +407,15 @@ fi
 # ---------------------------------------------------------------------------
 # 7. conda package
 # ---------------------------------------------------------------------------
-# etc/ISABELLE_ID is the hg changeset of OUR patch commit.  It no longer goes into the
-# build string (every character there costs us MAX_PATH on Windows -- see recipe.yaml);
-# it is carried in the package's about.description instead, and lives authoritatively
-# in the tree itself at isa/etc/ISABELLE_ID.
-ISA_ID="$(cat "$TREE/etc/ISABELLE_ID" 2>/dev/null || echo unknown)"
-echo "ISABELLE_ID = $ISA_ID"
-
+# The official changeset (checked above) does not go into the build string -- every
+# character there costs us MAX_PATH on Windows (recipe.yaml); it is carried in the
+# package's about.description, and in the tree itself at isa/etc/ISABELLE_ID.
 mkdir -p "$OUT"
 export ISA_STAGE="$TREE"
 export ISA_RELEASE="$RELEASE"
+export ISA_VERSION="$VERSION"
 export ISA_ID
-export ISA_BUILD_NUMBER="${ISA_BUILD_NUMBER:-0}"
+export ISA_BUILD_NUMBER
 
 # --test native: run the recipe's tests only when the target IS this machine.
 #
@@ -414,6 +435,11 @@ rattler-build build \
   --no-build-id \
   --test native
 
-echo "=== produced ==="
-find "$OUT" -name '*.conda' -newer "$TREE/etc/ISABELLE_ID" -printf '%p  %s bytes\n' 2>/dev/null || \
-  find "$OUT" -name '*.conda' -printf '%p  %s bytes\n'
+PACKAGE="$OUT/$SUBDIR/isabelle-$VERSION-$ISA_BUILD_NUMBER.conda"
+[ -f "$PACKAGE" ] || { echo "::error::rattler-build did not produce $PACKAGE"; find "$OUT" -name '*.conda'; exit 1; }
+echo "=== produced: $PACKAGE ($(stat -c %s "$PACKAGE") bytes) ==="
+
+# ---------------------------------------------------------------------------
+# 8. The package's isa/ is the official tree plus the changes above, nothing else.
+# ---------------------------------------------------------------------------
+"$PYTHON" "$HERE/check_pristine.py" compare "$SUBDIR" "$OFFICIAL_MANIFEST" "$PACKAGE"

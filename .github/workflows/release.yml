@@ -26,19 +26,22 @@ name: release
 on:
   workflow_dispatch:
     inputs:
+      release:
+        description: "Isabelle release to publish, e.g. Isabelle2026 (must be registered in releases/)"
+        type: string
+        required: true
       build_number:
         description: "conda build number - BUMP THIS if you republish the same Isabelle release with changed content"
         type: string
-        default: "0"
+        required: true
 
 jobs:
-  # Rebuild + verify everything (Jobs A-F).  Job F already proves the packages install
-  # and run, from a local channel.
+  # Rebuild + verify everything (Jobs A-I).  Jobs F-I already prove the packages
+  # install and run, from a local channel.
   build:
     uses: ./.github/workflows/build.yml
     with:
-      release: Isabelle2025-2
-      platforms: linux,linux_arm,windows,macos
+      release: ${{ inputs.release }}
       build_number: ${{ inputs.build_number }}
     # the GUI check in Job F needs CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
     # receives NO secrets unless the caller passes them.
@@ -65,7 +68,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # The user's command, on a clean machine, on every platform.
   #
-  # This is NOT a repeat of Jobs F/G/H.  Those install from a LOCAL channel
+  # This is NOT a repeat of Jobs F-I.  Those install from a LOCAL channel
   # (file://) and prove the PACKAGES work.  This installs from the real URL and
   # proves the CHANNEL works -- that the bytes reached R2, that conda-index wrote
   # a repodata that names them correctly, and that conda's solver can act on it.
@@ -86,7 +89,7 @@ jobs:
     strategy:
       fail-fast: false          # one platform's failure must not hide the others
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-14, windows-latest]
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-latest]
     defaults:
       run:
         # bash -l (LOGIN shell), not plain bash: setup-miniconda only puts `conda` on
@@ -96,23 +99,34 @@ jobs:
         # is the documented setup-miniconda shell and is correct on every OS.
         shell: bash -l {0}
     steps:
+      - name: Checkout CI repo (for releases/)
+        uses: actions/checkout@v4
+
       - uses: conda-incubator/setup-miniconda@v3
         with:
           miniforge-version: latest
           auto-activate-base: true
           activate-environment: ""
 
-      - name: "conda install -c https://conda.qiyuan.me isabelle"
+      - name: "conda install -c https://conda.qiyuan.me -c conda-forge isabelle"
         run: |
           set -euo pipefail
+          # Pin the build just published: unpinned, conda could quietly pick another
+          # build on the channel and the smoke would test that instead.  The conda
+          # version is scripts/pack.sh's: Isabelle2026 -> 2026.
+          V="${{ inputs.release }}"; V="${V#Isabelle}"; V="${V//-/.}"
           # Capture the install output: conda prints the package's post-link message
           # (its .messages.txt) here, and we assert it appeared -- so this smoke also
           # verifies the post-install hint on every platform, including the Windows .bat.
-          conda create -y -p "$RUNNER_TEMP/isa" \
-            -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tee "$RUNNER_TEMP/create.log"
+          conda create -y -p "$RUNNER_TEMP/isa" -c https://conda.qiyuan.me -c conda-forge \
+            --override-channels "isabelle=$V=${{ inputs.build_number }}" 2>&1 | tee "$RUNNER_TEMP/create.log"
           grep -q "Isabelle is installed" "$RUNNER_TEMP/create.log" \
             || { echo "::error::post-install hint (.messages.txt) did not print"; exit 1; }
           conda list -p "$RUNNER_TEMP/isa" isabelle
+          id=$(tr -d '\r\n' < "$RUNNER_TEMP/isa/isa/etc/ISABELLE_ID")
+          want=$(tr -d '\r\n' < "releases/${{ inputs.release }}/ISABELLE_ID")
+          echo "etc/ISABELLE_ID = $id (official: $want)"
+          [ "$id" = "$want" ] || { echo "::error::installed ISABELLE_ID $id is not the official $want"; exit 1; }
 
       - name: "...and it runs"
         run: |

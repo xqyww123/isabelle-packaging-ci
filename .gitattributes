@@ -1,9 +1,8 @@
-# Shell scripts are checked out with LF everywhere.  release-nunchaku.yml runs
-# .github/scripts/*.sh from a `bash -l {0}` step on windows-latest (Git-Bash),
+# Shell scripts are checked out with LF everywhere.  build.yml's Job I runs
+# scripts/check_rerun.sh from a `bash -l {0}` step on windows-latest (Git-Bash),
 # and a CRLF `set -euo pipefail\r` fails that shell before it does anything.
-# Git for Windows installs with core.autocrlf=true by default, and no .sh in
-# this repository has ever run on a windows-latest job, so "it works today" is
-# not evidence -- this rule is what makes it not matter.
+# Git for Windows installs with core.autocrlf=true by default, so "it works
+# today" is not evidence -- this rule is what makes it not matter.
 *.sh text eol=lf
 
 # The Windows launcher must ship BYTE FOR BYTE: scripts/pack.sh copies it into

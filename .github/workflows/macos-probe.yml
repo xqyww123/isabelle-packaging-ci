@@ -21,7 +21,7 @@ jobs:
 
   # Replicate Admin/build_release build_heaps: HOL heap twice on ONE runner.
   hol-heaps:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 350
     steps:
       - name: Download + extract Isabelle
@@ -78,7 +78,7 @@ jobs:
           echo "===HOL_VERDICT_END==="
 
   probe:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - name: Q1a - runner basics

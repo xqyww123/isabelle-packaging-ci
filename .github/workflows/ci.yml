@@ -1,26 +1,36 @@
 name: ci
 
-# Continuous integration: build the patched Isabelle bundles on every push / PR.
+# Continuous integration: package the official Isabelle release on every push / PR.
 # Does NOT touch the conda channel -- publishing lives in release.yml.
+# A manual run with `build_number` is also the rehearsal before a release (RELEASE.md, step 2).
 
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'probe.py', '.github/workflows/*-probe.yml']
+    paths-ignore: ['**.md', 'probe.py', '.github/workflows/*-probe.yml', 'worker/**']
   pull_request:
-    paths-ignore: ['**.md', 'probe.py', '.github/workflows/*-probe.yml']
+    paths-ignore: ['**.md', 'probe.py', '.github/workflows/*-probe.yml', 'worker/**']
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Isabelle release (must be registered in releases/); empty = the current one below"
+        type: string
+      build_number:
+        description: "conda build number of the packages this run makes; empty = 0"
+        type: string
 
+# One group per event: a push cancels the earlier push's run, but never a manual one.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     uses: ./.github/workflows/build.yml
     with:
-      release: Isabelle2025-2
-      platforms: linux,linux_arm,windows,macos
-    # the GUI check in Job F needs CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
+      # The current release, for a push (which carries no inputs) and an empty input.
+      release: ${{ inputs.release || 'Isabelle2026' }}
+      build_number: ${{ inputs.build_number || '0' }}
+    # the GUI checks need CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
     # receives NO secrets unless the caller passes them.
     secrets: inherit

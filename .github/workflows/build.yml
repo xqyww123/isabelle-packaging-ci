@@ -1,73 +1,41 @@
 name: build
 
-# Reusable workflow: builds the *patched* Isabelle distribution.
+# Reusable workflow: packages the OFFICIAL Isabelle release, its sources unmodified.
 #
-# Job A   — ubuntu-latest: source -> patches -> hg commit -> Admin/init
-#           -> Admin/build_release  -> all 4 platform bundles (NO heaps).
-#           The Windows .exe is cross-built here on Linux (launch4j/7zz are
-#           unix-only; see PACKAGING_DESIGN.md §5.0).
-# Job B-E — per-platform NATIVE heap builds (heaps cannot be cross-built).
-# Job F   — ubuntu-latest: inject each platform's heaps into that platform's bundle
-#           and turn the result into a conda package (one per conda subdir).
-#           It VERIFIES by installing from a local channel; it does NOT publish.
-#           Publishing to R2 lives in release.yml, so that a push can never move
-#           the channel (PACKAGING_DESIGN.md §5.4).
+# Job A   — ubuntu-latest: download the official platform bundles and check them
+#           against releases/<release>/SHA256SUMS, the checksums the Isabelle site
+#           publishes, registered here once per release.  Upstream is downloaded from
+#           once per run; every later job takes its bundle from Job A's artifacts.
+# Job B-E — per-platform NATIVE heap builds (heaps cannot be cross-built): the official
+#           bundles carry 32-bit-word heaps, ours are 64-bit (scripts/pack.sh 1e).
+# Job F   — ubuntu-latest: replace each bundle's heaps with its platform's and turn the
+#           result into a conda package (one per conda subdir), checking that the
+#           package is the official tree plus the packaging changes
+#           (scripts/check_pristine.py).  It VERIFIES by installing from a local
+#           channel; it does NOT publish.  Publishing to R2 lives in release.yml, so
+#           that a push can never move the channel (PACKAGING_DESIGN.md §5.4).
+# Job G-I — install and run the packages on the platforms they are for.
 #
-# ---------------------------------------------------------------------------
-# Two things that cost a lot of CI time to discover -- read before editing.
-# ---------------------------------------------------------------------------
-#
-# (1) TeX.  build_release ALWAYS runs `isabelle build_doc -a`; there is no flag to
-#     skip it, so the runner needs a fairly complete TeX Live.  The final,
-#     empirically-minimal list is in the "Install build deps" step below.  Beyond
-#     the set named in PACKAGING_DESIGN.md §7, a bare GitHub runner additionally
-#     needs:
-#       texlive-font-utils + ghostscript  -> `epstopdf` (13 documents die without it)
-#       cm-super + texlive-fonts-extra    -> scalable Type-1 fonts, else microtype
-#                                            in Demo_LIPIcs aborts with
-#                                            "auto expansion is only possible with
-#                                             scalable fonts"
-#     The step ends with explicit kpsewhich/`command -v` assertions: if TeX is
-#     incomplete we want to fail in 30s, not 25 minutes into build_doc.
-#
-# (2) Version detection / the `isabelle` shim.  my-better-isabelle-prover picks its
-#     patch set by parsing `isabelle version`.  In a bare hg checkout that is
-#     useless: etc/ISABELLE_IDENTIFIER does not exist yet (lib/scripts/getsettings
-#     only fills it in at release time), so `isabelle version` does NOT print
-#     "Isabelle2025-2" and the tool bails out with "no patches available".
-#     Work-around (step 3): hand the tool a 5-line shim that answers the only two
-#     questions it asks -- `version` and `getenv -b ISABELLE_HOME` -- and forwards
-#     everything else to the real binary.  We deliberately do NOT edit the pristine
-#     source tree: build_release rewrites those files itself later.
-#
-# Related gotcha (do not "fix" this): `isabelle getenv ML_IDENTIFIER` prints an
-# EMPTY value in Isabelle2025-2 -- ML_IDENTIFIER is not a settings variable at all,
-# it is computed Scala-side (Pure/ML/ml_settings.scala: ml_system + "_" + ml_platform).
-# Jobs B-E therefore read the heap directory name off `ls heaps/` instead.
+# Gotcha (do not "fix" this): `isabelle getenv ML_IDENTIFIER` prints an EMPTY value --
+# ML_IDENTIFIER is not a settings variable at all, it is computed Scala-side
+# (Pure/ML/ml_settings.scala: ml_system + "_" + ml_platform).  The heap jobs therefore
+# read the heap directory name off `ls heaps/` instead.
 
 on:
   workflow_call:
     inputs:
       release:
-        description: "Isabelle release name (= hg tag)"
+        description: "Isabelle release, e.g. Isabelle2026 (must be registered in releases/)"
         type: string
-        default: Isabelle2025-2
-      platforms:
-        description: "platform families for build_release"
-        type: string
-        default: linux,linux_arm,windows,macos
-      min_free_gb:
-        description: "abort-free disk threshold on / (GB); below this we run cleanup"
-        type: number
-        default: 60
+        required: true
       build_number:
-        description: "conda build number -- becomes the package's build string (isabelle-2025.2-<N>)"
+        description: "conda build number -- becomes the package's build string (isabelle-<version>-<N>)"
         type: string
-        default: "0"
+        required: true
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: >-
-          Claude subscription token (`claude setup-token`) for Job F's GUI check.
+          Claude subscription token (`claude setup-token`) for the GUI checks.
           Optional: without it the screenshot is still taken and uploaded, and only
           the AI judgement is skipped.  A reusable workflow gets NO secrets unless
           they are declared here AND passed by the caller (`secrets: inherit`).
@@ -78,355 +46,39 @@ on:
 
 jobs:
   bundles:
-    name: "Job A - bundles (all platforms, no heaps)"
+    name: "Job A - official bundles (download + SHA256)"
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 60
     env:
       RELEASE: ${{ inputs.release }}
-      PLATFORMS: ${{ inputs.platforms }}
-      ISA_SRC: ${{ github.workspace }}/isabelle-src
-      OUT: ${{ github.workspace }}/out
+      DL: ${{ github.workspace }}/dl
     steps:
       - name: Checkout CI repo
         uses: actions/checkout@v4
         with:
           path: ci
 
-      - name: Disk assertion (+ cleanup only if needed)
+      - name: Download the official platform bundles
         run: |
           set -euo pipefail
-          df -h /
-          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
-          echo "free on / = ${avail} GB (threshold ${{ inputs.min_free_gb }} GB)"
-          if [ "$avail" -lt "${{ inputs.min_free_gb }}" ]; then
-            echo "::warning::free disk below threshold - running cleanup"
-            t0=$(date +%s)
-            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                        /usr/local/.ghcup /usr/local/share/powershell \
-                        /usr/share/swift /usr/local/share/chromium \
-                        /opt/hostedtoolcache/CodeQL || true
-            echo "cleanup took $(( $(date +%s) - t0 ))s"
-            df -h /
-            avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
-            [ "$avail" -ge 40 ] || { echo "::error::still only ${avail} GB free"; exit 1; }
-          else
-            echo "plenty of space - no cleanup needed"
-          fi
-          # NOTE: /tmp is on the 145G ext4 root disk (not tmpfs) on GitHub runners
-          # => ISABELLE_TMP_PREFIX needs NO override here.  (PACKAGING_DESIGN.md §5.3)
-          echo "--- /tmp filesystem ---"; df -hT /tmp
+          SUMS="ci/releases/$RELEASE/SHA256SUMS"
+          [ -f "$SUMS" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ (add its SHA256SUMS and ISABELLE_ID)"; exit 1; }
+          mkdir -p "$DL"
+          while read -r _ f; do
+            echo "=== $f ==="
+            curl -fsS --retry 5 --retry-delay 20 -o "$DL/$f" "https://isabelle.in.tum.de/website-$RELEASE/dist/$f"
+            ls -l "$DL/$f"
+          done < "$SUMS"
+          cd "$DL" && sha256sum -c "$GITHUB_WORKSPACE/$SUMS"
 
-      - name: Install build deps (mercurial, patch, TeX Live)
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            mercurial patch curl unzip \
-            texlive-latex-recommended texlive-latex-extra texlive-science \
-            texlive-plain-generic texlive-fonts-recommended latexmk \
-            texlive-font-utils texlive-fonts-extra texlive-publishers \
-            texlive-pictures texlive-bibtex-extra cm-super ghostscript
-          # ^ beyond the list in PACKAGING_DESIGN.md §7, a bare runner also needs:
-          #   texlive-font-utils + ghostscript -> `epstopdf` (13 docs die without it)
-          #   cm-super / texlive-fonts-extra   -> scalable T1 fonts, else microtype in
-          #                                       Demo_LIPIcs dies with
-          #                                       "auto expansion is only possible with
-          #                                        scalable fonts"
-          # sed, not `head -1`: see publish-conda.yml (SIGPIPE under pipefail).
-          hg --version | sed -n 1p
-          patch --version | sed -n 1p
-          latexmk --version | sed -n 1p
-          echo "epstopdf: $(command -v epstopdf || echo MISSING)"
-          command -v epstopdf >/dev/null
-          kpsewhich stmaryrd.sty
-          for f in microtype.sty libertine.sty type1cm.sty; do
-            echo "$f -> $(kpsewhich $f || echo '(not found)')"
-          done
-          java -version 2>&1 | sed -n 1p
-
-      - name: Restore cached hg clone
-        id: hgcache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ github.workspace }}/isabelle-src
-          key: hg-isabelle-v1
-
-      - name: "(1) hg clone Isabelle"
-        if: steps.hgcache.outputs.cache-hit != 'true'
-        run: |
-          set -uo pipefail
-          # Source order matters:
-          #   isabelle.sketis.net = Makarius' official mirror -- the ONLY one that
-          #     currently answers.  (It is also where build_release pulls the native
-          #     components from, so the runner must reach it anyway.)
-          #   isabelle.in.tum.de  = the canonical repo, but as of 2026-07-12 it RSTs
-          #     every TLS connection (from GitHub runners AND from a normal desktop:
-          #     "curl: (35) Recv failure: Connection reset by peer").  Kept as fallback.
-          for url in https://isabelle.sketis.net/repos/isabelle \
-                     https://isabelle.in.tum.de/repos/isabelle; do
-            echo "### probing $url"
-            curl -sS -o /dev/null -w '    capabilities: HTTP %{http_code} in %{time_total}s\n' \
-              "$url?cmd=capabilities" || echo "    curl rc=$?"
-          done
-
-          ok=0
-          for url in https://isabelle.sketis.net/repos/isabelle \
-                     https://isabelle.in.tum.de/repos/isabelle; do
-            for flags in --stream ""; do
-              for attempt in 1 2 3; do
-                echo "=== clone $url ${flags:-<plain>} attempt $attempt ==="
-                rm -rf "$ISA_SRC"
-                if hg clone $flags "$url" "$ISA_SRC"; then ok=1; break 3; fi
-                echo "::warning::failed: $url ${flags:-<plain>} attempt $attempt"
-                sleep 15
-              done
-            done
-          done
-          [ "$ok" -eq 1 ] || { echo "::error::cannot clone the Isabelle repository"; exit 1; }
-          echo "Isabelle2025-2 resolves to: $(hg -R "$ISA_SRC" id -r "$RELEASE")"
-          du -sh "$ISA_SRC/.hg"
-
-      - name: Save hg clone to cache
-        if: steps.hgcache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ github.workspace }}/isabelle-src
-          key: hg-isabelle-v1
-
-      - name: "(2) hg update -r $RELEASE"
-        working-directory: ${{ env.ISA_SRC }}
-        run: |
-          set -euo pipefail
-          hg update -r "$RELEASE"
-          echo "upstream rev = $(hg id -i)"
-          echo "UPSTREAM_REV=$(hg id -i)" >> "$GITHUB_ENV"
-
-      - name: "(3) Apply my-better-isabelle-prover patches"
-        run: |
-          set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/venv"
-          # ---- PIN the patch tool.  This decides what we ship. -----------------
-          # An unpinned `git+https://...` takes whatever is on that repo's HEAD at
-          # build time, so someone else's push would silently change the Isabelle we
-          # publish -- and the package would still be called isabelle-2025.2-<number>,
-          # because the build string is just the build number now (recipe.yaml:30).
-          # A PyPI version is immutable, which is exactly what a release needs.
-          #
-          # TO SHIP A NEW PATCH SET:  publish it to PyPI, bump MBI_VERSION here, and
-          # bump ISA_BUILD_NUMBER (release.yml input) -- the content changed, so the
-          # package must not reuse a published filename.
-          MBI_VERSION="0.3.0"   # ships patches/categories.toml + `patch --category {user,dev,all}`
-          "$RUNNER_TEMP/venv/bin/pip" install --quiet "my-better-isabelle-prover==${MBI_VERSION}"
-          "$RUNNER_TEMP/venv/bin/pip" show my-better-isabelle-prover | sed -n '1,2p'
-          MBI="$RUNNER_TEMP/venv/bin/my-better-isabelle"
-
-          # --- why a shim -------------------------------------------------------
-          # The patch tool keys its patch set off `isabelle version`.  A bare hg
-          # checkout has an EMPTY ISABELLE_IDENTIFIER (lib/scripts/getsettings fills
-          # it in only at release time), so `isabelle version` does NOT print
-          # "Isabelle2025-2" and the tool would bail out with "no patches available".
-          # Rather than mutate the pristine source tree (which build_release later
-          # rewrites anyway), we hand the tool a 5-line shim that answers exactly the
-          # two questions it asks -- `version` and `getenv -b ISABELLE_HOME` -- and
-          # forwards anything else to the real binary.  Tool stays a black box.
-          mkdir -p "$RUNNER_TEMP/shim"
-          cat > "$RUNNER_TEMP/shim/isabelle" <<EOF
-          #!/usr/bin/env bash
-          case "\$1" in
-            version) echo "$RELEASE" ;;
-            getenv)  echo "$ISA_SRC" ;;
-            *) exec "$ISA_SRC/bin/isabelle" "\$@" ;;
-          esac
-          EOF
-          chmod +x "$RUNNER_TEMP/shim/isabelle"
-
-          # ---- USER category ---------------------------------------------------
-          # The released Isabelle carries the `user` features; the `dev` ones (needed
-          # only by Isa-REPL / Isa-Mini) stay out -- Isa-REPL's own package applies
-          # register_thy in its installer.
-          #
-          # WHAT is in `user` is the patch tool maintainer's call, not CI's.  So we
-          # pass --category user and take whatever that yields.  Nothing below names
-          # a single feature: feature names are LOGGED for traceability, never
-          # asserted, so a future re-categorisation cannot turn this red on its own.
-          # --no-build: scala_build happens inside build_release stage 1 anyway.
-          "$MBI" --isabelle-bin "$RUNNER_TEMP/shim/isabelle" patch --category user --no-build
-
-          echo "--- what actually got applied (log only, NOT an assertion) ---"
-          "$MBI" --isabelle-bin "$RUNNER_TEMP/shim/isabelle" status --category all || true
-
-      - name: "(3b) Verify the patches landed in the source tree"
-        working-directory: ${{ env.ISA_SRC }}
-        run: |
-          set -euo pipefail
-          MBI="$RUNNER_TEMP/venv/bin/my-better-isabelle"
-          SHIM="$RUNNER_TEMP/shim/isabelle"
-
-          # (i) the tool's OWN verdict: `status --category user` exits nonzero unless
-          #     every user patch is applied.  This is the real assertion.
-          echo "===== tool verdict: status --category user ====="
-          "$MBI" --isabelle-bin "$SHIM" status --category user
-          echo "  -> tool reports all user patches applied (exit 0)"
-
-          # (ii) cross-check against the repository itself: the files hg sees modified
-          #      must be exactly the target files of the applied patches.  Both sides
-          #      are DERIVED at run time -- no feature name is hard-coded here.
-          echo
-          echo "===== hg-modified files vs the tool's applied targets ====="
-          "$MBI" --isabelle-bin "$SHIM" status --category all > "$RUNNER_TEMP/status.txt" || true
-          grep -E '\[ *applied\]' "$RUNNER_TEMP/status.txt" \
-            | sed -E 's/.*\(([^)]*)\).*/\1/' | sort -u > "$RUNNER_TEMP/applied_targets.txt"
-          hg status -m | sed -E 's/^M +//' | sort -u > "$RUNNER_TEMP/hg_modified.txt"
-          echo "--- applied patch targets ---"; cat "$RUNNER_TEMP/applied_targets.txt"
-          echo "--- hg modified ---";           cat "$RUNNER_TEMP/hg_modified.txt"
-          if ! diff -u "$RUNNER_TEMP/applied_targets.txt" "$RUNNER_TEMP/hg_modified.txt"; then
-            echo "::error::the patched files and the hg-modified files disagree"
-            exit 1
-          fi
-          [ -s "$RUNNER_TEMP/hg_modified.txt" ] || { echo "::error::no file was modified at all"; exit 1; }
-          echo "  -> agree ($(wc -l < "$RUNNER_TEMP/hg_modified.txt") file(s) patched)"
-
-          # hand the list to step (8), which re-checks these very files inside the bundle
-          cp "$RUNNER_TEMP/hg_modified.txt" "$RUNNER_TEMP/patched_files.txt"
-
-      - name: "(4) hg commit the patches  <-- without this, build_release drops them"
-        working-directory: ${{ env.ISA_SRC }}
-        run: |
-          set -euo pipefail
-          hg addremove -S
-          hg commit -u ci -m "our patches (my-better-isabelle-prover)"
-          REV=$(hg id -i)
-          echo "patched rev = $REV  (parent = $UPSTREAM_REV)"
-          echo "PATCHED_REV=$REV" >> "$GITHUB_ENV"
-          hg log -r . --template '{node|short} {desc}\n{parents}\n'
-
-      - name: "(5) Bootstrap: Admin/init"
-        working-directory: ${{ env.ISA_SRC }}
-        run: |
-          set -euo pipefail
-          # Admin/init = `bin/isabelle components -I` -> `components -a` -> scala_build.
-          # NOTE: running `components -a` alone is a no-op; the -I must come first.
-          ./Admin/init
-          ./bin/isabelle version
-          ./bin/isabelle getenv ISABELLE_HOME ML_IDENTIFIER
-
-      - name: "(6) Admin/build_release  (all platforms, NO -b => no heaps)"
-        working-directory: ${{ env.ISA_SRC }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$OUT"
-          # NO -b !  Heaps cannot be cross-built (PACKAGING_DESIGN.md §5.0 rule 2);
-          # they are produced natively per platform in Jobs B-E (next round).
-          set +e
-          ./Admin/build_release -D "$OUT" -r "$PATCHED_REV" -R "$RELEASE" -p "$PLATFORMS"
-          rc=$?
-          set -e
-          echo "BUILD_RELEASE_EXIT=$rc"
-          df -h /
-          exit $rc
-
-      - name: "(7) Products"
-        run: |
-          set -euo pipefail
-          find "$OUT" -maxdepth 2 -mindepth 1 | sort
-          echo "--- dist dir ---"
-          ls -l "$OUT/dist-$RELEASE"
-          echo "--- sizes ---"
-          du -h "$OUT/dist-$RELEASE"/* | sort -h
-
-      - name: "(8) Verify: ISABELLE_ID, patched isabelle.jar, Windows .exe"
-        run: |
-          set -euo pipefail
-          DIST="$OUT/dist-$RELEASE"
-          fail=0
-
-          echo "===== every bundle present and of a plausible size ====="
-          # generic source archive: no native components -> tens of MB.
-          # platform bundles: full contrib for that platform -> hundreds of MB.
-          for spec in "$RELEASE.tar.gz:20000000" \
-                      "${RELEASE}_linux.tar.gz:400000000" \
-                      "${RELEASE}_linux_arm.tar.gz:400000000" \
-                      "${RELEASE}_macos.tar.gz:400000000" \
-                      "$RELEASE.exe:400000000"; do
-            f=${spec%:*}; min=${spec##*:}
-            if [ -f "$DIST/$f" ]; then
-              sz=$(stat -c %s "$DIST/$f")
-              printf '  OK    %-32s %6s (%s bytes, min %s)\n' \
-                "$f" "$(du -h "$DIST/$f" | cut -f1)" "$sz" "$min"
-              [ "$sz" -gt "$min" ] || { echo "::error::$f suspiciously small"; fail=1; }
-            else
-              echo "::error::MISSING $f"; fail=1
-            fi
-          done
-
-          echo "===== the .exe is a real PE binary (cross-built on Linux!) ====="
-          file "$DIST/$RELEASE.exe"
-
-          echo "===== unpack the linux bundle ====="
-          mkdir -p "$RUNNER_TEMP/verify"
-          tar xzf "$DIST/${RELEASE}_linux.tar.gz" -C "$RUNNER_TEMP/verify"
-          ISA="$RUNNER_TEMP/verify/$RELEASE"
-
-          echo "--- etc/ISABELLE_ID must equal our patch commit $PATCHED_REV ---"
-          got=$(cat "$ISA/etc/ISABELLE_ID")
-          echo "etc/ISABELLE_ID = $got"
-          [ "$got" = "$PATCHED_REV" ] || { echo "::error::ISABELLE_ID != $PATCHED_REV"; fail=1; }
-          echo "bin/isabelle version -> $("$ISA/bin/isabelle" version || true)"
-
-          echo "--- the patched files must have SHIPPED, byte for byte ---"
-          # Generic on purpose: the file list comes from step (3b) (= whatever
-          # --category user actually patched).  Comparing sha256 against the patched
-          # source tree is strictly stronger than grepping for feature markers, and it
-          # cannot go stale when the tool re-categorises a feature.
-          while read -r f; do
-            [ -n "$f" ] || continue
-            a=$(sha256sum "$ISA_SRC/$f" | cut -d' ' -f1)
-            b=$(sha256sum "$ISA/$f"     | cut -d' ' -f1)
-            if [ "$a" = "$b" ]; then
-              echo "  OK    $f  (${a:0:12})"
-            else
-              echo "::error::$f in the bundle differs from the patched source!"
-              echo "        patched src: $a"
-              echo "        bundle     : $b"
-              fail=1
-            fi
-          done < "$RUNNER_TEMP/patched_files.txt"
-
-          echo "--- lib/classes/isabelle.jar was rebuilt from the patched source ---"
-          # build_release runs scala_build itself, from the tree we patched, so the jar
-          # is by construction compiled from the shipped (patched) .scala files that the
-          # sha256 check above just verified.  Assert only that the jar is really there
-          # and non-trivial -- naming Scala symbols of a specific feature would go stale
-          # the moment that feature is re-categorised or retired.
-          ls -l "$ISA/lib/classes/isabelle.jar"
-          jar_sz=$(stat -c %s "$ISA/lib/classes/isabelle.jar")
-          [ "$jar_sz" -gt 1000000 ] || { echo "::error::isabelle.jar suspiciously small ($jar_sz)"; fail=1; }
-          scala_patched=$(grep -c '\.scala$' "$RUNNER_TEMP/patched_files.txt" || true)
-          echo "  patched .scala files this run: $scala_patched (all compiled into the jar above)"
-
-          echo "--- no heaps in this bundle (expected: heaps built natively in Jobs B-E) ---"
-          ls -R "$ISA/heaps" 2>/dev/null | head -20 || echo "  (no heaps/ dir)"
-
-          rm -rf "$RUNNER_TEMP/verify"
-          exit $fail
-
-      # One artifact PER BUNDLE (not one 5.8 GB blob): Jobs B-E each need exactly
-      # one of them, and actions/download-artifact cannot fetch a single file out
-      # of a larger artifact.
-      - name: Upload bundle (generic source archive)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.release }}-src
-          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}.tar.gz
-          if-no-files-found: error
-          retention-days: 7
-          compression-level: 0
-
+      # One artifact PER BUNDLE (not one 7 GB blob): each heap job needs exactly one of
+      # them, and actions/download-artifact cannot fetch a single file out of a larger
+      # artifact.  Artifact names use the official platform names.
       - name: Upload bundle (linux)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.release }}-bundle-linux
-          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}_linux.tar.gz
+          path: ${{ github.workspace }}/dl/${{ inputs.release }}_linux.tar.gz
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -435,7 +87,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.release }}-bundle-linux_arm
-          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}_linux_arm.tar.gz
+          path: ${{ github.workspace }}/dl/${{ inputs.release }}_linux_arm.tar.gz
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -444,7 +96,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.release }}-bundle-macos
-          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}_macos.tar.gz
+          path: ${{ github.workspace }}/dl/${{ inputs.release }}_macos.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload bundle (macos_arm)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.release }}-bundle-macos_arm
+          path: ${{ github.workspace }}/dl/${{ inputs.release }}_macos_arm.tar.gz
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -453,45 +114,29 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.release }}-bundle-windows
-          path: ${{ github.workspace }}/out/dist-${{ inputs.release }}/${{ inputs.release }}.exe
+          path: ${{ github.workspace }}/dl/${{ inputs.release }}.exe
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
 
   # ===========================================================================
-  # Jobs B-E: NATIVE heap builds.  One per platform -- heaps cannot be
+  # Jobs B-D2 and E: NATIVE heap builds.  One per platform -- heaps cannot be
   # cross-built (PACKAGING_DESIGN.md §3.5 / §5.0 rule 2).
   #
-  # !! They consume Job A's PLATFORM BUNDLES, not the generic source archive. !!
-  # The generic archive cannot build heaps at all, and `isabelle components -a`
-  # cannot fix that.  Proof, from the 2025-2 sources:
-  #   * build_release purges Admin/ from the archive (build_release.scala:540), so
-  #     the catalog `Admin/components/main` that `components -I` wires into the user
-  #     settings does not exist -> getfunctions:293 "Bad component catalog file" -> exit 2.
-  #   * The bundled components are recorded in the archive's etc/components only as
-  #     COMMENTS (`#bundled:polyml-...`, record_bundled_components, build_release.scala:180),
-  #     and getfunctions:302 skips every line starting with '#'.  So
-  #     ISABELLE_COMPONENTS_MISSING is EMPTY and `components -a` (lib/Tools/components,
-  #     which resolves exactly $ISABELLE_COMPONENTS_MISSING) is a silent no-op.
-  #   * Turning those comments into real `contrib/...` entries is `activate_components`
-  #     (build_release.scala:200), which runs only in the per-platform bundle stage.
-  #   => the generic archive has NO Poly/ML and NO JDK; `isabelle build` cannot even start.
-  # The platform bundles, by contrast, already carry a fully activated contrib/ for
-  # their platform -- they are exactly what a user downloads.  So: unpack, build.
-  #
-  # The build command is build_release's own (build_release.scala:245-258, `-o
-  # parallel_proofs=0`) PLUS `-o ML_system_64=true`.  The AoA stack needs 64-bit Poly/ML
-  # words, so the shipped heap must be the x86_64-* variant (not x86_64_32-*) and pack.sh
-  # flips the runtime default to match (§1e).  Without the flag here, this job would build
-  # a 31-bit heap that the patched default never selects -> HOL silently rebuilds on first
-  # use.  Word size does not add heap dirs, so the `n -eq 1`/`n -eq 2` asserts still hold.
+  # The build command is build_release's own (`-o parallel_proofs=0`) PLUS
+  # `-o ML_system_64=true`.  The AoA stack needs 64-bit Poly/ML words, so the shipped
+  # heap must be the x86_64-* / arm64-* variant (not *_32-*) and pack.sh flips the
+  # runtime default to match (§1e).  Without the flag here, this job would build a
+  # 32-bit-word heap that the patched default never selects -> HOL silently rebuilds on
+  # first use.  The official 32-bit-word heaps are removed first, so heaps/ ends up with
+  # exactly one ML_IDENTIFIER dir: ours.
   #     bin/isabelle build -o parallel_proofs=0 -o system_heaps -o ML_system_64=true -b -- HOL Main
-  # `Main` is a real session (src/Doc/ROOT:310, `session Main (doc) in "Main" = HOL +`)
+  # `Main` is a real session (src/Doc/ROOT, `session Main (doc) in "Main" = HOL +`)
   # and the default session of our toolchain; a heap is a delta over its parent, so
   # Main costs a few MB on top of HOL.
   # ===========================================================================
 
-  heaps-linux:
+  heaps-unix:
     name: "Job ${{ matrix.id }} - heaps ${{ matrix.bundle }} (${{ matrix.runner }})"
     needs: bundles
     runs-on: ${{ matrix.runner }}
@@ -506,37 +151,50 @@ jobs:
           - id: C
             runner: ubuntu-24.04-arm
             bundle: linux_arm
+          - id: D
+            runner: macos-15
+            bundle: macos_arm
+          - id: D2
+            runner: macos-15-intel
+            bundle: macos
     env:
       RELEASE: ${{ inputs.release }}
     steps:
+      - name: Free up disk (drop the extra Xcodes)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          df -h /
+          # Without this a macOS runner may have only ~40 GB free (PACKAGING_DESIGN.md §5.2).
+          sudo rm -rf /Applications/Xcode_*.app || true
+          df -h /
+
       - name: Download the ${{ matrix.bundle }} bundle from Job A
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.release }}-bundle-${{ matrix.bundle }}
           path: ${{ runner.temp }}/dl
 
-      - name: Unpack
+      - name: Unpack, drop the official heaps
         run: |
           set -euo pipefail
-          # /tmp lives on the 145 GB ext4 root disk on GitHub Linux runners (not tmpfs)
-          # => ISABELLE_TMP_PREFIX needs NO override.  (PACKAGING_DESIGN.md §5.3)
-          df -hT / /tmp
           mkdir -p "$HOME/isa"
           tar xzf "$RUNNER_TEMP/dl/${RELEASE}_${{ matrix.bundle }}.tar.gz" -C "$HOME/isa"
+          # On macOS the tree is the app's Contents/Resources (scripts/pack.sh says why).
           ISA="$HOME/isa/$RELEASE"
+          [ -d "$ISA" ] || ISA="$HOME/isa/$RELEASE.app/Contents/Resources"
+          [ -d "$ISA" ] || { echo "::error::no $RELEASE tree in the bundle"; ls -l "$HOME/isa"; exit 1; }
           echo "ISA=$ISA" >> "$GITHUB_ENV"
           "$ISA/bin/isabelle" version
           "$ISA/bin/isabelle" getenv -b ISABELLE_PLATFORM64 ML_SYSTEM
-          echo "--- ISABELLE_ID (must be our patched rev) ---"
-          cat "$ISA/etc/ISABELLE_ID"
-          echo "--- heaps/ must be EMPTY at this point ---"
-          ls -R "$ISA/heaps" 2>/dev/null || echo "  (no heaps/ dir - as expected)"
+          echo "--- the official heaps (32-bit words), removed ---"
+          ls "$ISA/heaps"
+          rm -rf "$ISA"/heaps/*
 
       - name: "Build heaps: HOL, Main"
         working-directory: ${{ env.ISA }}
         run: |
           set -euo pipefail
-          nproc; free -g || true
           t0=$(date +%s)
           bin/isabelle build -o parallel_proofs=0 -o system_heaps -o ML_system_64=true -b -- HOL Main
           echo "heap build took $(( ($(date +%s) - t0) / 60 )) min"
@@ -546,14 +204,17 @@ jobs:
         working-directory: ${{ env.ISA }}
         run: |
           set -euo pipefail
-          n=$(ls heaps | wc -l)
+          n=$(ls heaps | wc -l | tr -d ' ')
           [ "$n" -eq 1 ] || { echo "::error::expected exactly 1 ML_IDENTIFIER dir, got $n"; ls heaps; exit 1; }
           id=$(ls heaps)
           echo "ML_IDENTIFIER = $id"
+          case "$id" in
+            *_32-*) echo "::error::$id is the 32-bit-word variant; ML_system_64=true did not take"; exit 1 ;;
+          esac
           for s in Pure HOL Main; do
             f="heaps/$id/$s"
             [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
-            printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(sha256sum "$f" | cut -c1-16)"
+            printf '  %-5s %10s bytes\n' "$s" "$(wc -c < "$f")"
             # !! heaps/<ML_ID>/log/<S>.db must SURVIVE into the artifact. !!
             # It is the session database, not a log.  `isabelle build` decides that a
             # session is finished-and-current by looking it up there -- NOT by the heap
@@ -572,100 +233,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.release }}-heaps-${{ matrix.bundle }}
-          path: ${{ env.ISA }}/heaps
-          if-no-files-found: error
-          retention-days: 7
-
-  heaps-macos:
-    name: "Job D - heaps macos x2 (macos-14)"
-    needs: bundles
-    runs-on: macos-14
-    timeout-minutes: 330
-    env:
-      RELEASE: ${{ inputs.release }}
-    steps:
-      - name: Free up disk (drop the extra Xcodes)
-        run: |
-          set -euo pipefail
-          df -h /
-          t0=$(date +%s)
-          # ~42 GB in ~90s.  Without this the runner has only ~40 GB free, which is
-          # not enough for the bundle + two full heap trees.  (PACKAGING_DESIGN.md §5.2)
-          sudo rm -rf /Applications/Xcode_*.app || true
-          echo "cleanup took $(( $(date +%s) - t0 ))s"
-          df -h /
-
-      - name: Download the macos bundle from Job A
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.release }}-bundle-macos
-          path: ${{ runner.temp }}/dl
-
-      - name: Unpack
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/isa"
-          tar xzf "$RUNNER_TEMP/dl/${RELEASE}_macos.tar.gz" -C "$HOME/isa"
-          # The macOS bundle IS an app bundle: build_release renames the whole tree to
-          # <name>.app (build_release.scala:722), so ISABELLE_HOME == .../Isabelle2025-2.app
-          ISA="$HOME/isa/$RELEASE.app"
-          [ -d "$ISA" ] || { echo "::error::expected $ISA"; ls -l "$HOME/isa"; exit 1; }
-          echo "ISA=$ISA" >> "$GITHUB_ENV"
-          "$ISA/bin/isabelle" version
-          cat "$ISA/etc/ISABELLE_ID"
-          echo "--- Rosetta (needed for the x86_64 pass) ---"
-          arch -x86_64 /usr/bin/true && echo "  Rosetta OK" || echo "::warning::Rosetta not usable"
-
-      - name: "Build heaps x2: ML_system_apple = false, then true"
-        working-directory: ${{ env.ISA }}
-        run: |
-          set -euo pipefail
-          sysctl -n hw.ncpu; df -h /
-          # `isabelle getenv -o` does NOT exist.  The only way to switch ML_system_apple
-          # is the preferences file -- exactly what build_release does on its build_host
-          # (build_release.scala:248).  It must be a *preference*, not `build -o`, because
-          # the heap directory name is derived from ML_PLATFORM at settings-init time.
-          HOME_USER="$(bin/isabelle getenv -b ISABELLE_HOME_USER)"
-          mkdir -p "$HOME_USER/etc"
-          for apple in false true; do
-            echo "===================== ML_system_apple = $apple ====================="
-            echo "ML_system_apple = $apple" > "$HOME_USER/etc/preferences"
-            t0=$(date +%s)
-            bin/isabelle build -o parallel_proofs=0 -o system_heaps -o ML_system_64=true -b -- HOL Main
-            echo "--- pass ML_system_apple=$apple took $(( ($(date +%s) - t0) / 60 )) min"
-            ls heaps
-            df -h /
-          done
-
-      - name: Verify heaps (two ML_IDENTIFIERs)
-        working-directory: ${{ env.ISA }}
-        run: |
-          set -euo pipefail
-          # Do NOT delete heaps/*/log -- log/<S>.db is the session database that makes
-          # `isabelle build` treat the session as already built.  See the long note in
-          # Job B/C's verify step.
-          n=$(ls heaps | wc -l | tr -d ' ')
-          [ "$n" -eq 2 ] || { echo "::error::expected 2 ML_IDENTIFIER dirs (x86_64 + arm64), got $n"; ls heaps; exit 1; }
-          for id in $(ls heaps); do
-            echo "ML_IDENTIFIER = $id"
-            for s in Pure HOL Main; do
-              f="heaps/$id/$s"
-              [ -f "$f" ] || { echo "::error::missing heap $id/$s"; exit 1; }
-              printf '  %-5s %10s bytes  sha256=%s\n' "$s" "$(wc -c < "$f")" "$(shasum -a 256 "$f" | cut -c1-16)"
-              [ -f "heaps/$id/log/$s.db" ] || { echo "::error::missing session db $id/log/$s.db"; exit 1; }
-            done
-            [ "$(wc -c < "heaps/$id/HOL")" -gt 100000000 ] || { echo "::error::HOL heap suspiciously small"; exit 1; }
-            ls -l "heaps/$id/log/"
-          done
-          # the two HOL heaps must really differ (different ML platform)
-          a=$(ls heaps | sed -n 1p); b=$(ls heaps | sed -n 2p)
-          [ "$(shasum -a 256 "heaps/$a/HOL" | cut -d' ' -f1)" != "$(shasum -a 256 "heaps/$b/HOL" | cut -d' ' -f1)" ] \
-            || { echo "::error::the two HOL heaps are identical - the apple/non-apple switch did not take"; exit 1; }
-
-      - name: Upload heaps
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ inputs.release }}-heaps-macos
           path: ${{ env.ISA }}/heaps
           if-no-files-found: error
           retention-days: 7
@@ -716,7 +283,7 @@ jobs:
         run: |
           set -euo pipefail
           # The .exe is a 7z SFX: sfx module + config + a 7z archive of the whole
-          # Isabelle tree (build_release.scala:820-841).  7-Zip (preinstalled on the
+          # Isabelle tree (Isabelle's build_release.scala).  7-Zip (preinstalled on the
           # runner) extracts it directly.
           SEVENZ=7z
           command -v "$SEVENZ" >/dev/null || SEVENZ="/c/Program Files/7-Zip/7z.exe"
@@ -724,6 +291,9 @@ jobs:
           tail -3 /d/7z.log
           [ -d "/d/isa/$RELEASE" ] || { echo "::error::7z did not produce D:\\isa\\$RELEASE"; ls /d/isa; exit 1; }
           du -sh "/d/isa/$RELEASE"
+          echo "--- the official heaps (32-bit words), removed ---"
+          ls "/d/isa/$RELEASE/heaps"
+          rm -rf "/d/isa/$RELEASE"/heaps/*
           # Windows-style paths, built by string concatenation: git-bash's cygpath is
           # NOT the Cygwin we are targeting, so do not rely on it here.
           echo "ISA_WIN=D:\\isa\\$RELEASE"        >> "$GITHUB_ENV"
@@ -814,44 +384,35 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
-  # Job F: heap injection + conda packaging.
+  # Job F: heap replacement + conda packaging.
   #
   # Everything happens on Linux, for every target platform -- including win-64.
-  # Nothing is compiled here; we unpack, copy heaps in, and zip the result into a
-  # .conda.  (That the Windows package can be made on Linux is not a shortcut: it
-  # is the same reason Job A cross-builds the .exe -- PACKAGING_DESIGN.md §5.0.)
+  # Nothing is compiled here; we unpack, swap the heaps, and zip the result into a
+  # .conda (PACKAGING_DESIGN.md §5.0).
   #
-  # Mapping bundle x heaps -> conda subdir:
+  # Mapping bundle x heaps -> conda subdir (the official platform names on the right):
   #
   #   linux-64       <- bundle linux      + heaps linux
   #   linux-aarch64  <- bundle linux_arm  + heaps linux_arm
-  #   osx-64         <- bundle macos      + heaps macos   \  ONE universal macOS bundle
-  #   osx-arm64      <- bundle macos      + heaps macos   /  feeds BOTH osx subdirs
+  #   osx-64         <- bundle macos      + heaps macos
+  #   osx-arm64      <- bundle macos_arm  + heaps macos_arm
   #   win-64         <- bundle windows    + heaps windows
-  #
-  # The macOS heap artifact holds TWO ML_IDENTIFIER dirs (Job D builds with
-  # ML_system_apple=false and =true).  scripts/pack.sh copies every ML_IDENTIFIER dir
-  # it is given, so both osx packages carry both heaps.  That is deliberate: the macOS
-  # bundle is universal anyway, and no ML_IDENTIFIER is hard-coded anywhere in this
-  # pipeline (`isabelle getenv ML_IDENTIFIER` is EMPTY -- §5.1.1), so whichever
-  # ML_PLATFORM a given Mac resolves to at run time, its heap is present.
   #
   # This job PUBLISHES NOTHING.  It verifies the packages against a local channel and
   # uploads them as an artifact; release.yml is what pushes them to R2.
   # ===========================================================================
   conda:
     name: "Job F - conda packages (all subdirs)"
-    needs: [bundles, heaps-linux, heaps-macos, heaps-windows]
+    needs: [bundles, heaps-unix, heaps-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       RELEASE: ${{ inputs.release }}
       CH: ${{ github.workspace }}/channel      # local channel, for verification only
       OUT: ${{ github.workspace }}/out
-      # pack.sh reads ISA_BUILD_NUMBER (defaulting to 0) and it becomes the conda build
-      # string.  Without this line the build_number input is inert: every publish is
-      # isabelle-<ver>-0, and a re-release with changed content collides with the
-      # already-published filename.  (release.yml passes its build_number input here.)
+      # pack.sh requires both; the build number becomes the conda build string.
+      # (release.yml passes its build_number input here.)
+      ISA_RELEASE: ${{ inputs.release }}
       ISA_BUILD_NUMBER: ${{ inputs.build_number }}
     steps:
       - name: Checkout CI repo
@@ -863,10 +424,10 @@ jobs:
           df -h /
           avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
           echo "free on / = ${avail} GB"
-          # Peak here: 4 bundles (~5 GB) + heaps (~2 GB) + one unpacked tree (~2.5 GB)
-          # + one $PREFIX copy (~2.5 GB) + 5 finished .conda (~5 GB).  We unpack and
+          # Peak here: 5 bundles (~7 GB) + heaps (~2 GB) + one unpacked tree (~3 GB)
+          # + one $PREFIX copy (~3 GB) + 5 finished .conda (~5 GB).  We unpack and
           # package ONE platform at a time and delete the staging in between.
-          if [ "$avail" -lt "${{ inputs.min_free_gb }}" ]; then
+          if [ "$avail" -lt 60 ]; then
             echo "::warning::free disk below threshold - running cleanup"
             sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                         /usr/local/.ghcup /usr/local/share/powershell \
@@ -924,29 +485,31 @@ jobs:
           echo "===== bundles ====="; find "$RUNNER_TEMP/bundles" -type f -printf '%10s  %p\n'
           echo "===== heaps ====="  ; find "$RUNNER_TEMP/heaps"   -type f -printf '%10s  %p\n'
 
-      - name: "Inject heaps + build the conda packages"
+      - name: "Replace heaps + build the conda packages"
         run: |
           set -euo pipefail
           B="$RUNNER_TEMP/bundles"
           H="$RUNNER_TEMP/heaps"
           export WORK="$RUNNER_TEMP/pack"
+          # check_pristine.py reads the .conda's zstd members: the runner's Miniconda has
+          # the zstandard module, its system python3 does not.
+          export PYTHON="$CONDA/bin/python"
 
-          # subdir | bundle artifact suffix | heaps artifact suffix | file inside the bundle artifact
-          # (osx-64 and osx-arm64 both come from the ONE universal macOS bundle.)
+          # subdir | official platform name (bundle and heaps artifacts) | file inside the bundle artifact
           for spec in \
-            "linux-64      linux      linux      ${RELEASE}_linux.tar.gz" \
-            "linux-aarch64 linux_arm  linux_arm  ${RELEASE}_linux_arm.tar.gz" \
-            "osx-64        macos      macos      ${RELEASE}_macos.tar.gz" \
-            "osx-arm64     macos      macos      ${RELEASE}_macos.tar.gz" \
-            "win-64        windows    windows    ${RELEASE}.exe"
+            "linux-64      linux      ${RELEASE}_linux.tar.gz" \
+            "linux-aarch64 linux_arm  ${RELEASE}_linux_arm.tar.gz" \
+            "osx-64        macos      ${RELEASE}_macos.tar.gz" \
+            "osx-arm64     macos_arm  ${RELEASE}_macos_arm.tar.gz" \
+            "win-64        windows    ${RELEASE}.exe"
           do
             set -- $spec
-            subdir=$1; bsuf=$2; hsuf=$3; file=$4
+            subdir=$1; platform=$2; file=$3
             echo "::group::$subdir"
             scripts/pack.sh \
               --subdir "$subdir" \
-              --bundle "$B/$RELEASE-bundle-$bsuf/$file" \
-              --heaps  "$H/$RELEASE-heaps-$hsuf" \
+              --bundle "$B/$RELEASE-bundle-$platform/$file" \
+              --heaps  "$H/$RELEASE-heaps-$platform" \
               --out    "$OUT"
             # reclaim the unpacked tree + the build prefix before the next platform
             rm -rf "$WORK/stage" "$OUT/bld"
@@ -969,9 +532,10 @@ jobs:
           exit $fail
 
       # -------------------------------------------------------------------------
-      # Verify against a LOCAL channel: deterministic, no network, no CDN in the
-      # way (PACKAGING_DESIGN.md §5.4).  Only linux-64 can actually be RUN here --
-      # the other four are cross-targets and this runner cannot execute them.
+      # Verify against a LOCAL channel: deterministic, no CDN in the way
+      # (PACKAGING_DESIGN.md §5.4).  conda-forge is named too, for python (recipe.yaml
+      # says why).  Only linux-64 can actually be RUN here -- the other four are
+      # cross-targets and this runner cannot execute them.
       # -------------------------------------------------------------------------
       - name: "Index a local channel and install linux-64 from it"
         run: |
@@ -1009,7 +573,7 @@ jobs:
 
           echo "===== conda create from the local channel ====="
           $CONDA/bin/conda create -y -p "$RUNNER_TEMP/isaenv" \
-            -c "file://$CH" --override-channels isabelle
+            -c "file://$CH" -c conda-forge --override-channels isabelle
 
       - name: "Run the installed Isabelle (this is the actual proof)"
         run: |
@@ -1066,6 +630,42 @@ jobs:
             echo "::error::the probe session did not build"; exit 1; }
           echo "  -> HOL was NOT rebuilt: the prebuilt heap in the package was loaded."
 
+      - name: "Two environments of the same name get their own user directory"
+        run: |
+          set -euo pipefail
+          # scripts/pack.sh 1d: the suffix carries a hash of the whole prefix path.
+          for d in a b; do
+            $CONDA/bin/conda create -y -q -p "$RUNNER_TEMP/$d/env" \
+              -c "file://$CH" -c conda-forge --override-channels isabelle > /dev/null
+          done
+          ua=$("$RUNNER_TEMP/a/env/bin/isabelle" getenv -b ISABELLE_HOME_USER)
+          ub=$("$RUNNER_TEMP/b/env/bin/isabelle" getenv -b ISABELLE_HOME_USER)
+          echo "a/env -> $ua"; echo "b/env -> $ub"
+          [ "$ua" != "$ub" ] || { echo "::error::two environments named env share $ua"; exit 1; }
+          case "$ua" in
+            */.isabelle/"$RELEASE"-conda-env-*) ;;
+            *) echo "::error::unexpected user directory $ua"; exit 1 ;;
+          esac
+          rm -rf "$RUNNER_TEMP/a" "$RUNNER_TEMP/b"
+
+      - name: "The isabelle post-link re-runs its dependents' post-links"
+        run: |
+          set -euo pipefail
+          scripts/check_rerun.sh build "$RUNNER_TEMP/probe-channel"
+          mkdir -p "$RUNNER_TEMP/probe-channel/linux-64"
+          cp "$CH"/linux-64/isabelle-*.conda "$RUNNER_TEMP/probe-channel/linux-64/"
+          $CONDA/bin/python -m conda_index "$RUNNER_TEMP/probe-channel" --no-zst --no-bz2
+          scripts/check_rerun.sh run "$CONDA/bin/conda" "file://$RUNNER_TEMP/probe-channel" "$RUNNER_TEMP/probe-env"
+          rm -rf "$RUNNER_TEMP/probe-env"
+
+      - name: Upload the post-link probe (for Job I)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rerun-probe
+          path: ${{ runner.temp }}/probe-channel/noarch/isabelle-rerun-probe-*.conda
+          if-no-files-found: error
+          retention-days: 7
+
       # -------------------------------------------------------------------------
       # The GUI is the one thing no headless assertion reaches: every check above
       # passes on a package whose jEdit dies on startup.  So: run jEdit under Xvfb on
@@ -1115,21 +715,21 @@ jobs:
           compression-level: 0
 
   # ===========================================================================
-  # Jobs G and H: INSTALL AND RUN the packages Job F built, on the platforms they
+  # Jobs G, H and I: INSTALL AND RUN the packages Job F built, on the platforms they
   # are actually for.
   #
   # Job F can only run what it builds on: linux-64.  The other four are cross-built
-  # from Linux and, until now, nothing had ever executed them -- we had proved
-  # "it packages", not "it runs".  win-64 was covered by hand on a Windows VM.
-  # These two jobs close the remaining three:
+  # from Linux; these jobs run them natively:
   #
-  #   Job G  macos-14          osx-arm64 (native)  +  osx-64 (through Rosetta)
-  #   Job H  ubuntu-24.04-arm  linux-aarch64
+  #   Job G  macos-15          osx-arm64      (+ the GUI check)
+  #   Job G  macos-15-intel    osx-64
+  #   Job H  ubuntu-24.04-arm  linux-aarch64  (+ the GUI check)
+  #   Job I  windows-latest    win-64         (+ the post-link re-run, in .bat)
   #
-  # Both consume Job F's `conda-packages` artifact, so what is installed here is the
+  # All consume Job F's `conda-packages` artifact, so what is installed here is the
   # EXACT byte-for-byte package that would be published -- not a rebuild of it.
   #
-  # The load-bearing assertion in both is the same one as in Job F, for the same
+  # The load-bearing assertion in G and H is the same one as in Job F, for the same
   # reason: build a real session on top of Main and require that HOL is NOT recompiled.
   # `isabelle build -n` must never be used for this -- it is a FALSE PASS (with the
   # session databases missing it happily reports nothing to build, while a real build
@@ -1137,10 +737,20 @@ jobs:
   # ===========================================================================
 
   install-macos:
-    name: "Job G - install + run (osx-arm64 & osx-64)"
+    name: "Job G - install + run (${{ matrix.subdir }}, ${{ matrix.runner }})"
     needs: conda
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - subdir: osx-arm64
+            runner: macos-15
+            miniforge: Miniforge3-MacOSX-arm64.sh
+          - subdir: osx-64
+            runner: macos-15-intel
+            miniforge: Miniforge3-MacOSX-x86_64.sh
     steps:
       - name: Checkout CI repo
         uses: actions/checkout@v4
@@ -1158,83 +768,52 @@ jobs:
           name: conda-packages
           path: ${{ runner.temp }}/pkgs
 
-      - name: Build a local channel with just the macOS packages
+      - name: Build a local channel with just the ${{ matrix.subdir }} package
         run: |
           set -euo pipefail
           CH="$RUNNER_TEMP/channel"
-          mkdir -p "$CH/noarch"
-          # Only the two we can run here.  The others are several GB and this runner is
-          # the tightest on disk of the whole matrix.
-          for s in osx-64 osx-arm64; do
-            [ -d "$RUNNER_TEMP/pkgs/$s" ] || { echo "::error::Job F produced no $s package"; exit 1; }
-            mkdir -p "$CH/$s"
-            cp "$RUNNER_TEMP/pkgs/$s"/isabelle-*.conda "$CH/$s/"
-          done
+          S=${{ matrix.subdir }}
+          mkdir -p "$CH/noarch" "$CH/$S"
+          [ -d "$RUNNER_TEMP/pkgs/$S" ] || { echo "::error::Job F produced no $S package"; exit 1; }
+          cp "$RUNNER_TEMP/pkgs/$S"/isabelle-*.conda "$CH/$S/"
           rm -rf "$RUNNER_TEMP/pkgs"
-          find "$CH" -name '*.conda' -exec ls -lh {} \;
+          ls -lh "$CH/$S"
           echo "CH=$CH" >> "$GITHUB_ENV"
 
           # Miniforge rather than the preinstalled $CONDA: it exists on every runner we
-          # use, arm64 included, and it is ours (no root-owned prefix to chown).
+          # use, and it is ours (no root-owned prefix to chown).
           curl -fsSL -o "$RUNNER_TEMP/mf.sh" \
-            https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-MacOSX-arm64.sh
+            https://github.com/conda-forge/miniforge/releases/latest/download/${{ matrix.miniforge }}
           bash "$RUNNER_TEMP/mf.sh" -b -p "$HOME/mf"
           "$HOME/mf/bin/conda" install -y -q -c conda-forge conda-index
           "$HOME/mf/bin/python" -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
             --channel-name conda.qiyuan.me
-          echo "===== what the channel advertises ====="
-          # Informational only -- must not be able to fail the step.  (conda-index writes
-          # "subdir":"..." with NO space; an earlier grep for '"subdir": "' matched nothing,
-          # and under `set -e` a no-match grep is exit 1 and killed the job AFTER the
-          # channel was already built correctly.)
-          "$HOME/mf/bin/python" - "$CH" <<'PY' || true
-          import json, sys, pathlib
-          ch = pathlib.Path(sys.argv[1])
-          for sub in ("osx-64", "osx-arm64"):
-              rd = ch / sub / "repodata.json"
-              for fn, m in json.load(rd.open()).get("packages.conda", {}).items():
-                  print(f"  {m['subdir']:10s} {m['name']}-{m['version']}-{m['build']}")
-          PY
 
-      - name: "osx-arm64 (native): install and RUN"
+      - name: "${{ matrix.subdir }}: install and RUN"
         run: |
           set -euo pipefail
-          ENV="$RUNNER_TEMP/isa-arm"
-          "$HOME/mf/bin/conda" create -y -p "$ENV" -c "file://$CH" --override-channels isabelle
+          ENV="$RUNNER_TEMP/isaenv"
+          "$HOME/mf/bin/conda" create -y -p "$ENV" -c "file://$CH" -c conda-forge --override-channels isabelle
           scripts/verify_install.sh "$ENV"
 
-      - name: "osx-64 (through Rosetta): install and RUN"
-        run: |
-          set -euo pipefail
-          # Rosetta 2 is preinstalled on macos-14 and Job D already builds the x86_64 heap
-          # through it.  `arch -x86_64` makes uname -m report x86_64, which is what
-          # lib/scripts/getsettings keys ISABELLE_PLATFORM off -- so this exercises the
-          # SAME code path an Intel Mac would take, including the x86_64_32-darwin heap.
-          arch -x86_64 /usr/bin/true || { echo "::error::Rosetta is not usable on this runner"; exit 1; }
-          ENV="$RUNNER_TEMP/isa-x86"
-          # CONDA_SUBDIR pins the solve to osx-64 even though the machine is arm64.
-          CONDA_SUBDIR=osx-64 "$HOME/mf/bin/conda" create -y -p "$ENV" \
-            -c "file://$CH" --override-channels isabelle
-          ARCH_PREFIX="arch -x86_64" scripts/verify_install.sh "$ENV"
-
       # ---------------------------------------------------------------------
-      # The real macOS GUI check: start jEdit from the osx-arm64 package on the runner's
-      # own window server (its existence was confirmed by an earlier advisory probe, and
-      # verified end to end on the probe workflow) and let Claude Code judge the
-      # screenshot.  Same criteria as Linux -- both call the shared scripts/gui_judge.sh
-      # -- only the launch is macOS-specific (Quartz + screencapture, no Xvfb).
+      # The real macOS GUI check: start jEdit on the runner's own window server and let
+      # Claude Code judge the screenshot.  Same criteria as Linux -- both call the shared
+      # scripts/gui_judge.sh -- only the launch is macOS-specific (Quartz +
+      # screencapture, no Xvfb).
       #
       # arm64 only, on purpose: jEdit is the same Quartz code on both Mac architectures,
-      # and osx-64's CLI + heap + x86 platform resolution are already covered by its own
-      # install-and-run step above.  Running the GUI twice would only make Job G slower.
+      # and osx-64's CLI + heap + platform resolution are covered by its own
+      # install-and-run step above.
       - name: "GUI verification (osx-arm64): jEdit + Claude Code judge"
+        if: matrix.subdir == 'osx-arm64'
         env:
           # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: scripts/verify_gui_macos.sh "$RUNNER_TEMP/isa-arm" "$RUNNER_TEMP/gui"
+        run: scripts/verify_gui_macos.sh "$RUNNER_TEMP/isaenv" "$RUNNER_TEMP/gui"
 
       - name: Upload the macOS GUI screenshot + verdict
-        if: always()
+        if: always() && matrix.subdir == 'osx-arm64'
         uses: actions/upload-artifact@v4
         with:
           name: macos-gui
@@ -1283,7 +862,7 @@ jobs:
         run: |
           set -euo pipefail
           ENV="$RUNNER_TEMP/isaenv"
-          "$HOME/mf/bin/conda" create -y -p "$ENV" -c "file://$CH" --override-channels isabelle
+          "$HOME/mf/bin/conda" create -y -p "$ENV" -c "file://$CH" -c conda-forge --override-channels isabelle
           scripts/verify_install.sh "$ENV"
           echo "ENV=$ENV" >> "$GITHUB_ENV"
 
@@ -1318,3 +897,63 @@ jobs:
             ${{ runner.temp }}/gui/xvfb.log
           if-no-files-found: warn
           retention-days: 7
+
+  install-windows:
+    name: "Job I - install + run + post-link re-run (win-64)"
+    needs: conda
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash -l {0}     # setup-miniconda puts conda on PATH via the login profile
+    steps:
+      - name: Checkout CI repo
+        uses: actions/checkout@v4
+
+      - name: Download the conda packages (Job F)
+        uses: actions/download-artifact@v4
+        with:
+          name: conda-packages
+          path: ${{ runner.temp }}/pkgs
+
+      - name: Download the post-link probe (Job F)
+        uses: actions/download-artifact@v4
+        with:
+          name: rerun-probe
+          path: ${{ runner.temp }}/probe
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          auto-activate-base: true
+          activate-environment: ""
+
+      - name: Build a local channel with the win-64 package and the probe
+        run: |
+          set -euo pipefail
+          T="$(cygpath -m "$RUNNER_TEMP")"        # D:/a/_temp: a form both bash and conda read
+          CH="$T/channel"
+          mkdir -p "$CH/noarch" "$CH/win-64"
+          [ -d "$T/pkgs/win-64" ] || { echo "::error::Job F produced no win-64 package"; exit 1; }
+          cp "$T/pkgs/win-64"/isabelle-*.conda "$CH/win-64/"
+          cp "$T/probe"/isabelle-rerun-probe-*.conda "$CH/noarch/"
+          rm -rf "$T/pkgs"
+          conda install -y -q -n base -c conda-forge conda-index
+          python -m conda_index "$CH" --no-zst --no-bz2
+          echo "T=$T" >> "$GITHUB_ENV"
+
+      - name: "win-64: install, run, and re-run the post-links (.bat)"
+        run: |
+          set -euo pipefail
+          ENV="$T/isaenv"
+          scripts/check_rerun.sh run "$CONDA_EXE" "file:///$T/channel" "$ENV"
+          v=$("$ENV/Scripts/isabelle.bat" version)
+          echo "isabelle version -> $v"
+          [ -n "$v" ] || { echo "::error::isabelle version printed nothing"; exit 1; }
+          u=$("$ENV/Scripts/isabelle.bat" getenv -b ISABELLE_HOME_USER | tr -d '\r')
+          echo "ISABELLE_HOME_USER = $u"
+          # scripts/pack.sh 1d, through Isabelle's own Cygwin (cksum included)
+          case "$u" in
+            */.isabelle/*-conda-isaenv-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) echo "::error::unexpected user directory $u"; exit 1 ;;
+          esac

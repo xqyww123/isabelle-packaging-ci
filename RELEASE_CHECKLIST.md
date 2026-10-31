@@ -11,7 +11,7 @@ deletion so far are in "Deleting from the channel" below, before the numbered ch
 ## The channel host
 
 conda.qiyuan.me is the R2 bucket `conda` behind a Cloudflare custom domain; the objects are
-exactly what `publish-conda.yml` pushes. Three things about that front door are not visible
+exactly what `publish-conda.yml` pushes. Four things about that front door are not visible
 from this repository:
 
 - **Directory URLs serve their `index.html` through a Cloudflare Transform Rule** (zone
@@ -23,6 +23,18 @@ from this repository:
 - **The root `index.html` carries a banner** (what the site is, how to install `isabelle-ai`)
   from `conda/channel-banner.html`, applied by `scripts/banner-index.py` after every
   conda-index run. Edit the banner file, never the generated page.
+- **A Worker counts downloads** (`worker/`; not deployed yet, 2026-10-31). On the route
+  `conda.qiyuan.me/*` it passes every request through unchanged, counts one download of a
+  package for each of its files served whole, except to GitHub-hosted runners, and adds a
+  Downloads column to the root `index.html` as it is served (`worker/index.js` says how). The
+  counts are in the D1 database `conda-downloads`:
+  `wrangler d1 execute conda-downloads --remote --command "SELECT * FROM downloads"`.
+  `SELECT count(*) FROM runner_ranges` must not be 0: 0 means the GitHub runner list never
+  loaded, and CI downloads are being counted; whether the daily refresh succeeds shows in the
+  Worker's Past Cron Events in the dashboard. Deploy with `wrangler deploy` in `worker/`, with a
+  token minted as the next point says. The route is set to fail open in the dashboard, on the
+  route's own settings (wrangler.toml has no field for it): past the free plan's daily request
+  limit, requests skip the Worker.
 - **`CLOUDFLARE_GOD_KEY` in `~/Current/MLML/secret.sh` is an account-owned API token**, not
   a user token and not a Global API Key: `/user/tokens/verify` answers "Invalid API Token"
   for it, `/accounts/<CLOUDFLARE_ACCOUNT_ID>/tokens/verify` answers `active`, and it can mint
@@ -400,7 +412,8 @@ One recipe per platform tag. Record why we carry it and when to drop it.
 1. **Dependencies first** — `verify` installs from the live channel, so run deps must
    already be published. Order: `isabelle` → `isabelle-performant-ml` →
    `auto-sledgehammer` → `isabelle-rpc` → `isabelle-semantic-embedding` →
-   `isabelle-minilang`. `isabelle-nunchaku` depends only on `isabelle` and can go
+   `isabelle-minilang`. `isabelle-mcp` depends only on `isabelle` and can go any
+   time after it. `isabelle-nunchaku` depends only on `isabelle` and can go
    any time after it:
 
    - Certify per the fork's `regress/README.md` (gate PASS). The gate is now **two

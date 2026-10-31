@@ -714,13 +714,14 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 
 **原则:发布近乎不可逆**(包一旦上了 channel,用户可能已拉走;不能删、不能覆盖)
 ⇒ **发布绝不能是 push 的副作用,必须是一次深思熟虑的动作。**
-但"深思熟虑"可以是"打一个 tag" —— 它依然跑在 Actions 里,只是**不由 push 触发**。
+这个动作是手动发起 `release.yml`(workflow_dispatch)—— 它依然跑在 Actions 里,只是**不由 push 触发**。
+推 tag 不发布:tag 带不了输入(build 号),只能发默认值。
 
 ```
 .github/workflows/
   build.yml    ← reusable（on: workflow_call）：定义 Job A–F。只定义一次。
   ci.yml       ← on: push / pull_request   → 调 build.yml → 本地验证 → 结束。**绝不碰 channel**
-  release.yml  ← on: tag / workflow_dispatch → 调 build.yml → 本地验证
+  release.yml  ← on: workflow_dispatch → 调 build.yml → 本地验证
                  → 上传 R2 → 发布后校验 → GitHub Release
 ```
 
@@ -741,7 +742,7 @@ macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Qua
 #### 发布凭据
 - **已把 `CONDA_R2_ACCESS_KEY_ID` / `CONDA_R2_SECRET_ACCESS_KEY` / `CONDA_R2_TOKEN_VALUE`
   设为 `isabelle-packaging-ci` 的 GitHub secrets**,`release.yml` 在 `ubuntu-latest` 上用它们 `rclone sync` 到 R2。
-- 安全面:公开仓库 ⇒ **fork 的 PR 拿不到 secrets**(GitHub 强制);只有有写权限的人能打 tag/dispatch;
+- 安全面:公开仓库 ⇒ **fork 的 PR 拿不到 secrets**(GitHub 强制);只有有写权限的人能 dispatch;
   该 R2 token **只能写 `conda` 这一个 bucket**。
 - ⚠️ 不足:**Cloudflare R2 没有 GitHub OIDC 联邦**(AWS 有)⇒ 只能用**长期密钥**。缓解:最小权限 + 需要时轮换。
 

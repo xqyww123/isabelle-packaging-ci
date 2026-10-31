@@ -1,0 +1,13 @@
+# The download counter of conda.qiyuan.me: index.js; deploying it: RELEASE_CHECKLIST.md,
+# "The channel host".
+name = "conda-download-counter"
+main = "index.js"
+compatibility_date = "2026-10-01"
+routes = [{ pattern = "conda.qiyuan.me/*", zone_name = "qiyuan.me" }]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "conda-downloads"
+
+[triggers]
+crons = ["17 4 * * *"] # refresh the GitHub runner list daily (GitHub updates it weekly)

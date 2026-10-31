@@ -4,7 +4,8 @@ name: release
 #
 # Publishing is deliberately NOT a side effect of pushing (PACKAGING_DESIGN.md §5.4):
 # once a package is on the channel a user may already have pulled it, so it can neither
-# be deleted nor overwritten.  You get here by tagging, or by pressing the button.
+# be deleted nor overwritten.  You get here only by pressing the button: a tag push
+# carries no inputs, so it could only publish the defaults.
 #
 # The whole distribution is REBUILT here (build.yml runs again) rather than promoting an
 # old CI run's artifacts: what we publish is then exactly the bytes that were just
@@ -29,8 +30,6 @@ on:
         description: "conda build number - BUMP THIS if you republish the same Isabelle release with changed content"
         type: string
         default: "0"
-  push:
-    tags: ['v*']
 
 jobs:
   # Rebuild + verify everything (Jobs A-F).  Job F already proves the packages install
@@ -40,9 +39,7 @@ jobs:
     with:
       release: Isabelle2025-2
       platforms: linux,linux_arm,windows,macos
-      # A tag push has no input, so default to 0 -- correct for a first release, and a
-      # re-release then collides on the filename rather than silently reusing build 0.
-      build_number: ${{ inputs.build_number || '0' }}
+      build_number: ${{ inputs.build_number }}
     # the GUI check in Job F needs CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
     # receives NO secrets unless the caller passes them.
     secrets: inherit

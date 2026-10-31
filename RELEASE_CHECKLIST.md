@@ -23,7 +23,8 @@ from this repository:
 - **The root `index.html` carries a banner** (what the site is, how to install `isabelle-ai`)
   from `conda/channel-banner.html`, applied by `scripts/banner-index.py` after every
   conda-index run. Edit the banner file, never the generated page.
-- **A Worker counts downloads** (`worker/`; not deployed yet, 2026-10-31). On the route
+- **A Worker counts downloads** (`worker/`; being rolled out: since 2026-10-31 only on the trial
+  route `conda.qiyuan.me/noarch/index.html`). On the route
   `conda.qiyuan.me/*` it passes every request through unchanged, counts one download of a
   package for each of its files served whole, except to GitHub-hosted runners, and adds a
   Downloads column to the root `index.html` as it is served (`worker/index.js` says how). The
@@ -39,7 +40,12 @@ from this repository:
   a user token and not a Global API Key: `/user/tokens/verify` answers "Invalid API Token"
   for it, `/accounts/<CLOUDFLARE_ACCOUNT_ID>/tokens/verify` answers `active`, and it can mint
   further account tokens (`POST /accounts/<id>/tokens`). The rule above was added with a
-  one-hour token minted that way and revoked afterwards. Verify the edge with `curl`: a
+  one-hour token minted that way and revoked afterwards. The Worker's `wrangler deploy`,
+  `wrangler tail` and `wrangler d1 execute --remote` worked (2026-10-31) with a token of Workers
+  Scripts Write, D1 Write, Workers Tail Read and Account Settings Read on the account, and
+  Workers Routes Write and Zone Read on all zones of the account; mint it the same way for every
+  redeploy (with one zone only, wrangler keeps the Worker's old routes). Give wrangler that token
+  and `CLOUDFLARE_ACCOUNT_ID`, never `secret.sh`'s `CLOUDFLARE_API_TOKEN`. Verify the edge with `curl`: a
   `Python-urllib` User-Agent gets 403 from Cloudflare's bot protection on every URL, conda's
   own client and curl do not.
 

@@ -52,7 +52,7 @@ on:
         type: string
         default: conda-packages
       package_name:
-        description: "conda package name, asserted to be resolvable on the channel afterwards"
+        description: "conda package name, for the job's name (the checks below go by filename)"
         type: string
         required: true
     secrets:

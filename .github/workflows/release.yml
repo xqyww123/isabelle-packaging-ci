@@ -36,14 +36,14 @@ on:
         required: true
 
 jobs:
-  # Rebuild + verify everything (Jobs A-I).  Jobs F-I already prove the packages
+  # Rebuild + verify everything (Jobs A-E).  Jobs B-E already prove the packages
   # install and run, from a local channel.
   build:
     uses: ./.github/workflows/build.yml
     with:
       release: ${{ inputs.release }}
       build_number: ${{ inputs.build_number }}
-    # the GUI check in Job F needs CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
+    # the GUI checks in Jobs B-D need CLAUDE_CODE_OAUTH_TOKEN; a reusable workflow
     # receives NO secrets unless the caller passes them.
     secrets: inherit
 
@@ -68,12 +68,12 @@ jobs:
   # ---------------------------------------------------------------------------
   # The user's command, on a clean machine, on every platform.
   #
-  # This is NOT a repeat of Jobs F-I.  Those install from a LOCAL channel
+  # This is NOT a repeat of Jobs B-E.  Those install from a LOCAL channel
   # (file://) and prove the PACKAGES work.  This installs from the real URL and
   # proves the CHANNEL works -- that the bytes reached R2, that conda-index wrote
   # a repodata that names them correctly, and that conda's solver can act on it.
   # Those two can fail independently: a package can be perfect while the upload
-  # drops a file or repodata points at a filename that isn't there.  Job F would
+  # drops a file or repodata points at a filename that isn't there.  Job B would
   # still be green and the user still could not install.
   #
   # Running it immediately after publishing is safe, and that is measured, not

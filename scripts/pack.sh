@@ -1,38 +1,30 @@
 #!/usr/bin/env bash
 #
-# Job F: replace the heaps of an official platform bundle with the natively-built ones
-# and turn the result into a conda package.
+# Job B: turn an official platform bundle into a conda package.
 #
 #   ISA_RELEASE=Isabelle2026 ISA_BUILD_NUMBER=0 \
 #   pack.sh --subdir linux-64 \
 #           --bundle  <Isabelle2026_linux.tar.gz | Isabelle2026.exe | a directory> \
-#           --heaps   <dir containing one <ML_IDENTIFIER>/ dir> \
 #           --out     <output dir for the .conda file>
 #
 # It runs entirely on Linux, for every target platform -- including win-64: nothing
-# here compiles anything; we only move files and zip them up.  Every change it makes to
-# the official tree is one of those scripts/check_pristine.py allows, and the script
-# checks the finished package against the tree as it was unpacked.
-#
-# The heap artifact is copied WHOLESALE: the <ML_IDENTIFIER>/ directory the heap job
-# produced goes into the bundle's heaps/.  No platform->ML_IDENTIFIER mapping is
-# hard-coded anywhere -- `isabelle getenv ML_IDENTIFIER` prints nothing (it is computed
-# Scala-side, PACKAGING_DESIGN.md §5.1.1), so the directory name is the only source of
-# truth and we simply propagate it.
+# here compiles anything; we only move files and zip them up.  The bundle's own
+# Pure/HOL heaps ship as they are.  Every change this script makes to the official tree
+# is one of those scripts/check_pristine.py allows, and the script checks the finished
+# package against the tree as it was unpacked.
 
 set -euo pipefail
 
-SUBDIR="" BUNDLE="" HEAPS="" OUT=""
+SUBDIR="" BUNDLE="" OUT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --subdir) SUBDIR="$2"; shift 2 ;;
     --bundle) BUNDLE="$2"; shift 2 ;;
-    --heaps)  HEAPS="$2";  shift 2 ;;
     --out)    OUT="$2";    shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-for v in SUBDIR BUNDLE HEAPS OUT; do
+for v in SUBDIR BUNDLE OUT; do
   [ -n "${!v}" ] || { echo "::error::--${v,,} is required" >&2; exit 2; }
 done
 
@@ -49,7 +41,6 @@ STAGE="$WORK/stage"
 echo "=============================================================="
 echo " subdir  : $SUBDIR"
 echo " bundle  : $BUNDLE"
-echo " heaps   : $HEAPS"
 echo " release : $RELEASE"
 echo " work    : $WORK"
 echo "=============================================================="
@@ -107,13 +98,21 @@ echo "ISABELLE_ID = $ISA_ID (the official $RELEASE changeset)"
 OFFICIAL_MANIFEST="$WORK/official-$SUBDIR.json"
 "$PYTHON" "$HERE/check_pristine.py" manifest "$TREE" "$OFFICIAL_MANIFEST"
 
-# The official bundle ships 32-bit-word heaps (x86_64_32-*, arm64_32-*); ours are the
-# 64-bit ones (1e), built by Jobs B-E.  Drop the official ones.
-for d in "$TREE"/heaps/*/; do
-  [ -d "$d" ] || continue
-  echo "removing the official heaps $(basename "$d")"
-  rm -rf "$d"
+# The bundle's prebuilt heaps, which ship as they are.  heaps/<ML_ID>/log/<S>.db is NOT
+# a build log -- it is the session database, and `isabelle build` decides whether a
+# session is finished-and-current by looking it up there, not by the heap file's
+# existence.  A package carrying only the heap files once installed fine and then
+# recompiled the whole of HOL on its first real build.
+n=0
+for hd in "$TREE"/heaps/*/; do
+  [ -d "$hd" ] || continue
+  for s in Pure HOL; do
+    [ -f "$hd/$s" ] && [ -f "$hd/log/$s.db" ] || { echo "::error::no $s heap with its session db in $hd"; exit 1; }
+  done
+  echo "heaps: $(basename "$hd") (HOL $(stat -c %s "$hd/HOL") bytes)"
+  n=$((n + 1))
 done
+[ "$n" -eq 1 ] || { echo "::error::expected one heaps/<ML_IDENTIFIER>/ in the bundle, found $n"; exit 1; }
 
 # ---------------------------------------------------------------------------
 # 1a. Remember the bundle's EMPTY directories, while the tree is still pristine.
@@ -125,7 +124,7 @@ done
 # means /tmp, /var/tmp, /dev/shm, /home and the rebase state dirs are simply gone,
 # and every `isabelle` call greets the user with
 #     bash.exe: warning: could not find /tmp
-# We put them back at step 5 by dropping a marker file in each.
+# We put them back at step 2 by dropping a marker file in each.
 #
 # Recorded HERE, before the obj/ purge below, on purpose: purging obj/ leaves its
 # parent directories empty, and those we do NOT want to resurrect -- they are build
@@ -211,29 +210,7 @@ cat "$WORK/settings" > "$SETTINGS"
 echo "patched etc/settings: ISABELLE_HOME_USER -> ~/.isabelle/${RELEASE}-conda-<env>-<hash>"
 
 # ---------------------------------------------------------------------------
-# 1e. Default to 64-bit Poly/ML words (ML_system_64 = true).
-#
-# Stock Isabelle defaults ML_system_64 to false, i.e. the 31-bit-word Poly/ML
-# (x86_64_32).  The AoA stack is developed and run on 64-bit words -- the user's own
-# dev profile sets ML_system_64 = true in $ISABELLE_HOME_USER/etc/preferences -- and
-# some of its ML does not fit 31-bit words (e.g. Performant_Isabelle_ML's Knuth hash
-# constant 0x9E3779B9 overflowed there).
-#
-# This flip must move IN LOCKSTEP with the heap jobs: build.yml builds the heaps with
-# `-o ML_system_64=true` (the x86_64-* / arm64-* variant), and this patch makes the
-# runtime default select that variant.  Only ONE word-size heap ships per platform --
-# flipping this default WITHOUT the matching 64-bit heap would point Isabelle at an
-# absent dir and rebuild HOL on first use.  Covers `isabelle build` and jEdit alike.
-# ---------------------------------------------------------------------------
-OPTIONS="$TREE/etc/options"
-grep -q '^public option ML_system_64 : bool = true' "$OPTIONS" && { echo "::error::etc/options ML_system_64 already true"; exit 1; }
-grep -q '^public option ML_system_64 : bool = false' "$OPTIONS" || {
-  echo "::error::etc/options anchor 'option ML_system_64 : bool = false' not found -- upstream layout changed"; exit 1; }
-sed -i 's/^public option ML_system_64 : bool = false/public option ML_system_64 : bool = true/' "$OPTIONS"
-echo "patched etc/options: ML_system_64 default -> true (64-bit words)"
-
-# ---------------------------------------------------------------------------
-# 1f. Unregister the dead bundled nunchaku component.
+# 1e. Unregister the dead bundled nunchaku component.
 #
 # The distribution ships contrib/nunchaku-0.5-1, still the 2017 binary (self-reported
 # 0.1), whose --solvers knows cvc4, kodkod, paradox and smbc but not cvc5.  Nunchaku is
@@ -250,58 +227,19 @@ cat "$WORK/components" > "$COMPONENTS"
 echo "patched etc/components: dropped the $NUNCHAKU_LINE registration"
 
 # ---------------------------------------------------------------------------
-# 2. inject the heaps
+# 1f. Drop the libtool archives (*.la).
+#
+# rattler-build leaves every *.la out of a package anyway (conda's convention: they
+# record absolute build paths, here the upstream build machine's temp dir).  Nothing
+# reads them at run time -- they describe libraries for linking other programs against
+# (Poly/ML's static libpolyml.a, Cygwin's SASL plugins, whose DLLs stay).  Dropping them
+# here makes the staged tree exactly what ships, which step 3 relies on.
 # ---------------------------------------------------------------------------
-mkdir -p "$TREE/heaps"
-n=0
-for d in "$HEAPS"/*/; do
-  id="$(basename "$d")"
-  echo "  injecting ML_IDENTIFIER = $id"
-  cp -a "$d" "$TREE/heaps/$id"
-  n=$((n + 1))
-done
-[ "$n" -eq 1 ] || { echo "::error::expected one <ML_IDENTIFIER>/ directory under $HEAPS, found $n"; ls -la "$HEAPS"; exit 1; }
-
-echo "--- heaps now in the tree ---"
-find "$TREE/heaps" -type f -printf '  %-64p %s bytes\n' | sed "s|$TREE/||"
-
-for hd in "$TREE"/heaps/*/; do
-  id="$(basename "$hd")"
-
-  # a HOL heap is a few hundred MB; anything tiny means we injected the wrong thing
-  h="$hd/HOL"
-  [ -f "$h" ] || { echo "::error::no HOL heap in $id"; exit 1; }
-  sz=$(stat -c %s "$h")
-  [ "$sz" -gt 100000000 ] || { echo "::error::HOL heap $h is only $sz bytes"; exit 1; }
-
-  # ---------------------------------------------------------------------------
-  # log/*.db is NOT a build log -- it is the session DATABASE, and it must ship.
-  #
-  # Found the hard way: a package carrying only the heap files installs fine and
-  # `isabelle version` works, but the first real build says "Building HOL ..." and
-  # recompiles the whole of HOL (~20 min), because `isabelle build` decides whether
-  # a session is finished-and-current by looking it up in heaps/<ML_ID>/log/<S>.db,
-  # not by the heap file's existence.  No database => "not built" => rebuild, and the
-  # entire point of shipping a prebuilt heap is lost.
-  #
-  # The official Isabelle bundle ships exactly these files (Pure.db/Pure.gz/HOL.db/
-  # HOL.gz in heaps/<ML_ID>/log/), which is why an official release does not rebuild
-  # HOL on first use.  We ship them too.
-  # ---------------------------------------------------------------------------
-  for s in Pure HOL Main; do
-    db="$hd/log/$s.db"
-    [ -f "$db" ] || {
-      echo "::error::$id/log/$s.db is missing -- the heap job must NOT delete heaps/*/log."
-      echo "          Without the session database Isabelle rebuilds $s from scratch and"
-      echo "          the prebuilt heap is dead weight."
-      exit 1
-    }
-    printf '  session db  %-24s %s\n' "$id/log/$s.db" "$(du -h "$db" | cut -f1)"
-  done
-done
+n_la=$(find "$TREE" -type f -name '*.la' -print -delete | wc -l)
+echo "dropped $n_la libtool archive(s) (*.la)"
 
 # ---------------------------------------------------------------------------
-# 5. Put the empty directories back (see 1a).
+# 2. Put the empty directories back (see 1a).
 #
 # conda only creates a directory as the parent of a file it unpacks, so the only way to
 # ship an empty one is to make it non-empty.  A single marker file does that, and unlike
@@ -330,8 +268,7 @@ while IFS= read -r d; do
     */var/lib/rebase/*) n_skip=$((n_skip + 1)); continue ;;
   esac
   mkdir -p "$TREE/$d"
-  # only mark it if it is STILL empty -- some of these get filled in by the heap
-  # injection or by the launcher above, and those need no marker.
+  # only mark it if it is STILL empty -- one filled in above needs no marker.
   if [ -z "$(ls -A "$TREE/$d" 2>/dev/null)" ]; then
     printf 'This file exists so that conda ships this otherwise-empty directory.\n' \
       > "$TREE/$d/.conda-keep"
@@ -343,7 +280,42 @@ echo "  (skipped $n_skip rebase state dir(s) -- rebaselst re-creates those itsel
 echo "   marker there would be cat'd into rebaseall's DLL list)"
 
 # ---------------------------------------------------------------------------
-# 6. MAX_PATH.  Assert, do not assume.
+# 3. Windows: Cygwin's permission lists name only what ships.
+#
+# On the first `isabelle` call, Isabelle's Cygwin runs contrib/cygwin/isabelle/postinstall,
+# which under `set -e` runs setfacl/chmod on every path in permissions/*.gz -- lists of
+# every directory and file of the official tree (each one there, measured).  A listed
+# path the package lacks (the *.la of 1f) fails it, and with it the user's first call.
+# So each list keeps only what ships (owner, 2026-10-31): the files and symlinks of the
+# staged tree, and the directories with one of them beneath -- conda creates no other.
+# (The rebase state dirs 2 leaves unmarked drop out; rebaseall, which cygwin_init runs
+# before postinstall, makes them.)
+# ---------------------------------------------------------------------------
+if [ "$SUBDIR" = win-64 ]; then
+  "$PYTHON" - "$TREE" <<'PY'
+import gzip, os, sys
+tree = os.fsencode(sys.argv[1])
+ships = {b"."}
+for root, dirs, files in os.walk(tree):
+    for name in files + [d for d in dirs if os.path.islink(os.path.join(root, d))]:
+        path = os.path.relpath(os.path.join(root, name), tree).replace(os.sep.encode(), b"/")
+        while path:
+            ships.add(path)
+            path = path.rpartition(b"/")[0]
+lists = os.path.join(tree, b"contrib/cygwin/isabelle/permissions")
+for name in sorted(os.listdir(lists)):
+    path = os.path.join(lists, name)
+    with gzip.open(path) as f:
+        listed = [p for p in f.read().split(b"\0") if p]
+    kept = [p for p in listed if p in ships]
+    with open(path, "wb") as f:
+        f.write(gzip.compress(b"".join(p + b"\0" for p in kept), mtime=0))
+    print(f"{os.fsdecode(name)}: kept {len(kept)} of {len(listed)} path(s)")
+PY
+fi
+
+# ---------------------------------------------------------------------------
+# 4. MAX_PATH.  Assert, do not assume.
 #
 # Windows' MAX_PATH is 259 usable characters, LongPathsEnabled is 0 by default on
 # Windows 11, and turning it on needs admin + a reboot.  It cannot be worked around from
@@ -356,9 +328,10 @@ echo "   marker there would be cat'd into rebaseall's DLL list)"
 #     C:\Users\<20 characters>\AppData\Local\miniconda3\pkgs\isabelle-<version>-<build>\
 # -- a Windows local account name maxes out at 20 -- so that every normal user installs
 # without touching the registry.  The budget for <path-in-package> follows from the
-# version and build number: 180 for isabelle-2025.2-0, 182 for isabelle-2026-0..9.
-# Isabelle2026's own VSCodium has a 182-character path in it, so 2026 fits with no
-# margin; the owner accepted that (2026-10-31).
+# version and build number: 181 for isabelle-2025.2-0, 183 for isabelle-2026-0..9,
+# 182 for isabelle-2026-10..99.  Isabelle2026's own VSCodium has a 182-character path in
+# it, so 2026 fits with a margin of one character, or none from build 10 on; the owner
+# accepted that (2026-10-31).
 #
 # ENFORCED FOR win-64 ONLY.  Measured and printed for every platform, but only Windows
 # can fail on it, because only Windows has the limit: PATH_MAX is 1024 on macOS and 4096
@@ -369,7 +342,7 @@ echo "   marker there would be cat'd into rebaseall's DLL list)"
 # wrong, and it broke the build: the macOS bundle nests VSCodium inside an app bundle
 #     isa/contrib/vscodium-.../x86_64-darwin/VSCodium.app/Contents/Resources/vscodium/...
 # which is ~20 characters deeper than the Windows layout's .../resources/vscodium/...,
-# so osx-64 measured 201 and Job F went red on a package that is perfectly fine on macOS.
+# so osx-64 measured 201 and the packaging job went red on a package that is perfectly fine on macOS.
 # The premise was false anyway: win-64 is built and asserted in this very same job, so a
 # Windows regression is caught on win-64 itself.  Do not "restore" the global check.
 # ---------------------------------------------------------------------------
@@ -405,7 +378,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 7. conda package
+# 5. conda package
 # ---------------------------------------------------------------------------
 # The official changeset (checked above) does not go into the build string -- every
 # character there costs us MAX_PATH on Windows (recipe.yaml); it is carried in the
@@ -426,7 +399,7 @@ export ISA_BUILD_NUMBER
 #              package into <output-dir>/broken/.
 #   osx-*   -> the test takes the unix branch and PASSES, but it passed by running the
 #              macOS package's bash script on Linux.  A false pass is worse than no test.
-# Only linux-64 can be honestly tested here, and Job F does that far more thoroughly
+# Only linux-64 can be honestly tested here, and Job B does that far more thoroughly
 # anyway: it installs from a local channel and builds a real session (see build.yml).
 rattler-build build \
   --recipe "$HERE/../conda/recipe.yaml" \
@@ -440,6 +413,6 @@ PACKAGE="$OUT/$SUBDIR/isabelle-$VERSION-$ISA_BUILD_NUMBER.conda"
 echo "=== produced: $PACKAGE ($(stat -c %s "$PACKAGE") bytes) ==="
 
 # ---------------------------------------------------------------------------
-# 8. The package's isa/ is the official tree plus the changes above, nothing else.
+# 6. The package's isa/ is the official tree plus the changes above, nothing else.
 # ---------------------------------------------------------------------------
 "$PYTHON" "$HERE/check_pristine.py" compare "$SUBDIR" "$OFFICIAL_MANIFEST" "$PACKAGE"

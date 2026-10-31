@@ -7,7 +7,7 @@
 #   check_rerun.sh build <channel dir>                     build the probe into a local channel
 #   check_rerun.sh run <conda> <channel url> <prefix>      install isabelle + probe, reinstall isabelle
 #
-# `build` needs rattler-build (Job F); `run` needs only conda, so Job I runs it on Windows.
+# `build` needs rattler-build (Job B); `run` needs only conda, so Job E runs it on Windows.
 # The probe never leaves CI: it is not in the conda-packages artifact.
 set -euo pipefail
 

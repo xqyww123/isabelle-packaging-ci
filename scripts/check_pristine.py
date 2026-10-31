@@ -20,15 +20,14 @@ from typing import IO
 
 # What the package may differ in, per platform (conda subdir; "*" is every platform).
 EXPECTED = {
-    "changed": {"*": ["etc/settings",          # pack.sh 1d: a user directory per environment
-                      "etc/options",           # pack.sh 1e: ML_system_64 = true
-                      "etc/components"]},      # pack.sh 1f: no bundled nunchaku
-    "added": {"*": [r"heaps/(?![^/]*_32-)[^/]+/.*",        # our 64-bit-word heaps (Jobs B-E)
-                    r"(.*/)?\.conda-keep"],                 # pack.sh 5: empty directories
-              "win-64": ["bin/isabelle.bat"]},              # pack.sh 1c: the Windows launcher
-    "missing": {"*": [r"heaps/[^/]*_32-[^/]+/.*",           # the official 32-bit-word heaps
-                      r"contrib/vscodium-[^/]+/.*/obj/.*",  # pack.sh 1b: MSBuild scratch
-                      r"contrib/polyml-[^/]+/[^/]+/libpoly(ml|main)\.la"]},  # rattler-build drops *.la
+    "changed": {"*": ["etc/settings",           # pack.sh 1d: a user directory per environment
+                      "etc/components"],        # pack.sh 1e: no bundled nunchaku
+                "win-64": [r"contrib/cygwin/isabelle/permissions/(directories|755|644|444)\.gz"]},  # pack.sh 3
+    "added": {"*": [r"(.*/)?\.conda-keep"],     # pack.sh 2: empty directories
+              "win-64": ["bin/isabelle.bat"]},  # pack.sh 1c: the Windows launcher
+    "missing": {"*": [r"contrib/vscodium-[^/]+/.*/obj/.*",                 # pack.sh 1b: MSBuild scratch
+                      r"contrib/polyml-[^/]+/[^/]+/libpoly(ml|main)\.la"],  # pack.sh 1f: libtool archives
+                "win-64": [r"contrib/cygwin/lib/sasl2_3/lib[^/]+\.la"]},    # pack.sh 1f
 }
 
 

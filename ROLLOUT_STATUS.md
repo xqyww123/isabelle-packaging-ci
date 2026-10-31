@@ -36,15 +36,7 @@ by the owner's decision of 2026-10-03).
 | `isabelle-semantic-embedding` | 0.5.0 | **per-platform, 5 subdirs**, abi3 (3.12-3.14); PyPI 0.2.0 (not updated) |
 | `isabelle-semantic-data` | 2026.10.09.0024 | noarch generic, **data**: the read-only system layer of the semantic DB; version = export timestamp; **8.99 GiB** (1.44M records with their vectors), built off-runner — see the fourth-wave notes |
 | `isabelle-ai` | 0.3.0 (build 2) | noarch generic, **metapackage** — minilang + mcp + semantic-data, no files of its own; its floors are the channel's newest at every release (`minilang >=0.7.0`, `mcp >=0.7.0`, `semantic-data >=2026.10.09`) |
-| `isabelle-nunchaku` | 0.5.2 | component, **linux-64 only** — binaries come from the `xqyww123/nunchaku` fork's release, not built here |
-
-`isabelle-nunchaku` is the one package still published on a single subdir. 0.5.3 changes
-that: the fork's CI builds nunchaku **and the smbc the component now bundles** on all five
-platforms and attaches twenty-five release assets (ten binaries, ten `.sha256` sidecars,
-five `versions-<platform>.txt` records), and `release-nunchaku.yml` builds the five subdirs
-on native runners. Which solver versions and which bytes is not restated here — it is
-`component/solvers.pins` in the fork, and both repositories assert against that one file.
-Until 0.5.3 is published this row stays at 0.5.2 / linux-64.
+| `isabelle-nunchaku` | 0.5.2 | component, **linux-64 only**; **no longer released** (owner, 2026-10-31): its workflow and recipe are removed, the published 0.5.2 stays |
 
 **The rollout is complete.** Every package in the original plan is published, and every one
 of them has been installed from the live channel on Linux and on Windows.

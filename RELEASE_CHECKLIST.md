@@ -23,19 +23,22 @@ from this repository:
 - **The root `index.html` carries a banner** (what the site is, how to install `isabelle-ai`)
   from `conda/channel-banner.html`, applied by `scripts/banner-index.py` after every
   conda-index run. Edit the banner file, never the generated page.
-- **A Worker counts downloads** (`worker/`; being rolled out: since 2026-10-31 only on the trial
-  route `conda.qiyuan.me/noarch/index.html`). On the route
+- **A Worker counts downloads** (`worker/`; being rolled out: since 2026-10-31 only on trial
+  routes, now one package file). On the route
   `conda.qiyuan.me/*` it passes every request through unchanged, counts one download of a
-  package for each of its files served whole, except to GitHub-hosted runners, and adds a
-  Downloads column to the root `index.html` as it is served (`worker/index.js` says how). The
-  counts are in the D1 database `conda-downloads`:
-  `wrangler d1 execute conda-downloads --remote --command "SELECT * FROM downloads"`.
-  `SELECT count(*) FROM runner_ranges` must not be 0: 0 means the GitHub runner list never
-  loaded, and CI downloads are being counted; whether the daily refresh succeeds shows in the
-  Worker's Past Cron Events in the dashboard. Deploy with `wrangler deploy` in `worker/`, with a
-  token minted as the next point says. The route is set to fail open in the dashboard, on the
-  route's own settings (wrangler.toml has no field for it): past the free plan's daily request
-  limit, requests skip the Worker.
+  package for each of its files served whole, and adds a Downloads column to the root
+  `index.html` as it is served (`worker/index.js` says how). The counts are in the D1 database
+  `conda-downloads`: `wrangler d1 execute conda-downloads --remote --command "SELECT * FROM downloads"`.
+  **Pause the counting while you release**, so that our own CI's downloads are not counted (real
+  users' downloads in that window are not counted either):
+  `--command "INSERT OR REPLACE INTO pause VALUES (1, unixepoch() + 6 * 3600)"` right before each
+  workflow run that downloads from the channel (each dispatch and each Re-run, rehearsals
+  included), `--command "DELETE FROM pause"` after the last one. A pause ends by itself 6 hours
+  after it was last set. Mint a token of D1 Write alone for these two, give it to wrangler as the
+  next point says, and revoke it after the resume.
+  Deploy with `wrangler deploy` in `worker/`, with a token minted as the next point says. The
+  route is set to fail open in the dashboard, on the route's own settings (wrangler.toml has no
+  field for it): past the free plan's daily request limit, requests skip the Worker.
 - **`CLOUDFLARE_GOD_KEY` in `~/Current/MLML/secret.sh` is an account-owned API token**, not
   a user token and not a Global API Key: `/user/tokens/verify` answers "Invalid API Token"
   for it, `/accounts/<CLOUDFLARE_ACCOUNT_ID>/tokens/verify` answers `active`, and it can mint
@@ -414,6 +417,8 @@ build:  {number: 0, script: "$PYTHON -m pip install <the wheel> --no-deps"}
 One recipe per platform tag. Record why we carry it and when to drop it.
 
 ## 9. Release
+
+Pause the download counter while you release ("The channel host").
 
 1. **Dependencies first** — `verify` installs from the live channel, so run deps must
    already be published. Order: `isabelle` → `isabelle-performant-ml` →

@@ -14,6 +14,8 @@ separate feature packages, released from the patch tool repository
 
 Below, `<R>` is the Isabelle release you package, for example `Isabelle2026`.
 
+Pause the download counter while you release (`RELEASE_CHECKLIST.md`, "The channel host").
+
 ## 1. Pick the build number
 
 ```bash

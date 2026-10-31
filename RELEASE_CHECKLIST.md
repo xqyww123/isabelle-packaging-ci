@@ -23,8 +23,7 @@ from this repository:
 - **The root `index.html` carries a banner** (what the site is, how to install `isabelle-ai`)
   from `conda/channel-banner.html`, applied by `scripts/banner-index.py` after every
   conda-index run. Edit the banner file, never the generated page.
-- **A Worker counts downloads** (`worker/`; being rolled out: since 2026-10-31 only on trial
-  routes, now one package file). On the route
+- **A Worker counts downloads** (`worker/`; live since 2026-10-31). On the route
   `conda.qiyuan.me/*` it passes every request through unchanged, counts one download of a
   package for each of its files served whole, and adds a Downloads column to the root
   `index.html` as it is served (`worker/index.js` says how). The counts are in the D1 database
@@ -37,8 +36,12 @@ from this repository:
   after it was last set. Mint a token of D1 Write alone for these two, give it to wrangler as the
   next point says, and revoke it after the resume.
   Deploy with `wrangler deploy` in `worker/`, with a token minted as the next point says. The
-  route is set to fail open in the dashboard, on the route's own settings (wrangler.toml has no
-  field for it): past the free plan's daily request limit, requests skip the Worker.
+  route fails open: past the free plan's daily request limit, requests skip the Worker instead
+  of getting error 1027. That is the route's `request_limit_fail_open` in
+  `/zones/<zone id>/workers/routes`, and every `wrangler deploy` recreates the route with it off
+  (seen 2026-10-31): after each deploy, `GET` the route's new id there and `PUT` it back with
+  `{"pattern": "conda.qiyuan.me/*", "script": "conda-download-counter", "request_limit_fail_open": true}`,
+  using the deploy token.
 - **`CLOUDFLARE_GOD_KEY` in `~/Current/MLML/secret.sh` is an account-owned API token**, not
   a user token and not a Global API Key: `/user/tokens/verify` answers "Invalid API Token"
   for it, `/accounts/<CLOUDFLARE_ACCOUNT_ID>/tokens/verify` answers `active`, and it can mint
@@ -48,9 +51,10 @@ from this repository:
   Scripts Write, D1 Write, Workers Tail Read and Account Settings Read on the account, and
   Workers Routes Write and Zone Read on all zones of the account; mint it the same way for every
   redeploy (with one zone only, wrangler keeps the Worker's old routes). Give wrangler that token
-  and `CLOUDFLARE_ACCOUNT_ID`, never `secret.sh`'s `CLOUDFLARE_API_TOKEN`. Verify the edge with `curl`: a
-  `Python-urllib` User-Agent gets 403 from Cloudflare's bot protection on every URL, conda's
-  own client and curl do not.
+  and `CLOUDFLARE_ACCOUNT_ID`, never `secret.sh`'s `CLOUDFLARE_API_TOKEN`. A freshly minted token
+  can be refused with "Authentication error [code: 10000]" for a few seconds; try again.
+  Verify the edge with `curl`: a `Python-urllib` User-Agent gets 403 from Cloudflare's bot
+  protection on every URL, conda's own client and curl do not.
 
 ## Deleting from the channel
 

@@ -57,7 +57,7 @@ unaware of components.
 Stock `etc/settings` puts USER state (config + on-demand-built session heaps) in
 `~/.isabelle/Isabelle2025-2` — SHARED with any stock Isabelle2025-2.  Our Pure is patched,
 so those heaps are not interchangeable and the two builds would clobber each other.  The
-base package (pack.sh, step 1d) patches `etc/settings` so `ISABELLE_HOME_USER` becomes
+base package (pack.sh, step 1c) patches `etc/settings` so `ISABELLE_HOME_USER` becomes
 `~/.isabelle/Isabelle2025-2-conda-<env>` (env derived from the install prefix, so it holds
 without `conda activate`).  The base's **pre-unlink** deletes that whole dir on
 `conda remove`, guarded so a stock `~/.isabelle/Isabelle2025-2` can never be touched; the

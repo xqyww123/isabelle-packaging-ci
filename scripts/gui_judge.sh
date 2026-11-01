@@ -10,8 +10,8 @@
 #   gui_judge.sh theory  <out.thy>              write the canonical Scratch.thy
 #   gui_judge.sh judge   <screenshot> <out-dir>   run Claude Code and apply the criteria
 #
-# A missing verdict (no claude CLI or token, quota exhausted, API error) only warns,
-# unless REQUIRE_GUI_VERDICT=true: release.yml sets it, so nothing is published unjudged.
+# A check Claude does not judge warns, or fails under REQUIRE_GUI_VERDICT=true, which
+# release.yml sets (see unjudged).
 #
 # `theory` and `judge` share one source of truth for what the theory contains and what
 # the screenshot is judged against: the theory text below and the prompt below describe
@@ -42,9 +42,13 @@ THY
 # not inherit a stray one; so the launcher passes the ORIGINAL home in CRED_HOME and we
 # run claude under that.
 # --------------------------------------------------------------------------------------
-no_verdict() {
+# A check Claude did not judge -- no claude CLI or token, a used-up quota, an API error,
+# or "unclear" on the bad/good pair -- says nothing about the package, so it only warns;
+# but a release cannot be withdrawn, so under REQUIRE_GUI_VERDICT=true it fails (owner).
+unjudged() {
+  echo "::warning::$1 -- the GUI is NOT verified this run; the screenshot is uploaded, look at it."
   [ "${REQUIRE_GUI_VERDICT:-false}" = true ] || return 0
-  echo "::error::a release needs a GUI verdict (REQUIRE_GUI_VERDICT): re-run this job once Claude is available"
+  echo "::error::a release needs a GUI verdict (REQUIRE_GUI_VERDICT); the warning above gives the reason -- see RELEASE.md, step 3"
   return 1
 }
 
@@ -57,9 +61,7 @@ judge() {
     npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 || true
   fi
   if ! command -v claude >/dev/null 2>&1; then
-    echo "::warning::no claude CLI and no CLAUDE_CODE_OAUTH_TOKEN -- the screenshot was taken"
-    echo "::warning::and will be uploaded, but NOT judged.  The GUI is UNVERIFIED this run."
-    no_verdict
+    unjudged "no claude CLI and no CLAUDE_CODE_OAUTH_TOKEN"
     return
   fi
   echo "=== claude $(claude --version) ==="
@@ -111,21 +113,15 @@ PROMPT_EOF
   local rc=$?
   set -e
 
-  # No verdict is not the same thing as a bad verdict.  The token is a subscription
-  # token; a session-limit / expired-login / API hiccup makes claude exit non-zero and
-  # says NOTHING about the package.  A genuinely broken GUI always comes back AS a
-  # verdict (started="no").  So only a verdict can turn this red; a missing one warns and
-  # the screenshot is still uploaded.  (claude reports these in the JSON body, not stderr.)
+  # No verdict is not a bad verdict (see unjudged): a genuinely broken GUI comes back AS a
+  # verdict (started="no").  claude reports why in the JSON body, not stderr.
   local verdict
   verdict=$(jq -r '.structured_output // "null"' "$out_dir/verdict.json" 2>/dev/null || echo null)
   if [ $rc -ne 0 ] || [ "$verdict" = null ]; then
     local why
     why=$(jq -r '.result // "no result field"' "$out_dir/verdict.json" 2>/dev/null || echo "unparseable output")
-    echo "::warning::Claude Code returned no verdict (exit $rc): $why"
-    echo "::warning::The GUI is therefore UNVERIFIED this run.  This is NOT a package failure --"
-    echo "::warning::it is an auth/quota/API problem.  The screenshot is uploaded; look at it."
     cat "$out_dir/claude.err" 2>/dev/null || true
-    no_verdict
+    unjudged "Claude Code returned no verdict (exit $rc): $why"
     return
   fi
 
@@ -144,24 +140,25 @@ PROMPT_EOF
   [ "$started" = yes ] || { echo "::error::jEdit did not start: $evidence"; fail=1; }
   [ "$ready"   = yes ] || { echo "::error::the prover is not ready -- the GUI came up but the ML process did not"; fail=1; }
 
-  # The discriminating pair.  "unclear" is a warning, not a red: vision can legitimately
-  # fail to resolve a marker, and we would rather not flake the build over it.  A positive
-  # "no", though, means the prover is demonstrably not checking.
+  # The discriminating pair.  A "no" means the prover is demonstrably not checking, or
+  # the heap is wrong.  "unclear" -- vision can fail to resolve a marker -- leaves the
+  # check unjudged.
   if [ "$bad" = no ]; then
     echo "::error::the failing lemma (2+2=5) shows NO error marker -- the GUI rendered but"
     echo "::error::the prover is not actually checking the document."
     fail=1
-  elif [ "$bad" != yes ]; then
-    echo "::warning::could not tell whether the failing lemma was flagged ($bad)"
   fi
   if [ "$good" = no ]; then
     echo "::error::the succeeding lemma (2+2=4) is flagged as an error -- something is wrong"
     echo "::error::with the shipped heap or the prover session."
     fail=1
   fi
-
-  [ $fail -eq 0 ] && echo "  -> GUI verified: jEdit started, the prover is live, and it flagged exactly the bad proof."
-  return $fail
+  [ $fail -eq 0 ] || return 1
+  if [ "$bad" != yes ] || [ "$good" != yes ]; then
+    unjudged "Claude could not tell whether only the failing lemma is flagged (bad: $bad, good: $good)"
+    return
+  fi
+  echo "  -> GUI verified: jEdit started, the prover is live, and it flagged exactly the bad proof."
 }
 
 case "${1:-}" in

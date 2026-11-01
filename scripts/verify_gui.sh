@@ -13,9 +13,10 @@
 #
 # Usage: verify_gui.sh <conda-prefix> <out-dir>
 # Env:   CLAUDE_CODE_OAUTH_TOKEN -- if unset, the screenshot is still produced and
-#        uploaded, and the AI judgement is skipped with a warning (so the pipeline is
-#        not blocked on the secret).  Never set ANTHROPIC_API_KEY here: it outranks the
-#        OAuth token and would silently bill the metered API instead of the subscription.
+#        uploaded, and the check goes unjudged: a warning, or a failure under
+#        REQUIRE_GUI_VERDICT (gui_judge.sh, unjudged).  Never set ANTHROPIC_API_KEY here:
+#        it outranks the OAuth token and would silently bill the metered API instead of
+#        the subscription.
 set -euo pipefail
 
 ENV_PREFIX="${1:?usage: verify_gui.sh <conda-prefix> <out-dir>}"

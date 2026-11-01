@@ -454,16 +454,22 @@ env 建在 `C:\Users\isabelle\miniconda3\envs\isabelle\`(典型 "Just Me" 布局
 
 **"75 不是 83" 的决定被实测证实:** `cygwin_init` 之后,`var/lib/rebase/*.d` 那 5 个目录
 **由 `rebaseall` 自己建出来**,且**没有任何 `.conda-keep` 混进去**。当初若放了标记,
-其内容就会被 `cat` 进 rebase 的 DLL 清单。【2026-11-01 起改为全部 83 个都放、标记是**空文件**(owner):`rebaselst`
-跳过空内容(`rebaselst:47-48, 54-55`),所以空标记在 rebase 目录里无害;这样 Cygwin 的目录权限清单不用改写。】
+其内容就会被 `cat` 进 rebase 的 DLL 清单。【2026-11-01 起改为官方包里每个空目录都放、rebase 的 5 个也放,标记是**空文件**
+(owner):`rebaselst` 跳过空内容(`rebaselst:47-48, 54-55`),所以空标记在 rebase 目录里无害;这样 Cygwin 的目录权限清单不用
+改写。放了几个见 `pack.sh` 第 2 步打印的 "restored N empty directory(ies)"(Isabelle2026 win-64 实测 80 个)。】
 
 #### 🔴 剩余的三条(不是 blocker,但必须写进用户文档)
 
-1. **env 路径前缀(含末尾的 `\`)加上包内最长路径,不能超过 259 字符。** 包内最长路径是 VSCodium 自己的文件,
-   我们控制不了(Isabelle2025-2 时是 180,前缀因此最多 79;Isabelle2026 是 182,前缀最多 77——`pack.sh` 在 win-64 上
-   每次都打印这个数)。env 名太长或建在很深的目录里仍会 `InvalidArchiveError`;VSCodium 升级把路径加长时,`pack.sh` 的断言
-   会在 CI 里变红,而不是在用户的 `conda create` 里炸。(真要余量,可以把 `contrib/vscodium-<版本>/` 改名成
-   `contrib/vscodium/`,`$COMPONENT` 是自引用的所以安全。**用户目前选择先不做。**)
+1. **两条路径长度限制,各自不能超过 259 字符(都含末尾的 `\`),先卡住的是第一条:**
+   - **conda 的 pkgs 目录 + `isabelle-<版本>-<build>\` + 包内最长路径。** conda 先把包解压到 pkgs 缓存里(上文实测),
+     超了就是 `InvalidArchiveError`;`pack.sh` 断言的就是这条。
+   - **env 路径前缀 + 包内最长路径。** 超了会在把文件放进环境时失败。
+
+   包内最长路径是 VSCodium 自己的文件,我们控制不了。Isabelle2026 是 182:pkgs 目录最多 61 个字符(build 号 10 起 60;
+   用户名 20 个字符时默认的 `C:\Users\<用户名>\AppData\Local\miniconda3\pkgs\` 正好 60),env 前缀最多 77——`pack.sh` 在
+   win-64 上每次都打印这两个数。VSCodium 升级把路径加长时,`pack.sh` 的断言会在 CI 里变红,而不是在用户的 `conda create` 里炸。
+   (真要余量,可以把 `contrib/vscodium-<版本>/` 改名成 `contrib/vscodium/`,`$COMPONENT` 是自引用的所以安全。
+   **用户目前选择先不做。**)
 2. **安装路径不能含非 ASCII 字符**(上游 JVM 启动器的限制,见上文)。
 3. **🔴 Windows 上文件参数的路径约定是"分裂"的,而且两边都会静默出错**(独立复核时实测):
 
@@ -503,6 +509,9 @@ conda 包里只有文件、没有目录条目 ⇒ 官方 bundle 里的 **83 个�
 
 机理:`getsettings:118` 每次都跑 `isabelle.setup.Setup` → `Environment.init` → `cygwin_init`
 → 恢复符号链接 + `rebaseall` + `postinstall`。**第一次调用付约 90 秒,之后就好了。**
+【2026-11-01 订正:rc=0 和 marker 消失都证明不了初始化成功——`getsettings` 把 `Setup` 的错误输出丢掉、退出码不看,
+`cygwin_init` 一开始就删 marker。成功与否只看 `ISABELLE_SETUP_CLASSPATH` 是否非空;`build.yml` 的 `install-windows` 这样断言,
+并让它失败一次作对照。】
 
 #### ✅ 递归安全 + 可重定位(真机实测)
 - **递归**:本来是致命隐患 —— `getsettings:62` 把 `bin/` 放到 PATH **最前面**,而 `bin/isabelle`
@@ -806,7 +815,7 @@ conda              [ubuntu-latest]   scripts/pack.sh 逐个打 conda 包(含 che
                                      → 本地 channel 装 linux-64 并真跑;两个同名环境的用户目录;post-link 重跑
 install-macos      [macos-15, macos-15-intel]   osx-arm64、osx-64 各在原生机器上装和跑(arm 上另有 GUI 检查)
 install-linux-arm  [ubuntu-24.04-arm]   linux-aarch64 装、跑、GUI 检查
-install-windows    [windows-latest]  win-64 装、首次 `isabelle` 调用(Cygwin 初始化)、post-link 重跑(.bat)
+install-windows    [windows-latest]  win-64 装、首次 `isabelle` 调用(Cygwin 初始化,含失败对照)、post-link 重跑(.bat)
 ```
 
 本文档与注释里一律用 job id(上表左列)称呼这些 job,不用字母(owner 2026-11-01)。
@@ -904,13 +913,14 @@ GUI 截图判定),那比 recipe 内测试强得多。
   ⇒ **只有"模型给出了判断且判断是坏的"才能让 CI 变红;"模型没能给出判断"
   (限流/掉登录/API 故障)只 `::warning::`。** 真的 GUI 坏了永远以
   `structured_output.started = "no"` 的形式回来,所以判别力没有损失。
+  【2026-11-01 起(owner):发布时(`release.yml` 传 `require_gui_verdict: true`)没有判断的 GUI 检查失败,发布在上传之前停下;
+  模型对 `bad`/`good` 两行答 `unclear` 也算没有判断。`ci.yml` 照旧只警告。补救见 `RELEASE.md` 第 3 步,规则写在
+  `gui_judge.sh` 的 `unjudged`。】
 - ~~**必须从包里的 heap 目录名反推 `ML_system_64` 并写进临时 HOME 的 preferences。**~~【2026-10-31 作废(第 13 条:
   官方默认的 32_in_64 heap 原样进包,没有要钉的变体;那份 preferences 也写进了 conda 里的 Isabelle 从来不读的目录),
   `pin_ml` 已删。】变体不匹配时 Isabelle **不报警,直接静默重建 HOL**,而 jEdit 是在 **GUI 对话框**里建的、
   输出**不进 `jedit.log`** ⇒ 截图检查会**全绿假通过**而包里的 heap 根本没被用。
   所以脚本断言 `Isabelle build` 对话框不许出现;`verify_install.sh` 的真 build 断言 HOL 不重编。
-- **发布时必须有判断**(owner 2026-11-01):`release.yml` 传 `require_gui_verdict: true`,模型没给出判断的 GUI 检查
-  就失败,发布在上传之前停下;额度恢复后对失败的 job 重跑即可。`ci.yml` 照旧只警告。
 - 无头 build 的 `Building HOL` 检查与 GUI 截图检查**互补,不可互相替代**:
   前者确定性、不需要模型在环;后者覆盖 jEdit 那条路径。**两个都要留。**
 

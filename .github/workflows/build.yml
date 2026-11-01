@@ -28,7 +28,7 @@ on:
         type: string
         required: true
       require_gui_verdict:
-        description: "fail a GUI check that gets no verdict from Claude (release.yml sets it)"
+        description: "fail a GUI check that Claude does not judge (release.yml sets it)"
         type: boolean
         default: false
     outputs:
@@ -46,6 +46,10 @@ on:
           outranks the OAuth token in Claude Code's auth chain and would bill the
           metered API instead of the subscription.
         required: false
+
+env:
+  # The release gate, for every GUI check (scripts/gui_judge.sh, unjudged).
+  REQUIRE_GUI_VERDICT: ${{ inputs.require_gui_verdict }}
 
 jobs:
   tests:
@@ -314,7 +318,6 @@ jobs:
         env:
           # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          REQUIRE_GUI_VERDICT: ${{ inputs.require_gui_verdict }}
         run: scripts/verify_gui.sh "$RUNNER_TEMP/isaenv" "$RUNNER_TEMP/gui"
 
       - name: Upload the GUI screenshot + verdict
@@ -434,7 +437,6 @@ jobs:
         env:
           # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          REQUIRE_GUI_VERDICT: ${{ inputs.require_gui_verdict }}
         run: scripts/verify_gui_macos.sh "$RUNNER_TEMP/isaenv" "$RUNNER_TEMP/gui"
 
       - name: Upload the macOS GUI screenshot + verdict
@@ -507,7 +509,6 @@ jobs:
         env:
           # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          REQUIRE_GUI_VERDICT: ${{ inputs.require_gui_verdict }}
         run: scripts/verify_gui.sh "$ENV" "$RUNNER_TEMP/gui"
 
       - name: Upload the ARM GUI screenshot + verdict
@@ -571,16 +572,23 @@ jobs:
       # A fresh install, and the user's first `isabelle` call on it: that call runs
       # Cygwin's initialization (symlinks, rebaseall, postinstall with the permission
       # lists pack.sh step 3 rewrites), which deletes its marker first and never retries.
+      # getsettings runs it as `ISABELLE_SETUP_CLASSPATH="$(... Setup classpath 2>/dev/null)"`,
+      # so its result shows only there: the classpath once it succeeded, nothing if it failed.
+      # The step ends by making it fail, to show that this check can go red.
       - name: "win-64: install, and the first isabelle call"
         run: |
           set -euo pipefail
           ENV="$T/isaenv"
+          CYG="$ENV/isa/contrib/cygwin/isabelle"
+          setup_classpath() { "$ENV/Scripts/isabelle.bat" getenv -b ISABELLE_SETUP_CLASSPATH | tr -d '\r'; }
           "$CONDA_EXE" create -y -p "$ENV" -c "file:///$T/channel" -c conda-forge --override-channels isabelle
-          v=$("$ENV/Scripts/isabelle.bat" version)
-          echo "isabelle version -> $v"
-          [ -n "$v" ] || { echo "::error::isabelle version printed nothing"; exit 1; }
-          [ ! -e "$ENV/isa/contrib/cygwin/isabelle/uninitialized" ] || {
-            echo "::error::the first isabelle call did not initialize Cygwin"; exit 1; }
+          [ -e "$CYG/uninitialized" ] || { echo "::error::the package does not ship Cygwin's uninitialized marker"; exit 1; }
+          cp=$(setup_classpath)
+          [ -n "$cp" ] || {
+            echo "::error::Cygwin's initialization failed on the first isabelle call (isabelle.setup.Setup printed no classpath)"; exit 1; }
+          [ ! -e "$CYG/uninitialized" ] || { echo "::error::the first isabelle call did not initialize Cygwin"; exit 1; }
+          echo "first isabelle call: Cygwin initialized, ISABELLE_SETUP_CLASSPATH has ${#cp} characters"
+          echo "isabelle version -> $("$ENV/Scripts/isabelle.bat" version | tr -d '\r')"
           u=$("$ENV/Scripts/isabelle.bat" getenv -b ISABELLE_HOME_USER | tr -d '\r')
           echo "ISABELLE_HOME_USER = $u"
           # scripts/pack.sh 1c, through Isabelle's own Cygwin (cksum included)
@@ -588,6 +596,13 @@ jobs:
             */.isabelle/*-conda-isaenv-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
             *) echo "::error::unexpected user directory $u"; exit 1 ;;
           esac
+          # The negative control: initialize again, with a postinstall that fails.
+          : > "$CYG/uninitialized"
+          sed -i '1i echo > /isabelle/postinstall.reached; exit 1' "$CYG/postinstall"
+          cp=$(setup_classpath || true)
+          [ -e "$CYG/postinstall.reached" ] || { echo "::error::negative control: the failing postinstall never ran"; exit 1; }
+          [ -z "$cp" ] || { echo "::error::negative control: a failing postinstall still gave a classpath"; exit 1; }
+          echo "negative control: with postinstall failing, ISABELLE_SETUP_CLASSPATH is empty"
 
       - name: "win-64: the isabelle post-link re-runs its dependents' post-links (.bat)"
         run: scripts/check_rerun.sh run "$CONDA_EXE" "file:///$T/channel" "$T/probe-env"

@@ -99,10 +99,6 @@ ISA_ID="$(cat "$TREE/etc/ISABELLE_ID")"
   echo "::error::etc/ISABELLE_ID is $ISA_ID, but the official $RELEASE changeset is $OFFICIAL_ID"; exit 1; }
 echo "ISABELLE_ID = $ISA_ID (the official $RELEASE changeset)"
 
-# The official tree as unpacked, for the check at the end.
-OFFICIAL_MANIFEST="$WORK/official-$SUBDIR.json"
-"$PYTHON" "$HERE/check_pristine.py" manifest "$TREE" "$OFFICIAL_MANIFEST"
-
 # The bundle's prebuilt heaps, which ship as they are.  heaps/<ML_ID>/log/<S>.db is NOT
 # a build log -- it is the session database, and `isabelle build` decides whether a
 # session is finished-and-current by looking it up there, not by the heap file's
@@ -120,21 +116,11 @@ done
 [ "$n" -eq 1 ] || { echo "::error::expected one heaps/<ML_IDENTIFIER>/ in the bundle, found $n"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 1a. Remember the bundle's EMPTY directories, while the tree is still pristine.
-#
-# A conda payload carries FILES ONLY -- no directory entries (measured: 28706
-# entries in our win-64 package, every one of them a regular file).  conda creates
-# a directory only as the parent of some file it is unpacking, so every empty
-# directory in the official bundle silently disappears on install.  For Cygwin that
-# means /tmp, /var/tmp, /dev/shm, /home and the rebase state dirs are simply gone,
-# and every `isabelle` call greets the user with
-#     bash.exe: warning: could not find /tmp
-# We put them back at step 2 by dropping a marker file in each.  Recorded here, before
-# any step changes the tree, so that step 2 restores exactly the officially empty ones.
+# 1a. Record the official tree, before any step changes it: step 2 puts its empty
+# directories back from this record, and step 6 checks the finished package against it.
 # ---------------------------------------------------------------------------
-EMPTY_DIRS="$WORK/empty_dirs.txt"
-( cd "$TREE" && find . -type d -empty | sed 's|^\./||' | sort ) > "$EMPTY_DIRS"
-echo "empty directories in the pristine bundle: $(wc -l < "$EMPTY_DIRS")"
+OFFICIAL_MANIFEST="$WORK/official-$SUBDIR.json"
+"$PYTHON" "$HERE/check_pristine.py" manifest "$TREE" "$OFFICIAL_MANIFEST"
 
 # ---------------------------------------------------------------------------
 # 1b. Windows: install the real launcher at <ISABELLE_HOME>\bin\isabelle.bat.
@@ -222,23 +208,20 @@ n_la=$(find "$TREE" -type f -name '*.la' -print -delete | wc -l)
 echo "dropped $n_la libtool archive(s) (*.la)"
 
 # ---------------------------------------------------------------------------
-# 2. Put the empty directories back (see 1a).
+# 2. Put the officially empty directories back (recorded at 1a).
 #
-# conda only creates a directory as the parent of a file it unpacks, so the only way to
-# ship an empty one is to make it non-empty.  An EMPTY marker file does that, and unlike
-# a post-link `mkdir` it is TRACKED: it shows up in `conda list --explicit`, and
-# `conda remove` takes it away again (PACKAGING_DESIGN.md §3.1).  Every directory that
-# gets one ignores it, the Cygwin rebase state dirs included: rebaselst reads each file
-# there as a list of paths and skips empty content (rebaselst:47-48, 54-55).
+# A conda payload carries FILES ONLY, and conda creates a directory only as the parent of
+# a file it unpacks, so every empty directory of the official bundle would disappear on
+# install.  For Cygwin that means /tmp, /var/tmp, /dev/shm, /home and the rebase state
+# dirs, and every `isabelle` call would greet the user with
+#     bash.exe: warning: could not find /tmp
+# An EMPTY marker file makes a directory non-empty, and unlike a post-link `mkdir` it is
+# TRACKED: it shows up in `conda list --explicit`, and `conda remove` takes it away again
+# (PACKAGING_DESIGN.md §3.1).  Every directory that gets one ignores it, the Cygwin rebase
+# state dirs included: rebaselst reads each file there as a list of paths and skips empty
+# content (rebaselst:47-48, 54-55).
 # ---------------------------------------------------------------------------
-n_dirs=0
-while IFS= read -r d; do
-  [ -n "$d" ] || continue
-  mkdir -p "$TREE/$d"
-  : > "$TREE/$d/.conda-keep"
-  n_dirs=$((n_dirs + 1))
-done < "$EMPTY_DIRS"
-echo "restored $n_dirs empty directory(ies) via .conda-keep markers"
+"$PYTHON" "$HERE/check_pristine.py" markers "$TREE" "$OFFICIAL_MANIFEST"
 
 # ---------------------------------------------------------------------------
 # 3. Windows: Cygwin's permission lists name only what ships.
@@ -246,8 +229,9 @@ echo "restored $n_dirs empty directory(ies) via .conda-keep markers"
 # On the first `isabelle` call, Isabelle's Cygwin runs contrib/cygwin/isabelle/postinstall,
 # which under `set -e` runs setfacl/chmod on every path in permissions/*.gz -- lists of
 # every directory and file of the official tree (each one there, measured).  A listed
-# path the package lacks (the *.la of 1e) fails it, and with it the user's first call.
-# So each list keeps only what ships (owner, 2026-10-31).
+# path the package lacks (the *.la of 1e) fails it -- silently, since getsettings discards
+# the error, and for good, since the initialization deleted its marker first (build.yml,
+# install-windows).  So each list keeps only what ships (owner, 2026-10-31).
 # ---------------------------------------------------------------------------
 if [ "$SUBDIR" = win-64 ]; then
   "$PYTHON" "$HERE/check_pristine.py" permissions "$TREE"
@@ -290,8 +274,9 @@ fi
 # after one line, `sort` (28k lines) dies of SIGPIPE=141, and the whole script exits --
 # silently, right here, with the package never built.  `sed -n` reads its input to the end.
 ISA_BUILD_NUMBER="${ISA_BUILD_NUMBER:?ISA_BUILD_NUMBER is not set}"
-PKGS_DIR='C:\Users\12345678901234567890\AppData\Local\miniconda3\pkgs\'"isabelle-$VERSION-$ISA_BUILD_NUMBER\\"
-MAX_REL=$(( 259 - ${#PKGS_DIR} ))
+PKGS_DIR='C:\Users\12345678901234567890\AppData\Local\miniconda3\pkgs\'
+PKG_DIRNAME="isabelle-$VERSION-$ISA_BUILD_NUMBER\\"
+MAX_REL=$(( 259 - ${#PKGS_DIR} - ${#PKG_DIRNAME} ))
 path_lengths() {
   ( cd "$TREE" && find . -mindepth 1 | sed 's|^\./||' \
       | awk -v p="isa/" '{ print length(p $0), p $0 }' | sort -rn )
@@ -301,11 +286,11 @@ longest_len=${longest%% *}
 longest_path=${longest#* }
 
 if [ "$SUBDIR" = win-64 ]; then
-  echo "longest path in the package: $longest_len chars (budget $MAX_REL under $PKGS_DIR, ENFORCED for win-64)"
+  echo "longest path in the package: $longest_len chars (budget $MAX_REL under $PKGS_DIR$PKG_DIRNAME, ENFORCED for win-64)"
   echo "  $longest_path"
-  echo "  so an environment prefix (and a pkgs dir) may be up to $(( 259 - longest_len )) characters, incl. its trailing backslash"
+  echo "  so conda's pkgs dir may be up to $(( 259 - ${#PKG_DIRNAME} - longest_len )) characters and an environment prefix up to $(( 259 - longest_len )), each incl. its trailing backslash"
   if [ "$longest_len" -gt "$MAX_REL" ]; then
-    echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit under $PKGS_DIR."
+    echo "::error::longest in-package path is $longest_len characters, over the $MAX_REL limit under $PKGS_DIR$PKG_DIRNAME."
     echo "          Windows (MAX_PATH=259, long paths off by default) will fail to unpack this."
     echo "          The ten longest:"
     path_lengths | sed -n 1,10p | while read -r l q; do echo "::error::  $l  $q"; done

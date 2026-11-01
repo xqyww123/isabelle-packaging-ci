@@ -1,11 +1,13 @@
 """Re-run the post-link of every installed package that depends on `isabelle` directly.
 
-The `isabelle` package's post-link runs this.  Re-installing isabelle (`--force-reinstall`, or a
-new build) re-links every file of the package, which undoes the feature packages' patches in
-$PREFIX/isa, and its pre-unlink deletes the Isabelle user directory with every component
-registration in it; but conda runs only the hooks of the packages a transaction replaces, so
-this is what brings them back (PACKAGING_DESIGN.md §11.2).  So every such post-link must be safe
-to re-run (RELEASE_CHECKLIST.md §4).
+The `isabelle` package's post-link runs this.  Re-installing isabelle re-links every file of the
+package, which undoes the feature packages' patches in $PREFIX/isa, and its pre-unlink deletes
+the Isabelle user directory with every component registration in it; but conda runs only the
+hooks of the packages a transaction replaces.  So after `--force-reinstall isabelle` this is what
+brings back both the patches and the registrations.  A new isabelle build replaces the feature
+packages too, and they re-patch through their own post-links, so there it brings back only the
+registrations (PACKAGING_DESIGN.md §11.2).  So every such post-link must be safe to re-run
+(RELEASE_CHECKLIST.md §4).
 
 Only direct dependents count, dependencies first.  Each script runs as conda runs a post-link
 (run_script in conda/core/link.py): in the activated environment, which it inherits from the

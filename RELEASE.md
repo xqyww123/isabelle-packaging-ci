@@ -10,7 +10,7 @@ Pause the download counter while you release (`RELEASE_CHECKLIST.md`, "The chann
 
 ## 0. Register the release (once per Isabelle release)
 
-Skip this if `releases/<R>/` exists. Otherwise create, and commit:
+Skip this if `releases/<R>/` exists. Otherwise create, commit and push:
 
 - `releases/<R>/SHA256SUMS`: exactly five lines, `<sha256>  <file>`, for `<R>_linux.tar.gz`,
   `<R>_linux_arm.tar.gz`, `<R>_macos.tar.gz`, `<R>_macos_arm.tar.gz` and `<R>.exe`, copied from
@@ -19,9 +19,15 @@ Skip this if `releases/<R>/` exists. Otherwise create, and commit:
   `https://isabelle.in.tum.de/repos/isabelle/raw-tags`. Never copy it from a bundle: the CI
   checks the bundles against it.
 
-Then run `ci.yml` (step 2's command). If `scripts/pack.sh` stops at an anchor ("upstream layout
-changed") or `scripts/check_pristine.py` reports a difference, the new release's tree differs
-from what the packaging expects: adapt that step before going on.
+Then check the new release without publishing:
+
+```bash
+gh workflow run ci.yml --repo xqyww123/isabelle-packaging-ci -f release=<R>
+```
+
+If `scripts/pack.sh` stops at an anchor ("upstream layout changed") or `scripts/check_pristine.py`
+reports a difference, the new release's tree differs from what the packaging expects: adapt that
+step before going on.
 
 ## 1. Pick the build number
 
@@ -61,8 +67,14 @@ until the first run has finished.
 If a job fails:
 
 - `build`: nothing is published. If only a GUI check failed with "a release needs a GUI
-  verdict" (Claude's quota was used up), press **Re-run failed jobs** once Claude is available
-  again. Otherwise fix the cause and dispatch again with the same `<N>`.
+  verdict", the warning above that error says why Claude did not judge it:
+  - a used-up quota: press **Re-run failed jobs** after it resets;
+  - "Not logged in" or an expired token: renew the `CLAUDE_CODE_OAUTH_TOKEN` secret
+    (`claude setup-token`), then press **Re-run failed jobs**;
+  - "could not tell whether only the failing lemma is flagged": press **Re-run failed jobs**
+    once; if it says so again, look at the uploaded screenshot and fix whatever hides the marker.
+
+  Otherwise fix the cause and dispatch again with the same `<N>`.
 - `publish` or `smoke`, for a cause outside the workflow files (a secret, R2, a transient
   failure): fix it and press **Re-run failed jobs** on the same run, within 7 days. The
   `publish` job accepts a file that is already on the channel with the same bytes, so the

@@ -1,7 +1,9 @@
 """Assert that a conda package's isa/ is the official Isabelle tree plus the packaging changes.
 
     check_pristine.py manifest <tree> <manifest.json>
-        record the official tree (pack.sh, right after unpacking, before it changes anything)
+        record the official tree (pack.sh step 1a, before anything changes it)
+    check_pristine.py markers <tree> <manifest.json>
+        put the empty marker into each officially empty directory (pack.sh step 2)
     check_pristine.py permissions <tree>
         win-64: make Cygwin's permission lists name only what ships (pack.sh step 3)
     check_pristine.py compare <subdir> <manifest.json> <package.conda>
@@ -24,8 +26,7 @@ import tarfile
 import zipfile
 from typing import IO, Iterator
 
-MARKER = ".conda-keep"
-EMPTY_FILE = ["file", hashlib.sha256(b"").hexdigest()]
+MARKER, MARKER_BYTES = ".conda-keep", b""
 
 # What the package differs in, per platform (conda subdir; "*" is every platform).
 EXPECTED = {
@@ -69,24 +70,40 @@ def manifest(tree: str) -> dict:
     return result
 
 
-def restrict(listed: list, ships: set) -> list:
-    """The entries of a Cygwin permission list that name a shipped path: a file or symlink, a
-    directory with one of them beneath (conda creates no other), or the tree itself."""
-    return [p for p in listed if p == "." or p in ships]
+def markers(official: dict) -> list:
+    """Where the empty markers go: into each empty directory of the manifest."""
+    return [f"{p}/{MARKER}" for p, v in official.items() if v == ["empty"]]
+
+
+def write_markers(tree: str, official: dict) -> int:
+    paths = markers(official)
+    for m in paths:
+        path = os.path.join(tree, m)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(MARKER_BYTES)
+    return len(paths)
+
+
+def restrict(listed: list, files: set) -> list:
+    """The entries of a Cygwin permission list that name a shipped path: one of `files` (relative
+    paths, as shipped() yields them), a directory above one (conda creates no other), or the tree."""
+    keep = {"."}
+    for rel in files:
+        while rel:
+            keep.add(rel)
+            rel = rel.rpartition("/")[0]
+    return [p for p in listed if p in keep]
 
 
 def permissions(tree: str) -> None:
-    ships = set()
-    for rel, _ in shipped(tree):
-        while rel:
-            ships.add(rel)
-            rel = rel.rpartition("/")[0]
+    files = {rel for rel, _ in shipped(tree)}
     lists = os.path.join(tree, "contrib", "cygwin", "isabelle", "permissions")
     for name in sorted(os.listdir(lists)):
         path = os.path.join(lists, name)
         with gzip.open(path) as f:
             listed = [os.fsdecode(p) for p in f.read().split(b"\0") if p]
-        kept = restrict(listed, ships)
+        kept = restrict(listed, files)
         if kept != listed:                      # an unchanged list keeps its official bytes
             with open(path, "wb") as f:
                 f.write(gzip.compress(b"".join(os.fsencode(p) + b"\0" for p in kept), mtime=0))
@@ -123,7 +140,8 @@ def package(conda: str) -> dict:
 
 def as_packaged(official: dict) -> dict:
     """The official tree as a conda package carries it: each empty directory holds the marker."""
-    return dict((f"{p}/{MARKER}", EMPTY_FILE) if v == ["empty"] else (p, v) for p, v in official.items())
+    marker = ["file", hashlib.sha256(MARKER_BYTES).hexdigest()]
+    return {p: v for p, v in official.items() if v != ["empty"]} | {m: marker for m in markers(official)}
 
 
 def compare(subdir: str, official: dict, packaged: dict) -> list:
@@ -153,6 +171,11 @@ def main(args: list) -> int:
         case ["manifest", tree, out]:
             with open(out, "w") as f:
                 json.dump(manifest(tree), f)
+            return 0
+        case ["markers", tree, official]:
+            with open(official) as f:
+                n = write_markers(tree, json.load(f))
+            print(f"restored {n} empty directory(ies) via {MARKER} markers")
             return 0
         case ["permissions", tree]:
             permissions(tree)

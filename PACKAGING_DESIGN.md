@@ -1,104 +1,124 @@
-# Isabelle + AoA 打包发布方案(实证版)
+# Isabelle + AoA packaging and release plan (empirically verified edition)
 
-> **本文档地位**:这是打包发布的**权威参考**。2026-07-11/12 的一轮工作把此前的设计**推翻重写**了
-> —— 旧方案(复用用户已装的 Isabelle + conda post-link 写全局 settings)已作废,理由见 §9。
-> 本文档中的每条结论都标注了**证据来源**;凡标「实测」的都是在真机/真 CI 上跑出来的,不是推断。
+> **Status of this document**: this is the **authoritative reference** for packaging and releasing. A round of work on
+> 2026-07-11/12 **overturned and rewrote** the earlier design — the old plan (reuse the Isabelle that users already have
+> installed + a conda post-link that writes global settings) is void; the reasons are in §9.
+> Every conclusion in this document is marked with its **source of evidence**; everything marked "measured" was run on a
+> real machine / real CI, not inferred.
 >
-> **2026-10-31 起(Isabelle2026)的现状见 §11。** 一句话:`isabelle` 包就是**官方平台包原样**(连同官方自带的
-> Pure/HOL heap),只加几处打包改动;CI 不再自己构建、不打补丁,补丁改由 feature 包分发。§1、§2、§4、§5.0–5.2、
-> §7.9、§7.11 写的是 Isabelle2025-2 时"自己构建打补丁版"的做法,留作记录,各节开头有标注。
+> **For the state from 2026-10-31 on (Isabelle2026), see §11.** In one sentence: the `isabelle` package is **the official
+> platform bundle as it is** (together with the Pure/HOL heaps that come with the official bundle), plus a few packaging
+> changes; the CI no longer builds anything itself and applies no patches, and patches are distributed by feature packages
+> instead. §1, §2, §4, §5.0–5.2, §7.9 and §7.11 describe the Isabelle2025-2-era approach of "building a patched version
+> ourselves"; they are kept as a record, and each of those sections says so at its start.
 
 ---
 
-## 1. 目标
+## 1. Goal
 
-把 `contrib/` 下的 AoA 工具链(`Isa-Mini`、`Isa-REPL`、`Isabelle_RPC`、`Semantic_Embedding`、
-`Performant_Isabelle_ML`、`auto_sledgehammer`)发布出去,让用户能装上并在 Isabelle 里 `by aoa`。
+Release the AoA toolchain under `contrib/` (`Isa-Mini`, `Isa-REPL`, `Isabelle_RPC`, `Semantic_Embedding`,
+`Performant_Isabelle_ML`, `auto_sledgehammer`), so that users can install it and `by aoa` in Isabelle.
 
-【2026-10-31 起不再成立:补丁改由 feature 包分发,`isabelle` 包是原版,见 §11。】
+【No longer true from 2026-10-31 on: patches are distributed by feature packages instead, and the `isabelle` package is
+unpatched; see §11.】
 
-前置事实:AoA 依赖的 Isabelle **必须打过 `my_better_isabelle_prover` 的补丁**
-(`register_thy` 是 Isa-REPL 的硬依赖,`pide_control` 是 Isabelle-MCP 的硬依赖)。
-所以「发布 AoA」不可避免地要「发布一个打过补丁的 Isabelle」。
-
----
-
-## 2. 核心决策
-
-【Isabelle2025-2 时的决策,2026-10-31 起被 §11 取代:不再自己构建,直接打包官方平台包。】
-
-**我们自己跑一条「打补丁版 Isabelle」的官方级发布流水线,产出各平台完整包,再发到 conda。**
-
-- 从**官方 hg 仓库**取某个 release 的精确 changeset;
-- 打上我们的补丁并 **`hg commit`**;
-- 跑**官方的 `Admin/build_release`**(不重造轮子);
-- 每平台产出与官方同构的 bundle(含**预建的、打过补丁的 HOL heap**);
-- 用 GitHub CI 自动化;
-- 打成 conda 包发到自建 channel。
-
-三个支撑这个决策的硬事实(详见 §3):
-1. **conda 要能干净管理,文件就必须打进包**——post-link 下载的东西 conda 根本不跟踪。
-2. **heap 每平台各异、不能共享**,且**官方发行包本来就自带预建 HOL heap**——要做到官方级体验,
-   就得自己每平台 build 一遍打过补丁的 heap。
-3. **补丁改了 Pure/ML 与 Scala**,必须经 `scala_build` 与 `build_heaps` 才能生效——
-   而 `build_release` 天然会做这两件事。
+Prerequisite fact: the Isabelle that AoA depends on **must carry the patches of `my_better_isabelle_prover`**
+(`register_thy` is a hard dependency of Isa-REPL, `pide_control` a hard dependency of Isabelle-MCP).
+So "releasing AoA" unavoidably means "releasing a patched Isabelle".
 
 ---
 
-## 3. 实证事实清单(本方案的地基)
+## 2. Core decision
 
-### 3.1 conda 机制
+【The decision of the Isabelle2025-2 era, superseded by §11 from 2026-10-31 on: we no longer build anything ourselves, we
+package the official platform bundles directly.】
 
-| 事实 | 证据 |
+**We run our own official-grade release pipeline for a "patched Isabelle", produce a complete bundle for each platform,
+and publish them to conda.**
+
+- Take the exact changeset of a release from the **official hg repository**;
+- apply our patches and **`hg commit`**;
+- run **the official `Admin/build_release`** (no reinventing the wheel);
+- for each platform, produce a bundle with the same structure as the official one (including a **prebuilt, patched HOL
+  heap**);
+- automate it with GitHub CI;
+- package the bundles as conda packages and publish them to a self-hosted channel.
+
+Three hard facts that support this decision (details in §3):
+1. **For conda to manage it cleanly, the files must be inside the package** — conda does not track anything a post-link
+   downloads at all.
+2. **Heaps differ per platform and cannot be shared**, and **the official bundles already ship a prebuilt HOL heap** — to
+   give an official-grade experience, we have to build the patched heap ourselves, once per platform.
+3. **The patches change Pure/ML and Scala**, and take effect only through `scala_build` and `build_heaps` —
+   which `build_release` does by its nature.
+
+---
+
+## 3. List of empirical facts (the foundation of this plan)
+
+### 3.1 conda mechanics
+
+| Fact | Evidence |
 |---|---|
-| post-link **不能交互** | `Popen(stdout=PIPE)` + `communicate()`,`stdin=None`(`conda/gateways/subprocess.py:58,62`) |
-| post-link **成功时 stdout 不可靠显示** | conda-build 文档明令「除非出错,不要写 stdout/stderr」 |
-| **post-link 在 `$PREFIX` 新建的文件,conda 不跟踪** | 不在包的 `info/files` → `conda remove` 不删、`conda list` 不见、不可复现 |
-| **pre-unlink 不保证执行** | 用户直接删 env 目录时不会逐包跑 → 外部副作用可能永久残留 |
-| ⇒ **「conda 干净管理」⟺「文件打进包」** | 这是机制,不是政策 |
-| **业界已弃用「post-link 下载」** | `cudatoolkit-dev`(post-link 下载)**已于 2025-10-01 归档**;现代 CUDA 全部把文件打进包,用 `outputs` 拆包 + 元包聚合 |
-| conda-build 对 post-link 的规定 | 「能不用就不用」「只碰正在安装的文件」「只依赖 rm/cp/mv/ln」 |
-| conda-forge 约束 | 无网构建 + SHA256 锁定 + 频道不可删改(可复现) |
+| post-link **cannot be interactive** | `Popen(stdout=PIPE)` + `communicate()`, `stdin=None` (`conda/gateways/subprocess.py:58,62`) |
+| post-link's **stdout is not reliably shown on success** | the conda-build documentation says explicitly "do not write to stdout/stderr unless there is an error" |
+| **conda does not track files a post-link creates in `$PREFIX`** | not in the package's `info/files` → `conda remove` does not delete them, `conda list` does not show them, not reproducible |
+| **pre-unlink is not guaranteed to run** | when users delete an env directory directly, the packages' scripts are not run one by one → external side effects may remain forever |
+| ⇒ **"conda manages it cleanly" ⟺ "the files are inside the package"** | this is mechanism, not policy |
+| **the industry has abandoned "post-link downloads"** | `cudatoolkit-dev` (downloads in post-link) **was archived on 2025-10-01**; modern CUDA puts all files into packages, split with `outputs` + aggregated by a metapackage |
+| conda-build's rules for post-link | "avoid it if you can", "touch only the files being installed", "depend only on rm/cp/mv/ln" |
+| conda-forge constraints | offline builds + SHA256 locking + the channel cannot be deleted from or altered (reproducible) |
 
-### 3.2 conda 命名与版本
+### 3.2 conda naming and versions
 
-- 包标识 = **`name-version-build`** 三段,以 `-` 分隔 ⇒ **version 里不能有 `-`**。
-- ⇒ **`Isabelle2025-2` 必须写成 conda version `2025.2`**。
-- build string **只是 build 号**(每个字符都占 Windows 的 MAX_PATH,§3.6);官方 changeset 写在包描述和
-  `isa/etc/ISABELLE_ID` 里。版本号由发行版名换算(`Isabelle2026` → `2026`),只在 `scripts/pack.sh` 一处算。
-- **同版本改内容 ⇒ bump build number**(`_0` → `_1`);别原地 `--force` 覆盖(客户端按文件名缓存,用户会吃旧包)。
-- 排序:conda 自己的 VersionOrder(数字段按数值比;`dev` 特殊;epoch `N!` 优先级最高)。
-- **包名 `isabelle` 完全空着**(anaconda.org API 实测:`conda-forge/isabelle` → 404;全站搜 `name=isabelle`
-  只有 `isabelle-client`,是另一个名字)。而且 conda 包名是**按 channel 的命名空间**,不存在全局占用。
+- A package's identity = the three parts **`name-version-build`**, separated by `-` ⇒ **a version cannot contain `-`**.
+- ⇒ **`Isabelle2025-2` must be written as conda version `2025.2`**.
+- The build string **is only the build number** (every character of it costs Windows MAX_PATH, §3.6); the official
+  changeset is in the package description and in `isa/etc/ISABELLE_ID`. The version is derived from the release name
+  (`Isabelle2026` → `2026`), computed in one place only, `scripts/pack.sh`.
+- **Changed content in the same version ⇒ bump the build number** (`_0` → `_1`); never overwrite in place with `--force`
+  (clients cache by filename, so users would get the old package).
+- Ordering: conda's own VersionOrder (numeric parts compare by value; `dev` is special; an epoch `N!` has the highest
+  priority).
+- **The package name `isabelle` is completely free** (measured with the anaconda.org API: `conda-forge/isabelle` → 404; a
+  site-wide search for `name=isabelle` finds only `isabelle-client`, which is a different name). Moreover, conda package
+  names are **namespaced per channel**; there is no global claim on a name.
 
-### 3.3 conda channel —— **我们自建,托管在 Cloudflare R2**
+### 3.3 conda channel — **self-hosted, on Cloudflare R2**
 
-- **只有 channel 拥有者能上传**。要让多人发布 ⇒ 建 **Organization**,把维护者加为成员。
-- **别人无需你的许可**就能在自己的 channel 发包并依赖你的包。但 **conda 依赖按包名解析、不绑 channel** ⇒
-  **安装者必须能看到你的 channel**(`-c 你的channel` 或写进 `.condarc`),否则 `PackagesNotFoundError`。
-  下游作者**无法在包里焊死依赖来源**——channel 可发现性是最终用户的责任。
+- **Only the channel owner can upload.** To let several people publish ⇒ create an **Organization** and add the
+  maintainers as members.
+- **Others need no permission from you** to publish packages on their own channel that depend on yours. But **conda
+  resolves dependencies by package name, not bound to a channel** ⇒ **the installer must be able to see your channel**
+  (`-c <your channel>` or in `.condarc`), otherwise `PackagesNotFoundError`.
+  A downstream author **cannot weld the source of a dependency into the package** — making the channel discoverable is
+  the end users' responsibility.
 
-#### ❌ anaconda.org 托管不了我们(已查证)
-- **免费账号只有 3 GB 包存储**(官方 FAQ 原文:"up to 3GB of storage space for any packages you upload")。
-- **付费也没有自助扩容通道**:pricing 页的 FREE / $15 / $50 / Custom 里,那些存储数字(5/10/20 GB)
-  **是"云笔记本存储",不是 anaconda.org 的包托管额度**;官方文档**完全没提**付费能加包存储。
-- 我们的需求:`isabelle` 包 **~1 GB × 4 平台 ≈ 4 GB / 每个版本**,且**按版本与 build number 累积**。
-  ⇒ **3 GB 连一个版本都放不下,上线即爆。**
+#### ❌ anaconda.org cannot host us (verified)
+- **A free account has only 3 GB of package storage** (the official FAQ verbatim: "up to 3GB of storage space for any
+  packages you upload").
+- **Paying does not offer a self-service way to get more either**: on the pricing page's FREE / $15 / $50 / Custom, the
+  storage numbers (5/10/20 GB) **are "cloud notebook storage", not anaconda.org's package hosting quota**; the official
+  documentation **does not mention at all** that paying adds package storage.
+- Our need: the `isabelle` package is **~1 GB × 4 platforms ≈ 4 GB / per version**, and it **accumulates per version and
+  build number**.
+  ⇒ **3 GB does not hold even one version; it would overflow the moment we go live.**
 
-#### ✅ 定案:自建 channel,静态托管在 R2
-conda channel 本质就是**一棵静态文件树 + 各平台的 `repodata.json`**,任何 HTTP 服务器都能当 channel。
+#### ✅ Decision: a self-hosted channel, statically hosted on R2
+A conda channel is essentially **a tree of static files + a `repodata.json` per platform**; any HTTP server can serve as a
+channel.
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| **R2 bucket** | **`conda`**(专用新 bucket,公开读) |
-| **S3 API endpoint** | `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com`(bucket 名 `conda`) |
-| **channel 域名(用户用的)** | **`https://conda.qiyuan.me`**(R2 custom domain → bucket 根) |
-| **用户命令** | `conda install -c https://conda.qiyuan.me isabelle` |
-| **CI 凭据** | `CONDA_R2_ACCESS_KEY_ID` / `CONDA_R2_SECRET_ACCESS_KEY` / `CONDA_R2_TOKEN_VALUE`(本机在 `secret.sh`,**已 gitignore**;CI 里放 GitHub secrets) |
-| **上传** | 任何 S3 兼容客户端(`aws s3 --endpoint-url=…` / `rclone` / boto3) |
-| **索引** | 每次上传后跑 `conda index`(或 `rattler-index`)重新生成各 `repodata.json` 再传上去 |
+| **R2 bucket** | **`conda`** (a new, dedicated bucket, publicly readable) |
+| **S3 API endpoint** | `https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com` (bucket name `conda`) |
+| **channel domain (what users use)** | **`https://conda.qiyuan.me`** (R2 custom domain → bucket root) |
+| **users' command** | `conda install -c https://conda.qiyuan.me isabelle` |
+| **CI credentials** | `CONDA_R2_ACCESS_KEY_ID` / `CONDA_R2_SECRET_ACCESS_KEY` / `CONDA_R2_TOKEN_VALUE` (locally in `secret.sh`, **gitignored**; in CI as GitHub secrets) |
+| **upload** | any S3-compatible client (`aws s3 --endpoint-url=…` / `rclone` / boto3) |
+| **index** | after every upload, run `conda index` (or `rattler-index`) to regenerate each `repodata.json`, then upload those |
 
-channel 的目录结构(= bucket 根):
+The channel's directory layout (= the bucket root):
 ```
 conda.qiyuan.me/
 ├── noarch/          repodata.json + *.conda
@@ -109,68 +129,75 @@ conda.qiyuan.me/
 └── osx-arm64/
 ```
 
-**为什么用子域名而不是 `qiyuan.me/conda`**:R2 的 custom domain 是 **主机名 → bucket 根** 的映射;
-顶级路径要额外写 Cloudflare Worker 做路径路由,多一个会坏的活动部件。
+**Why a subdomain and not `qiyuan.me/conda`**: an R2 custom domain is a mapping **host name → bucket root**;
+a top-level path would need an extra Cloudflare Worker for path routing, one more moving part that can break.
 
-**为什么用专用 bucket**:CI 需要**写**权限 —— 它的 token 只应能写这个 bucket,
-**绝不能有权写 semantic DB 那个生产 bucket**(最小权限);而且 conda 包按版本累积,
-生命周期/保留策略与 DB 完全不同。
+**Why a dedicated bucket**: the CI needs **write** access — its token should be able to write only this bucket, and
+**must never have the right to write the production bucket of the semantic DB** (least privilege); moreover, conda
+packages accumulate per version, so their lifecycle/retention policy is entirely different from the DB's.
 
-#### ✅ 已端到端打通(实测)
+#### ✅ Working end to end (measured)
 ```
 $ conda create -n smoke -c https://conda.qiyuan.me --override-channels channel-smoke-test
-  channel-smoke-test  0.1.1  h4616a5c_0     ← 从我们自己的 channel 解析、下载、安装成功
+  channel-smoke-test  0.1.1  h4616a5c_0     ← resolved, downloaded and installed from our own channel
 ```
-自定义域名**即时生效**;Content-Type / 压缩协商 / CORS **都不用管**;**R2 multipart 上传可用**(1GB 大包 OK)。
-`channel-smoke-test` **留在 channel 里当长期健康探针**——任何时候能装上,就说明链路是好的。
+The custom domain **takes effect immediately**; Content-Type / compression negotiation / CORS **need no attention**;
+**R2 multipart upload works** (a large 1 GB package is OK).
+`channel-smoke-test` **stays on the channel as a long-term health probe** — whenever it installs, the chain is working.
 
-#### CDN 缓存:**是传播延迟,不是正确性问题**(措辞已修正)
+#### CDN caching: **a propagation delay, not a correctness problem** (wording corrected)
 
-**只影响 manifest,不影响包本体**(实测):Cloudflare **按文件扩展名**决定缓存 ⇒
+**It affects only the manifest, not the packages themselves** (measured): Cloudflare decides caching **by file
+extension** ⇒
 
-| 文件 | Cloudflare 行为 |
+| File | Cloudflare behaviour |
 |---|---|
-| `repodata.json` | **DYNAMIC(不缓存)** |
-| **`repodata.json.zst`** | **HIT,`max-age=14400`(4h)** ← 唯一被缓存的 |
-| `*.conda`(包本体) | **DYNAMIC(不缓存)** |
+| `repodata.json` | **DYNAMIC (not cached)** |
+| **`repodata.json.zst`** | **HIT, `max-age=14400` (4h)** ← the only one cached |
+| `*.conda` (the packages themselves) | **DYNAMIC (not cached)** |
 
-conda 优先取 `.zst` ⇒ **新发布的版本最多 4 小时后才被看到**(实测:发了 0.1.1,干净的 conda 装到 0.1.0)。
+conda prefers the `.zst` ⇒ **a newly published version may become visible only up to 4 hours later** (measured: we
+published 0.1.1, and a clean conda installed 0.1.0).
 
-**这不是"发错包",是延迟**:包文件**不可变**(名字含 version+build)、**旧包我们不删** ⇒
-用户拿到陈旧索引只会装到一个**真实存在、能用的旧版本**,不会损坏。
-边缘节点之间短暂不一致,在包生态里(conda-forge / PyPI 都有 CDN)是**常态**,用户本来也不会同时更新。
+**This is not "publishing the wrong package"; it is a delay**: package files are **immutable** (their names contain
+version+build), and **we do not delete old packages** ⇒
+users who get a stale index only install an **old version that really exists and works**; nothing breaks.
+Brief inconsistency between edge nodes is **normal** in package ecosystems (conda-forge / PyPI both have CDNs), and users
+do not all update at the same moment anyway.
 
-**延迟有多长**(实测 + 机制推断):单层 TTL **4h**;**conda 客户端自己也缓存 repodata 4h**
-(它遵守 `cache-control`)⇒ 叠加起来**理论最长 ~8h**(若开了 Tiered Cache 再 +4h)。
-实践中常远短于此(低流量对象在边缘会被较快淘汰)。
+**How long the delay is** (measured + inferred from the mechanism): one layer's TTL is **4h**; **the conda client also
+caches repodata for 4h itself** (it honours `cache-control`) ⇒ stacked, **a theoretical maximum of ~8h** (+4h more if
+Tiered Cache is on).
+In practice it is often much shorter (low-traffic objects are evicted from the edge fairly quickly).
 
-**唯一真正的正确性风险**:如果哪天**删/撤回**一个包,陈旧索引会指向已消失的文件 → 404。
-⇒ **规避:永不删包,改内容只 bump `build_number`**(本来就是我们的规矩)。
+**The only real correctness risk**: if one day we **delete/withdraw** a package, a stale index would point to a file that
+is gone → 404.
+⇒ **Avoidance: never delete packages; for changed content only bump `build_number`** (which is our rule anyway).
 
-#### ✅ 正确的解法:Cloudflare 的默认对我们是**反的**,用两条 Cache Rule 纠正
+#### ✅ The right fix: Cloudflare's defaults are **the opposite** of what we need; two Cache Rules correct them
 
-| | 应该怎样 | Cloudflare 默认 |
+| | What it should be | Cloudflare's default |
 |---|---|---|
-| **manifest**(`repodata*`)—— **可变** | **不该缓存** | ❌ 偏偏缓存 4h |
-| **包**(`*.conda`)—— **不可变** | **正该缓存**(用户下载快、少打源站) | ❌ 偏偏没缓存 |
+| **manifest** (`repodata*`) — **mutable** | **should not be cached** | ❌ cached for 4h, of all things |
+| **package** (`*.conda`) — **immutable** | **should be cached** (fast downloads for users, fewer hits on the origin) | ❌ not cached, of all things |
 
 ```
-1)  path contains "repodata"   → Bypass cache            （manifest 永远新鲜）
-2)  path ends with ".conda"    → Cache, Edge TTL 1 month （包不可变，缓存 100% 安全，纯赚）
+1)  path contains "repodata"   → Bypass cache            (the manifest is always fresh)
+2)  path ends with ".conda"    → Cache, Edge TTL 1 month (packages are immutable, so caching is 100% safe, pure gain)
 ```
-设了第 1 条,**`--no-zst` 就完全不需要**。`conda index --no-zst` 只是**没有 zone 权限时的替代品**
-(效果相同:不产生 `.zst` → conda 回落到本来就不缓存的 `.json`)。
-我们的 repodata 只有**几 KB**(对照 conda-forge 的 linux-64 有 ~200MB),压不压缩无所谓。
+With rule 1 set, **`--no-zst` is not needed at all**. `conda index --no-zst` is only **the substitute when we have no zone
+permissions** (same effect: no `.zst` is produced → conda falls back to the `.json`, which is not cached anyway).
+Our repodata is only **a few KB** (compare conda-forge's linux-64 at ~200MB), so whether it is compressed does not matter.
 
-#### 工具链(实测定案)
-| 环节 | 工具 | 说明 |
+#### Toolchain (decided by measurement)
+| Stage | Tool | Notes |
 |---|---|---|
-| 建包 | **`rattler-build`** | 单个 Rust 二进制,~2 秒;直接产现代 `.conda`;conda-build 已进维护模式 |
-| 索引 | **`conda-index`** | 官方实现,带 sqlite 增量缓存(`<channel>/<subdir>/.cache/`),对 1GB 大包友好 |
-| 上传 | **`rclone` ≥1.74**(conda-forge 版) | ⚠️ **Ubuntu 自带的 1.60 对 R2 有两个 bug**:不加 `--s3-no-check-bucket` → 403;**每个 PUT 首次必失败**(1GB 包等于传两遍) |
+| build the package | **`rattler-build`** | a single Rust binary, ~2 seconds; produces a modern `.conda` directly; conda-build is in maintenance mode |
+| index | **`conda-index`** | the official implementation, with an incremental sqlite cache (`<channel>/<subdir>/.cache/`), friendly to large 1GB packages |
+| upload | **`rclone` ≥1.74** (the conda-forge build) | ⚠️ **Ubuntu's own 1.60 has two bugs against R2**: without `--s3-no-check-bucket` → 403; **the first attempt of every PUT always fails** (a 1GB package is uploaded twice) |
 
 ```bash
-# 凭据(环境变量配 remote,不落盘)
+# credentials (the remote is configured through environment variables; nothing is written to disk)
 source secret.sh
 export RCLONE_CONFIG_R2_TYPE=s3 RCLONE_CONFIG_R2_PROVIDER=Cloudflare RCLONE_CONFIG_R2_REGION=auto
 export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$CONDA_R2_ACCESS_KEY_ID"
@@ -183,107 +210,122 @@ rclone sync $CH R2:conda/ --s3-no-check-bucket --exclude '.cache/**' \
        --s3-chunk-size 64M --s3-upload-concurrency 4 --transfers 2 --progress
 ```
 
-**大包注意**:
-- **必须保留一份与 bucket 一致的本地 channel 目录** —— `conda index` 只索引本地文件,而
-  `rclone sync` 会**删掉 bucket 里本地没有的文件**。发布前先 `rclone sync R2:conda/ $CH/` 拉回。
-- **保留本地 `.cache/`(sqlite 增量索引)**,但**上传时排除它**。
-- 包文件**不可变**:改内容就 **bump `build_number`**,别复用文件名(用户 pkgs 缓存 + CDN 都会给陈旧副本)。
-- **egress 免费**(R2),1GB 包分发无带宽成本。
+**Notes for large packages**:
+- **Keep a local channel directory identical to the bucket** — `conda index` indexes only local files, and
+  `rclone sync` **deletes the files in the bucket that are not there locally**. Before publishing, pull it back first with
+  `rclone sync R2:conda/ $CH/`.
+- **Keep the local `.cache/` (the incremental sqlite index)**, but **exclude it from the upload**.
+- Package files are **immutable**: for changed content **bump `build_number`**, never reuse a filename (users' pkgs caches
+  and the CDN would both serve stale copies).
+- **Egress is free** (R2), so distributing 1GB packages costs no bandwidth.
 
-### 3.4 Isabelle 的发布机制(源码级,`src/Pure/Admin/build_release.scala`)
+### 3.4 Isabelle's release mechanism (at source level, `src/Pure/Admin/build_release.scala`)
 
-【背景知识。2026-10-31 起 CI 不再跑 `build_release`:官方平台包就是它的产物,我们直接下载(§11)。】
+【Background knowledge. From 2026-10-31 on the CI no longer runs `build_release`: the official platform bundles are its
+output, and we download them directly (§11).】
 
-- **`Isabelle2025-2` = hg changeset `89701cf1768e`**(`.hgtags`;与发行版 `etc/ISABELLE_ID` 吻合)。
-- **精确源只能走官方 hg**(`https://isabelle.in.tum.de/repos/isabelle`);
-  GitHub 镜像 `isabelle-prover/mirror-isabelle` 的 **git tag 只到 2021**,拿不到 2025-2 的树
-  (它的 master 是 2025-2 之后的开发线,别用)。
-- **⚠️ `build_release` 从「已提交的 hg rev」做 archive,不是工作区**(`hg.archive(rev=id)`,
-  build_release.scala:439-453)。**改了工作区不 commit,补丁会被整个丢掉。** 这是最容易踩的坑。
-- **阶段一 `build_release_archive`**:`hg archive` → `other_isabelle.init`
-  (= 下载 native 组件 + **`scala_build`**(把补丁编进 `lib/classes/isabelle.jar`))
-  → **`build_doc -a`(需要完整 TeX Live)** → purge 掉 `Admin/`/`heaps`/`.hg` → 打出
-  **通用源码 archive `Isabelle2025-2.tar.gz`**(带编译好的 Scala,无 heap)。
-- **阶段二**:对每个平台 → 从官方 component 仓库(**`https://isabelle.sketis.net/components`**)
-  **下载**预编译 native 组件(polyml/jdk/E/Z3/cygwin…,版本以**该 rev 自带的 `Admin/components/main`** 为准,
-  **别用镜像 tip 的**,它已漂到 polyml-5.9.2-4/jdk-25)→ **`build_heaps`** → 按平台组包。
-- **`build_heaps` 不能跨架构**:本机 family ≠ 目标平台且没配 `build_host_<platform>` SSH 主机 ⇒ **直接报错**。
-  官方模型 = 一台协调机 + 每平台一台 SSH 构建主机。
-- **`-b SESSIONS` 默认为空**;官方发布清单(`Admin/Release/CHECKLIST`)实际传 **`-b HOL`** ⇒ 官方包**带 HOL heap**。
-- **`-S ARCHIVE`**:跳过阶段一(**连带跳过 hg、TeX、scala_build**),直接进平台组包 ⇒ **各平台 job 可复用同一份 archive**。
-  - 【实测】`build_release_archive` 若发现已存在的 archive 会**复用并跳过整段 build_doc**(省 ~30 分钟)。
-- **平台差异**:linux/linux_arm → `.tar.gz`;**macOS 是单个 universal 包**(一台 Apple Silicon 上
-  `ML_system_apple` false/true 双 build,同时产出 x86_64-darwin + arm64-darwin 两套 heap);
-  windows → launch4j `.exe` + 7z 自解压。**Isabelle 不发布 arm64-windows** ⇒ 「5 个架构」在 Isabelle 口径下是 **4 个 bundle**。
-- **bootstrap**:裸 hg checkout 用 `Admin/init`(`components -I` → `components -a` → `scala_build`)即可,
-  靠 repo 自带的 `isabelle_setup.jar` 引导,**不需要预装 Isabelle**。
+- **`Isabelle2025-2` = hg changeset `89701cf1768e`** (`.hgtags`; matches the release's `etc/ISABELLE_ID`).
+- **The exact sources are available only from the official hg** (`https://isabelle.in.tum.de/repos/isabelle`);
+  the GitHub mirror `isabelle-prover/mirror-isabelle` has **git tags only up to 2021**, so the 2025-2 tree cannot be had
+  from it (its master is the development line after 2025-2; do not use it).
+- **⚠️ `build_release` makes its archive from "the committed hg rev", not from the working directory**
+  (`hg.archive(rev=id)`, build_release.scala:439-453). **If you change the working directory and do not commit, the
+  patches are dropped entirely.** This is the easiest pitfall to fall into.
+- **Stage one, `build_release_archive`**: `hg archive` → `other_isabelle.init`
+  (= download the native components + **`scala_build`** (compiles the patches into `lib/classes/isabelle.jar`))
+  → **`build_doc -a` (needs a complete TeX Live)** → purge `Admin/`/`heaps`/`.hg` → produce
+  **the generic source archive `Isabelle2025-2.tar.gz`** (with compiled Scala, no heap).
+- **Stage two**: for each platform → **download** the precompiled native components (polyml/jdk/E/Z3/cygwin…) from the
+  official component repository (**`https://isabelle.sketis.net/components`**); the versions are those of **the
+  `Admin/components/main` that comes with that rev**, **not those of the mirror's tip**, which has drifted to
+  polyml-5.9.2-4/jdk-25 → **`build_heaps`** → assemble the bundle per platform.
+- **`build_heaps` cannot cross architectures**: if the local machine's family ≠ the target platform and no
+  `build_host_<platform>` SSH host is configured ⇒ **it fails outright**.
+  The official model = one coordinating machine + one SSH build host per platform.
+- **`-b SESSIONS` is empty by default**; the official release checklist (`Admin/Release/CHECKLIST`) actually passes
+  **`-b HOL`** ⇒ the official bundles **carry a HOL heap**.
+- **`-S ARCHIVE`**: skips stage one (**and with it hg, TeX and scala_build**) and goes straight to assembling the platform
+  bundles ⇒ **every platform job can reuse the same archive**.
+  - 【measured】 If `build_release_archive` finds an existing archive, it **reuses it and skips the whole build_doc
+    step** (saves ~30 minutes).
+- **Platform differences**: linux/linux_arm → `.tar.gz`; **macOS is a single universal bundle** (on one Apple Silicon
+  machine, two builds with `ML_system_apple` false/true produce both heaps, x86_64-darwin + arm64-darwin);
+  windows → launch4j `.exe` + 7z self-extractor. **Isabelle does not release arm64-windows** ⇒ "5 architectures" are
+  **4 bundles** in Isabelle's terms.
+- **bootstrap**: a bare hg checkout needs only `Admin/init` (`components -I` → `components -a` → `scala_build`),
+  bootstrapped by the repository's own `isabelle_setup.jar`; **no pre-installed Isabelle is needed**.
 
-### 3.5 heap(实测,下载 pristine 官方包比对)
+### 3.5 heap (measured, compared against downloaded pristine official bundles)
 
-- heap 存在 `heaps/<ML_IDENTIFIER>/`,**`ML_IDENTIFIER` 编码 polyml 版本 + 架构 + OS**:
+- Heaps live in `heaps/<ML_IDENTIFIER>/`, and **`ML_IDENTIFIER` encodes the polyml version + architecture + OS**:
 
-  | 平台 | ML_IDENTIFIER |
+  | Platform | ML_IDENTIFIER |
   |---|---|
   | Linux x64 | `polyml-5.9.2_x86_64_32-linux` |
   | Linux ARM | `polyml-5.9.2_arm64_32-linux` |
   | Windows x64 | `polyml-5.9.2_x86_64_32-windows` |
 
-- **三平台 Pure heap 的 sha256 全不同**;连**同架构不同 OS**(Linux-x64 vs Windows-x64,都是 `x86_64_32`)
-  也不同。Poly/ML saved state(`POLYSAVE` 魔数)本质是架构+OS 固有。
-  ⇒ **heap 不能跨平台共享,必须每平台各 build。**
-- **官方 pristine bundle 自带预建的 `Pure` 和 `HOL` heap**(HOL ~208MB)。
-- heap **可再分发、不内嵌 `ISABELLE_HOME` 绝对路径**(用户确认)⇒ 可以随包分发。
+- **The sha256 of the Pure heap differs on all three platforms**; it differs even for **the same architecture on
+  different OSes** (Linux-x64 vs Windows-x64, both `x86_64_32`). A Poly/ML saved state (magic number `POLYSAVE`) is
+  inherently specific to architecture+OS.
+  ⇒ **Heaps cannot be shared across platforms; each platform must build its own.**
+- **The official pristine bundles ship prebuilt `Pure` and `HOL` heaps** (HOL ~208MB).
+- Heaps **are redistributable and do not embed the absolute `ISABELLE_HOME` path** (confirmed by the owner) ⇒ they can be
+  distributed with the package.
 
-#### ⭐ heap 是**层级增量(delta)**,不是完整镜像
+#### ⭐ A heap is a **hierarchical increment (delta)**, not a full image
 
-子 session 的 heap **只存相对父 session 的差量**;运行时由 Poly/ML 的
-`SaveState.loadHierarchy ["Pure", "HOL", ...]` 按层级串起来加载。实测(同一台机、同一 ML_IDENTIFIER):
+A child session's heap **stores only the difference from its parent session**; at run time Poly/ML's
+`SaveState.loadHierarchy ["Pure", "HOL", ...]` loads them chained by hierarchy. Measured (same machine, same
+ML_IDENTIFIER):
 
-| heap | 大小 |
+| heap | size |
 |---|---|
 | `Pure` | 31 MB |
-| `HOL`(父 = Pure) | 336 MB |
-| **`Main`(父 = HOL)** | **3.8 MB** |
+| `HOL` (parent = Pure) | 336 MB |
+| **`Main` (parent = HOL)** | **3.8 MB** |
 
-**这条改变了成本估算**:
-- **加 `Main` 几乎免费**(+3.8 MB,构建时间近乎瞬时——它只是 HOL 之上的一个 `Main_Doc` theory)。
-- 同理,**我们自己的 AoA session heap(`Minilang_AoA` 链)也是 delta,不是几百 MB 的完整镜像** ⇒
-  将来若想预建它们让用户开箱即用,**包体积不是障碍**,真正的代价只是 **CI 构建时长**(要跑完
-  Auto_Sledgehammer / Semantic_Embedding / Isa_REPL / Minilang 那条链)。
+**This changes the cost estimate**:
+- **Adding `Main` is almost free** (+3.8 MB, near-instant build time — it is only one `Main_Doc` theory on top of HOL).
+- Likewise, **our own AoA session heaps (the `Minilang_AoA` chain) are deltas too, not full images of hundreds of MB** ⇒
+  if we ever want to prebuild them so users can use them out of the box, **package size is no obstacle**; the real cost
+  is only **CI build time** (the whole chain Auto_Sledgehammer / Semantic_Embedding / Isa_REPL / Minilang has to run).
 
-#### `Main` 是一个真实 session(别被 `(doc)` 误导)
-`src/Doc/ROOT:310`:`session Main (doc) in "Main" = HOL +`,含 theory `Main_Doc`。
-`isabelle sessions -a` 里有它,`isabelle sessions -b Main` 给出依赖链 `Pure → HOL → Main`。
-**我们的工具链用 `Main` 作默认 session**(官方发布只 `-b HOL`,不带 `Main`)⇒
-~~**我们必须 `-b HOL,Main`。**~~ 【2026-10-31 起包里只有官方自带的 Pure、HOL heap(owner 定):`Main` 由用到它的人
-第一次用时在该环境的用户目录里编,它只是 HOL 之上的一个小 delta。】
+#### `Main` is a real session (do not be misled by `(doc)`)
+`src/Doc/ROOT:310`: `session Main (doc) in "Main" = HOL +`, containing theory `Main_Doc`.
+`isabelle sessions -a` lists it, and `isabelle sessions -b Main` gives the dependency chain `Pure → HOL → Main`.
+**Our toolchain uses `Main` as its default session** (the official release has only `-b HOL`, without `Main`) ⇒
+~~**We must use `-b HOL,Main`.**~~ 【From 2026-10-31 on the package holds only the official Pure and HOL heaps (decided by
+the owner): `Main` is built by whoever uses it, on first use, in that environment's user directory; it is only a small
+delta on top of HOL.】
 
-#### 🔴🔴 `heaps/*/log/<S>.db` **必须随 heap 一起发**(2026-07-12 实测,差点让整条流水线白做)
+#### 🔴🔴 `heaps/*/log/<S>.db` **must ship with the heap** (measured 2026-07-12; it nearly made the whole pipeline worthless)
 
-`log/` 这个名字骗人:**`log/<S>.db` 不是日志,是 session 数据库**。
-`isabelle build` 判断"某 session 已建好且是最新的",**查的是这个 db,不是 heap 文件在不在**。
-官方 bundle 里就带着这些文件。
+The name `log/` is misleading: **`log/<S>.db` is not a log; it is the session database**.
+When `isabelle build` decides whether "a session is built and current", **it looks up this db, not whether the heap file
+exists**. The official bundles carry these files.
 
-CI 的 Job B–E 曾在上传 heap artifact 前 `rm -rf heaps/*/log`,后果:
+The CI's Job B–E once ran `rm -rf heaps/*/log` before uploading the heap artifacts, with this result:
 
-| | 装上包后第一次真实 build |
+| | the first real build after installing the package |
 |---|---|
-| **缺** `log/*.db` | `Building HOL ...` → **整整 20 分钟重编 HOL** |
-| **带** `log/*.db` | `Finished (0:00:01)` → **10 秒,直接加载 heap** |
+| **without** `log/*.db` | `Building HOL ...` → **a full 20 minutes recompiling HOL** |
+| **with** `log/*.db` | `Finished (0:00:01)` → **10 seconds, the heap is loaded directly** |
 
-两种情况下包都能正常安装、`isabelle version` 都能跑 —— **那 350MB 的 heap 只是死重**。
+In both cases the package installs normally and `isabelle version` runs — **those 350MB of heap are just dead weight**.
 
-⚠️ **`isabelle build -n` 是个假阳性检查,不能用来验收**:缺 db 时它照样报告"无需构建",
-而真 build 立刻重编 HOL。**验收必须真跑一个建在 `Main` 之上的 session,并在看到 `Building HOL` 时判失败。**
+⚠️ **`isabelle build -n` is a false-positive check and cannot be used for acceptance**: without the db it still reports
+"nothing to build", while a real build immediately recompiles HOL. **Acceptance must really run a session built on top of
+`Main`, and fail when it sees `Building HOL`.**
 
-### 3.6 Windows(真 Win11 VM + GitHub CI 实测)
+### 3.6 Windows (measured on a real Win11 VM + GitHub CI)
 
-- `bin/isabelle` 是**无扩展名的 Cygwin bash 脚本**;`cmd /c isabelle` → **9009 not recognized**。
-  ⇒ 必须提供 `isabelle.bat` 包装器:
+- `bin/isabelle` is **a Cygwin bash script without an extension**; `cmd /c isabelle` → **9009 not recognized**.
+  ⇒ We must provide an `isabelle.bat` wrapper:
   ```bat
   @echo off
   setlocal
-  set "ISABELLE_HOME=<Isabelle 根目录>"
+  set "ISABELLE_HOME=<Isabelle root directory>"
   set "HOME=%HOMEDRIVE%%HOMEPATH%"
   set "LANG=en_US.UTF-8"
   set "CHERE_INVOKING=true"
@@ -292,852 +334,1002 @@ CI 的 Job B–E 曾在上传 heap artifact 前 `rm -rf heaps/*/log`,后果:
   "%ISABELLE_HOME%\contrib\cygwin\bin\bash.exe" --login -c "exec isabelle \"$@\"" isabelle %*
   endlocal
   ```
-- **【实测·截图确认】`isabelle.bat jedit` 真的弹出完整 GUI**:窗口标题 `Isabelle2025-2/HOL - Scratch.thy`、
-  **`Prover: ready`**、Documentation 面板完整、HOL heap 已加载。**Windows 侧最大的未知数已关闭。**
-#### ✅ `isabelle.bat` 已定稿(控制台挂起问题已修复并验收)
+- **【measured · confirmed by screenshot】 `isabelle.bat jedit` really brings up the complete GUI**: window title
+  `Isabelle2025-2/HOL - Scratch.thy`, **`Prover: ready`**, the Documentation panel complete, the HOL heap loaded. **The
+  biggest unknown on the Windows side is closed.**
+#### ✅ `isabelle.bat` finalized (the console-hang problem fixed and accepted)
 
-**原问题**:链路 `cmd → bash → bash → java` 全同步 ⇒ 控制台一直挂着,**关掉它就杀死 jEdit**
-(java 挂在发起者的 console 上,收到 `CTRL_CLOSE_EVENT`)。
+**The original problem**: the chain `cmd → bash → bash → java` is entirely synchronous ⇒ the console stays hanging, and
+**closing it kills jEdit** (java is attached to the launching console and receives `CTRL_CLOSE_EVENT`).
 
-**最终方案:cygwin 的 `run.exe`**(GUI subsystem、隐藏 console)detach。
-**文件:`/home/qiyuan/qemu-win/isabelle.bat`**。
+**Final solution: cygwin's `run.exe`** (GUI subsystem, hidden console) to detach.
+**File: `/home/qiyuan/qemu-win/isabelle.bat`**.
 
-> ### 🔴 未完成:**它必须放进 `<ISABELLE_HOME>\bin\` 并自定位**
-> 当前版本**把路径写死了**(`set "ISABELLE_HOME=C:\isa\Isabelle2025-2"`)——那是测试期产物。
-> **conda 装到每个用户/环境都不同的 `$PREFIX`,写死路径的版本根本用不了。**
+> ### 🔴 Not finished: **it must go into `<ISABELLE_HOME>\bin\` and locate itself**
+> The current version **hard-codes the path** (`set "ISABELLE_HOME=C:\isa\Isabelle2025-2"`) — a leftover of the testing
+> phase. **conda installs into a `$PREFIX` that differs for every user/environment; a version with a hard-coded path is
+> useless.**
 >
-> **必须改成**:
-> - **位置:`<ISABELLE_HOME>\bin\isabelle.bat`**(与 Linux/macOS 的 `bin/isabelle` 同一位置
->   ⇒ 用户指引统一:"把 `<ISABELLE_HOME>/bin` 加进 PATH";Windows 靠 `PATHEXT` 把 `isabelle` 解析成 `.bat`)
-> - **自定位**:`pushd "%~dp0.." && set "ISABELLE_HOME=%CD%" && popd` —— **不得写死任何绝对路径**
+> **It must become**:
+> - **Location: `<ISABELLE_HOME>\bin\isabelle.bat`** (the same place as `bin/isabelle` on Linux/macOS
+>   ⇒ the instructions for users are the same everywhere: "add `<ISABELLE_HOME>/bin` to PATH"; Windows resolves
+>   `isabelle` to the `.bat` through `PATHEXT`)
+> - **Self-location**: `pushd "%~dp0.." && set "ISABELLE_HOME=%CD%" && popd` — **no absolute path may be hard-coded**
 >
-> **待验证的两点**(正在做):
-> 1. **递归**:`bin/` 里会同时有 `isabelle`(Cygwin bash 脚本)和 `isabelle.bat`。
->    cmd 按 PATHEXT 命中 `.bat`;Cygwin bash **不认 PATHEXT**,应命中 bash 脚本 ⇒ **不会 `.bat`→bash→`.bat` 无限递归**。
->    **必须实测 `type -a isabelle` 确认。**
-> 2. **可重定位**:把整棵树复制到另一个路径后,`isabelle.bat` 仍须全功能正常。**这是它能否进 conda 包的判据。**
+> **Two points to verify** (in progress):
+> 1. **Recursion**: `bin/` will hold both `isabelle` (the Cygwin bash script) and `isabelle.bat`.
+>    cmd finds the `.bat` through PATHEXT; Cygwin bash **does not know PATHEXT** and should find the bash script ⇒
+>    **no infinite recursion `.bat`→bash→`.bat`**.
+>    **Must be confirmed by measuring `type -a isabelle`.**
+> 2. **Relocatability**: after the whole tree is copied to another path, `isabelle.bat` must still work fully. **This is
+>    the criterion for whether it can go into a conda package.**
 >
-> conda 包里的摆法:
+> The layout in the conda package:
 > ```
-> $PREFIX/opt/Isabelle2025-2/bin/isabelle.bat   ← 真身（自定位）
-> $PREFIX/Scripts/isabelle.bat                  ← 一行转发器（conda 的 Windows bin 目录，activate 后在 PATH 上）
+> $PREFIX/opt/Isabelle2025-2/bin/isabelle.bat   ← the real one (self-locating)
+> $PREFIX/Scripts/isabelle.bat                  ← a one-line forwarder (conda's Windows bin directory, on PATH after activate)
 > ```
 
-两个候选被**实测否决**:
-- **`start "" /b` 否决**:探针(`GetConsoleProcessList`)证明 java **仍挂在同一个 console 上**
-  (`VERDICT: ATTACHED`)→ 关窗口照样杀 jEdit。它只治"挂住",不治"被杀"。
-- **launch4j `.exe` 不能替代 `isabelle jedit`**:`JEdit_Main.main` **没有任何选项解析**(只特判 `-init`),
-  logic/session 来自 **bash 版 `jedit` 脚本从 `-l/-d/-R/-i` export 的环境变量** ⇒ exe 表达不了
-  `-l HOL-Analysis`,也跳过 `scala_build`,更没有 `-b`;还配了 singleInstance mutex。
+Two candidates were **rejected by measurement**:
+- **`start "" /b` rejected**: a probe (`GetConsoleProcessList`) proved that java **is still attached to the same
+  console** (`VERDICT: ATTACHED`) → closing the window still kills jEdit. It cures only "hanging", not "being killed".
+- **The launch4j `.exe` cannot replace `isabelle jedit`**: `JEdit_Main.main` **parses no options at all** (it special-cases
+  only `-init`); the logic/session comes from **environment variables that the bash `jedit` script exports from
+  `-l/-d/-R/-i`** ⇒ the exe cannot express `-l HOL-Analysis`, it also skips `scala_build`, and it has no `-b` at all; it
+  is also configured with a singleInstance mutex.
 
-**GUI vs `jedit -b` 的判别:忠实复刻 `getopts` 规格**
-(`src/Tools/jEdit/lib/Tools/jedit`:`getopts "A:BFD:J:R:bd:fi:j:l:m:no:p:su"`),**27/27 矩阵实测通过**。
-naive 的"参数含 `-b` 就同步"**两头都会错**:
-- `isabelle getenv -b ISABELLE_HOME` → 该同步,naive 会当 GUI;
-- `isabelle jedit -d -b`(`-b` 是 `-d` 的值)→ 该 GUI,naive 会当同步。
+**Telling GUI from `jedit -b`: a faithful replica of the `getopts` specification**
+(`src/Tools/jEdit/lib/Tools/jedit`: `getopts "A:BFD:J:R:bd:fi:j:l:m:no:p:su"`), **27/27 of the matrix passed when
+measured**. The naive "synchronous if the arguments contain `-b`" **is wrong in both directions**:
+- `isabelle getenv -b ISABELLE_HOME` → should be synchronous; naive treats it as GUI;
+- `isabelle jedit -d -b` (`-b` is the value of `-d`) → should be GUI; naive treats it as synchronous.
 
-**验收(全部实测)**:`jedit` **0.22s 返回** + GUI 弹出(截图 `Prover: ready`)+ **关掉发起的控制台后 jEdit 存活**
-(探针 `VERDICT: DETACHED`);`jedit -b` 仍同步 exit=0;`getenv -b` exit=0;`build` 的 0/2 退出码正确透传。
-逃生开关:`ISABELLE_BAT_SYNC=1`(强制同步,给 CI 兜底)、`ISABELLE_BAT_DRYRUN=1`(只打印 GUI/SYNC 决策)。
+**Acceptance (all measured)**: `jedit` **returns in 0.22s** + the GUI comes up (screenshot `Prover: ready`) + **jEdit
+survives closing the launching console** (probe `VERDICT: DETACHED`); `jedit -b` is still synchronous, exit=0;
+`getenv -b` exit=0; `build`'s exit codes 0/2 are passed through correctly.
+Escape hatches: `ISABELLE_BAT_SYNC=1` (force synchronous, a fallback for CI), `ISABELLE_BAT_DRYRUN=1` (only print the
+GUI/SYNC decision).
 
-#### ⚠️ 顺带发现一个**上游 Isabelle bug**(不是我们的,但会咬用户)
+#### ⚠️ Found along the way: an **upstream Isabelle bug** (not ours, but it will bite users)
 
-`lib/scripts/getfunctions`:`platform_path() { cygpath -i -C UTF8 -w -p "$@"; }`
-—— **`-p` 是"路径列表"模式**,`:` 被当作分隔符:
+`lib/scripts/getfunctions`: `platform_path() { cygpath -i -C UTF8 -w -p "$@"; }`
+— **`-p` is the "path list" mode**, and `:` is taken as a separator:
 ```
-C:\isa\t\Probe_Arg.thy          →  C;C:\isa\t\Probe_Arg.thy    ← 被毁
-/cygdrive/c/isa/t/Probe_Arg.thy →  C:\isa\t\Probe_Arg.thy      ← 正确
-Probe_Arg.thy                   →  Probe_Arg.thy               ← 正确
+C:\isa\t\Probe_Arg.thy          →  C;C:\isa\t\Probe_Arg.thy    ← destroyed
+/cygdrive/c/isa/t/Probe_Arg.thy →  C:\isa\t\Probe_Arg.thy      ← correct
+Probe_Arg.thy                   →  Probe_Arg.thy               ← correct
 ```
-⇒ **`isabelle jedit C:\绝对\路径.thy` 在 Isabelle2025-2 上本来就打不开文件**(开一个同名空 buffer + I/O error)。
-**规避:传 POSIX 路径或相对路径。这条要写进用户文档。**
-(讽刺的是 launch4j 的 `.exe` 反而没这问题——它绕过了 `platform_path`。)
-- **⚠️ Session 0 陷阱**:SSH 进来的 shell 在 **Session 0(无桌面)**,真实桌面是 Session 1。后果:
-  - 官方 SFX **无法在 SSH 下静默安装**(卡在无人应答的 GUI 提示框)⇒ 用 `7z x` 抽取 + 单独跑 `-init`;
-  - **GUI 必须打进 Session 1**(`schtasks /it`);
-  - **从 Session 0 枚举不到 Session 1 的窗口 ⇒ `MainWindowTitle` 全是空。
-    窗口标题断言不可靠,截图才是 ground truth。** 这直接决定了 CI GUI 测试怎么设计(见 §7)。
-- **一次性 `-init`**(恢复 Cygwin symlink + `rebaseall` + `postinstall`)必须先跑,否则 `isabelle` 会坏;
-  headless 下**可无人值守完成**(实测)。conda/tar 安装绕过了 SFX 的 AutoInstall ⇒ **必须显式做这一步**
-  (最省心:在真 Windows 构建机上 `-init` 之后再打包)。
-- **环境变量形态**(原生 Windows Python 从 Isabelle settings 环境继承到的):
+⇒ **`isabelle jedit C:\absolute\path.thy` cannot open the file on Isabelle2025-2 in the first place** (it opens an empty
+buffer of the same name + an I/O error).
+**Workaround: pass a POSIX path or a relative path. This must go into the user documentation.**
+(Ironically, the launch4j `.exe` does not have this problem — it bypasses `platform_path`.)
+- **⚠️ The Session 0 trap**: a shell that came in through SSH is in **Session 0 (no desktop)**; the real desktop is
+  Session 1. Consequences:
+  - the official SFX **cannot install silently under SSH** (it gets stuck at a GUI prompt nobody answers) ⇒ extract with
+    `7z x` + run `-init` separately;
+  - **the GUI must be launched into Session 1** (`schtasks /it`);
+  - **from Session 0 the windows of Session 1 cannot be enumerated ⇒ `MainWindowTitle` is always empty.
+    Window-title assertions are unreliable; the screenshot is the ground truth.** This directly decides how the CI GUI
+    test is designed (see §7).
+- **The one-time `-init`** (restore the Cygwin symlinks + `rebaseall` + `postinstall`) must run first, otherwise
+  `isabelle` is broken; headless, it **can complete unattended** (measured). A conda/tar install bypasses the SFX's
+  AutoInstall ⇒ **this step must be done explicitly** (least hassle: run `-init` on a real Windows build machine, then
+  package).
+- **The form of the environment variables** (as a native Windows Python inherits them from the Isabelle settings
+  environment):
   ```
-  ISABELLE_ROOT      = C:\isa\Isabelle2025-2                      [原生]
-  CYGWIN_ROOT        = C:\isa\...\contrib\cygwin                  [原生]
+  ISABELLE_ROOT      = C:\isa\Isabelle2025-2                      [native]
+  CYGWIN_ROOT        = C:\isa\...\contrib\cygwin                  [native]
   ISABELLE_HOME      = /cygdrive/c/isa/Isabelle2025-2             [POSIX]
   ISABELLE_HOME_USER = /cygdrive/c/Users/x/.isabelle/...          [POSIX]
-  （不存在 *_WINDOWS 变体;ISABELLE_HOME_USER 没有原生形态的对应变量）
+  (there are no *_WINDOWS variants; ISABELLE_HOME_USER has no counterpart variable in native form)
   ```
-  实测 `cygpath -w $ISABELLE_HOME == $ISABELLE_ROOT`。
-  ⇒ **Isabelle_RPC 的路径 bug 已修复**(`Isabelle_RPC_Host/paths.py`,commit `5b9580c`):
-  `/cygdrive` 走纯字符串规则(不开子进程、不经 locale ⇒ 非 ASCII 用户名安全),
-  cygpath 仅作 Cygwin 内部路径的兜底且读 bytes。
+  Measured: `cygpath -w $ISABELLE_HOME == $ISABELLE_ROOT`.
+  ⇒ **Isabelle_RPC's path bug is fixed** (`Isabelle_RPC_Host/paths.py`, commit `5b9580c`):
+  `/cygdrive` goes through a pure string rule (no subprocess, no locale ⇒ safe for non-ASCII user names),
+  and cygpath is only the fallback for Cygwin-internal paths, reading bytes.
 
-#### 🔴 **conda 安装路径不能含非 ASCII 字符**(上游缺陷,不是我们的锅)
+#### 🔴 **The conda install path must not contain non-ASCII characters** (an upstream defect, not our fault)
 
-装在 `C:\中文 目录\Isabelle 2025-2` 下时,`isabelle build` / `jedit -b` 报
-**`could not find java.dll`**。`getenv -b ISABELLE_HOME` 本身是**对的**(自定位没问题),
-炸的是 Isabelle 自带的 java 启动器。
+When installed under `C:\中文 目录\Isabelle 2025-2`, `isabelle build` / `jedit -b` report
+**`could not find java.dll`**. `getenv -b ISABELLE_HOME` itself is **correct** (self-location works);
+what breaks is the java launcher that comes with Isabelle.
 
-**对照实验证明与我们无关**:完全绕过 `isabelle.bat`、直接用该树自己的 Cygwin bash 调
-`bin/isabelle`,**报同样的错**。⇒ 上游 launcher 不支持非 ASCII 路径。
-**必须写进用户文档:Windows 上 conda env 的路径不能有非 ASCII 字符。**
-(路径**带空格**反而完全没问题,`C:\Program Files\Isabelle 2025-2` 实测通过。)
+**A control experiment proves it has nothing to do with us**: bypassing `isabelle.bat` completely and calling
+`bin/isabelle` directly with the tree's own Cygwin bash **gives the same error**. ⇒ The upstream launcher does not
+support non-ASCII paths.
+**This must go into the user documentation: on Windows, the path of a conda env must not contain non-ASCII characters.**
+(A path **with spaces**, on the other hand, is no problem at all: `C:\Program Files\Isabelle 2025-2` passed when
+measured.)
 
-#### `isabelle.bat` 自定位:那个"一行版"写法是坏的
+#### `isabelle.bat` self-location: the "one-line" form is broken
 ```bat
-pushd "%~dp0.." && set "ISABELLE_HOME=%CD%" && popd     ← 错
+pushd "%~dp0.." && set "ISABELLE_HOME=%CD%" && popd     ← wrong
 ```
-cmd 在**解析整行时**就展开 `%CD%`,拿到的是 `pushd` **之前**的 cwd。实测(cwd=`C:\Windows`)
-得到 `ISABELLE_HOME=C:\Windows`。**必须拆成三行。**
-这坑很阴险:用户恰好在 ISABELLE_HOME 里敲命令时,它**看起来是对的**。
+cmd expands `%CD%` **when it parses the whole line**, so it gets the cwd from **before** `pushd`. Measured
+(cwd=`C:\Windows`): it gives `ISABELLE_HOME=C:\Windows`. **It must be split into three lines.**
+This pitfall is insidious: when users happen to type the command inside ISABELLE_HOME, it **looks right**.
 
-#### 🔴🔴🔴 **MAX_PATH:win-64 的包在默认 Windows 上装不上**(2026-07-13 真机实测,新发现)
+#### 🔴🔴🔴 **MAX_PATH: the win-64 package does not install on default Windows** (measured on a real machine 2026-07-13, new finding)
 
-**这是当前 win-64 最严重的拦路虎。** 默认 Windows 11(`LongPathsEnabled = 0`)上:
+**This is currently the most serious roadblock for win-64.** On a default Windows 11 (`LongPathsEnabled = 0`):
 ```
 InvalidArchiveError: [Errno 2] No such file or directory:
  'C:\Miniconda3\pkgs\isabelle-…\opt\Isabelle2025-2\contrib\vscodium-…\
-  …\node_addon_api_except.lastbuildstate'          ← 262 字符 = MAX_PATH+2
-conda create LASTEXITCODE=1  →  env 根本没建出来
+  …\node_addon_api_except.lastbuildstate'          ← 262 characters = MAX_PATH+2
+conda create LASTEXITCODE=1  →  the env was never created
 ```
-- 载荷里**最长的 `$PREFIX` 相对路径 212 字符** —— 是 **vscodium 的 `node_modules` 里一个 MSBuild 垃圾文件(`.tlog`)**。
-- **解压发生在 pkgs 缓存里,用户选个短 env 路径也躲不掉**:
-  `C:\Users\bob\miniconda3\pkgs\isabelle-…\`(60)+ 212 = **272 > 260**。
-- 删掉那一个文件不够:次长的是 195,对普通的
-  `C:\Users\<name>\AppData\Local\miniconda3` 根目录**照样爆**。
+- **The longest path relative to `$PREFIX` in the payload is 212 characters** — **an MSBuild junk file (`.tlog`) in
+  vscodium's `node_modules`**.
+- **Unpacking happens in the pkgs cache, so users cannot escape it by choosing a short env path**:
+  `C:\Users\bob\miniconda3\pkgs\isabelle-…\` (60) + 212 = **272 > 260**.
+- Deleting that one file is not enough: the next longest is 195, which **still overflows** for an ordinary
+  `C:\Users\<name>\AppData\Local\miniconda3` root directory.
 
-**`LongPathsEnabled` 在 Windows 11 上默认是 `0`**([MS 文档](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)),
-要**管理员改注册表 + 重启**,而且应用还得自己在 manifest 里 opt-in(Python 3.6+ 有)。
+**`LongPathsEnabled` is `0` by default on Windows 11**
+([MS documentation](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)); changing it
+needs **an administrator to edit the registry + a reboot**, and on top of that each application has to opt in in its own
+manifest (Python 3.6+ does).
 
-#### ❌ 用 conda 脚本提前设 `LongPathsEnabled` —— **不可能**(三个独立原因)
-1. **时序上来不及**:conda 的顺序是 下载 → **解压到 pkgs 缓存** → link → post-link。
-   **炸在"解压到 pkgs 缓存"**,发生在**任何脚本运行之前**。做前置依赖包也没用 ——
-   conda 是先把**所有**包解压完再开始 link。
-2. 要**管理员**权限(HKLM),conda 通常非提权运行。
-3. 要**重启**才生效。
+#### ❌ Setting `LongPathsEnabled` beforehand from a conda script — **impossible** (three independent reasons)
+1. **Too late in the sequence**: conda's order is download → **unpack into the pkgs cache** → link → post-link.
+   **It breaks at "unpack into the pkgs cache"**, which happens **before any script runs**. A prerequisite package does
+   not help either — conda unpacks **all** packages before it starts linking.
+2. It needs **administrator** rights (HKLM), and conda usually runs unelevated.
+3. It takes effect only after a **reboot**.
 
-⇒ **唯一出路是把路径做短。** 这也正是 conda 生态的结论
-([conda#7203](https://github.com/conda/conda/issues/7203),罪魁几乎总是 `node_modules`)。
+⇒ **The only way out is to make the paths shorter.** That is also the conclusion of the conda ecosystem
+([conda#7203](https://github.com/conda/conda/issues/7203); the culprit is almost always `node_modules`).
 
-#### ✅ 定案(用户 2026-07-13 批准):**保留 vscodium,只缩短我们能控制的路径**
+#### ✅ Decision (approved by the owner 2026-07-13): **keep vscodium, shorten only the paths we control**
 
-**`isabelle vscode` 是主流,不能删**(用户明确否决了"剔除 vscodium")。
-**也不要动 Isabelle 自己的树结构**(给 vscodium 组件改名的方案被否)。五条修改,全在
-`pack.sh` / `conda/recipe.yaml` 里,对用户和 Isabelle **都不可见**:
+**`isabelle vscode` is mainstream and cannot be dropped** (the owner explicitly rejected "dropping vscodium").
+**Do not touch Isabelle's own tree structure either** (the proposal to rename the vscodium component was rejected). Five
+changes, all in `pack.sh` / `conda/recipe.yaml`, **invisible both to users and to Isabelle**:
 
-| # | 改动 | 省 |
+| # | Change | Saves |
 |---|---|---|
-| 1 | **包内根 `opt/Isabelle2025-2/` → `isa/`**(只是我们把树放进 conda prefix 的哪个子目录) | 15 |
-| 2 | **build string `isabelle-2025.2-68fdb1877e0c_0` → `isabelle-2025.2-0`**(changeset 挪进 metadata) | 12 |
-| 3 | **剔掉 vscodium 的 `**/obj/**`**(MSBuild 的 `.tlog`/`.lastbuildstate`,运行时不读)【2026-11-01 删除这一步(owner):Isabelle2026 的官方包里没有 `obj/`,一个也删不到】 | 那条 208 的 |
-| 4 | 注入 `<ISABELLE_HOME>\bin\isabelle.bat` | — |
-| 5 | 补回 83 个空目录 | — |
+| 1 | **in-package root `opt/Isabelle2025-2/` → `isa/`** (only which subdirectory of the conda prefix we put the tree in) | 15 |
+| 2 | **build string `isabelle-2025.2-68fdb1877e0c_0` → `isabelle-2025.2-0`** (the changeset moves into the metadata) | 12 |
+| 3 | **drop vscodium's `**/obj/**`** (MSBuild's `.tlog`/`.lastbuildstate`, not read at run time) 【this step deleted 2026-11-01 (owner): the official Isabelle2026 bundles have no `obj/`, so there is nothing to delete】 | the 208 one |
+| 4 | inject `<ISABELLE_HOME>\bin\isabelle.bat` | — |
+| 5 | put back the 83 empty directories | — |
 
-**结果(Isabelle2025-2):包内最长路径 180**(实测)。Isabelle2026 的值见 `pack.sh` 第 4 步:最长 182(VSCodium 自己的
-路径),上限 183,余量 1,build 号 10 起余量 0;owner 2026-10-31 接受。`pack.sh` 只对 win-64 断言。
+**Result (Isabelle2025-2): the longest in-package path is 180** (measured). For the values of Isabelle2026 see step 4 of
+`pack.sh`: the longest is 182 (VSCodium's own path), the limit 183, a margin of 1, and from build number 10 on a margin of
+0; the owner accepted this on 2026-10-31. `pack.sh` asserts it only for win-64.
 
-#### ✅✅ 真机复测通过(2026-07-14,`LongPathsEnabled = 0`,默认 Windows 11)
+#### ✅✅ Re-test on a real machine passed (2026-07-14, `LongPathsEnabled = 0`, default Windows 11)
 
-**先把 VM 的 `LongPathsEnabled` 关回 0 + 重启 + 确认**(测试前后各确认一次),否则是假通过。
-env 建在 `C:\Users\isabelle\miniconda3\envs\isabelle\`(典型 "Just Me" 布局,**没有用短路径作弊**)。
+**First set the VM's `LongPathsEnabled` back to 0 + reboot + confirm** (confirmed once before and once after the test);
+otherwise it is a false pass.
+The env was created at `C:\Users\isabelle\miniconda3\envs\isabelle\` (the typical "Just Me" layout; **no cheating with a
+short path**).
 
-| # | 检查 | 结果 |
+| # | Check | Result |
 |---|---|---|
-| 1 | `conda create` 在**默认 Windows** 上 | ✅ **rc=0,85 秒**。落盘最长路径 **223 / 259,余量 36 字符** |
-| 2 | activate 后 PowerShell `isabelle version` | ✅ `Isabelle2025-2`;`ISABELLE_HOME` 自定位到 env 内的 `…/isa` |
-| 3 | **`isabelle vscode`** | ✅ **VSCodium 起来,Isabelle 扩展装好,`bad` 精确飘红、`good` 干净(⊗1 ⚠0)**。⇒ **剔掉 `obj/` 没有伤到 VSCode** |
-| 4 | `isabelle jedit` | ✅ 截图:`Prover: ready`,坏 lemma 红点 + 红底 + 红波浪 |
-| 5 | 预建 heap | ✅ 真 build 24 秒,**`Building HOL` 一次没出现** |
-| 6 | `could not find /tmp` 警告 | ✅ **消失**(75 个空目录补回来的效果) |
-| 7 | Cygwin 自愈 | ✅ marker 消失,**947/947** 符号链接全部恢复 |
+| 1 | `conda create` on **default Windows** | ✅ **rc=0, 85 seconds**. Longest path on disk **223 / 259, a margin of 36 characters** |
+| 2 | PowerShell `isabelle version` after activate | ✅ `Isabelle2025-2`; `ISABELLE_HOME` locates itself to the `…/isa` inside the env |
+| 3 | **`isabelle vscode`** | ✅ **VSCodium starts, the Isabelle extension is installed, `bad` is marked red exactly and `good` is clean (⊗1 ⚠0)**. ⇒ **dropping `obj/` did not hurt VSCode** |
+| 4 | `isabelle jedit` | ✅ screenshot: `Prover: ready`, the bad lemma with a red dot + red background + red squiggle |
+| 5 | prebuilt heap | ✅ a real build in 24 seconds, **`Building HOL` did not appear even once** |
+| 6 | the `could not find /tmp` warning | ✅ **gone** (the effect of putting back the 75 empty directories) |
+| 7 | Cygwin heals itself | ✅ the marker is gone, **947/947** symlinks all restored |
 
-**"75 不是 83" 的决定被实测证实:** `cygwin_init` 之后,`var/lib/rebase/*.d` 那 5 个目录
-**由 `rebaseall` 自己建出来**,且**没有任何 `.conda-keep` 混进去**。当初若放了标记,
-其内容就会被 `cat` 进 rebase 的 DLL 清单。【2026-11-01 起改为官方包里每个空目录都放、rebase 的 5 个也放,标记是**空文件**
-(owner):`rebaselst` 跳过空内容(`rebaselst:47-48, 54-55`),所以空标记在 rebase 目录里无害;这样 Cygwin 的目录权限清单不用
-改写。放了几个见 `pack.sh` 第 2 步打印的 "restored N empty directory(ies)"(Isabelle2026 win-64 实测 80 个)。】
+**The decision "75, not 83" was confirmed by measurement:** after `cygwin_init`, the 5 directories `var/lib/rebase/*.d`
+**are created by `rebaseall` itself**, and **no `.conda-keep` got mixed into them**. Had we put markers there, their
+content would have been added by `cat` to rebase's DLL list. 【From 2026-11-01 on, changed so that every empty directory of the
+official bundle gets one, the 5 rebase ones included, and the marker is an **empty file** (owner): `rebaselst` skips empty
+content (`rebaselst:47-48, 54-55`), so an empty marker is harmless in the rebase directories; this way Cygwin's directory
+permission list need not be rewritten. How many were placed: see "restored N empty directory(ies)" printed by step 2 of
+`pack.sh` (measured on Isabelle2026 win-64: 80).】
 
-#### 🔴 剩余的三条(不是 blocker,但必须写进用户文档)
+#### 🔴 The remaining three (not blockers, but they must go into the user documentation)
 
-1. **两条路径长度限制,各自不能超过 259 字符(都含末尾的 `\`),先卡住的是第一条:**
-   - **conda 的 pkgs 目录 + `isabelle-<版本>-<build>\` + 包内最长路径。** conda 先把包解压到 pkgs 缓存里(上文实测),
-     超了就是 `InvalidArchiveError`;`pack.sh` 断言的就是这条。
-   - **env 路径前缀 + 包内最长路径。** 超了会在把文件放进环境时失败。
+1. **Two path-length limits, each of which must not exceed 259 characters (both including the trailing `\`); the first
+   one bites first:**
+   - **conda's pkgs directory + `isabelle-<version>-<build>\` + the longest in-package path.** conda first unpacks the
+     package into the pkgs cache (measured above); past the limit it is `InvalidArchiveError`; this is the limit `pack.sh`
+     asserts.
+   - **The env path prefix + the longest in-package path.** Past the limit, putting the files into the environment fails.
 
-   包内最长路径是 VSCodium 自己的文件,我们控制不了。Isabelle2026 是 182:pkgs 目录最多 61 个字符(build 号 10 起 60;
-   用户名 20 个字符时默认的 `C:\Users\<用户名>\AppData\Local\miniconda3\pkgs\` 正好 60),env 前缀最多 77——`pack.sh` 在
-   win-64 上每次都打印这两个数。VSCodium 升级把路径加长时,`pack.sh` 的断言会在 CI 里变红,而不是在用户的 `conda create` 里炸。
-   (真要余量,可以把 `contrib/vscodium-<版本>/` 改名成 `contrib/vscodium/`,`$COMPONENT` 是自引用的所以安全。
-   **用户目前选择先不做。**)
-2. **安装路径不能含非 ASCII 字符**(上游 JVM 启动器的限制,见上文)。
-3. **🔴 Windows 上文件参数的路径约定是"分裂"的,而且两边都会静默出错**(独立复核时实测):
+   The longest in-package path is VSCodium's own file, which we do not control. For Isabelle2026 it is 182: the pkgs
+   directory may have at most 61 characters (60 from build number 10 on; with a 20-character user name, the default
+   `C:\Users\<user name>\AppData\Local\miniconda3\pkgs\` is exactly 60), and the env prefix at most 77 — `pack.sh` prints both
+   numbers every time on win-64. When a VSCodium upgrade makes the path longer, `pack.sh`'s assertion goes red in the CI,
+   instead of users' `conda create` breaking.
+   (If we really want a margin, we can rename `contrib/vscodium-<version>/` to `contrib/vscodium/`; `$COMPONENT` refers to
+   itself, so this is safe. **The owner has chosen not to do this for now.**)
+2. **The install path must not contain non-ASCII characters** (a limitation of the upstream JVM launcher, see above).
+3. **🔴 On Windows the path convention for file arguments is "split", and both sides fail silently** (measured during
+   an independent re-check):
 
-   | 命令 | 要什么路径 | 传错了会怎样 |
+   | Command | What path it wants | What happens if you pass the wrong one |
    |---|---|---|
-   | **`isabelle vscode <file>`** | **原生 Windows**(`C:\...`) | 传 `/cygdrive/...` → **静默开出一个空的 Plain-Text 缓冲区** |
-   | **`isabelle jedit <file>`** | **cygwin**(`/cygdrive/c/...`) | 传 `C:\...` → **静默开出一个空缓冲区**,路径被拼成 `%WINDIR%\System32\C;C:\...` |
-   | **`isabelle build -d <dir>`** | **cygwin** | 传 `C:\...` → 硬报错 `*** Illegal character ":" in path element` |
+   | **`isabelle vscode <file>`** | **native Windows** (`C:\...`) | passing `/cygdrive/...` → **silently opens an empty Plain-Text buffer** |
+   | **`isabelle jedit <file>`** | **cygwin** (`/cygdrive/c/...`) | passing `C:\...` → **silently opens an empty buffer**; the path is assembled as `%WINDIR%\System32\C;C:\...` |
+   | **`isabelle build -d <dir>`** | **cygwin** | passing `C:\...` → a hard error `*** Illegal character ":" in path element` |
 
-   `vscode` 那条的根因是 `src/Tools/VSCode/src/vscode_main.scala:286`:`more_args` **原样**丢给
-   vscodium,**上游不做路径转换**。**两条"静默开空文件"尤其危险** —— 用户会以为文件是空的。
-   **这是 Isabelle 上游行为,不是我们包的缺陷**,但必须写进用户文档。
+   The root cause of the `vscode` row is `src/Tools/VSCode/src/vscode_main.scala:286`: `more_args` is handed to vscodium
+   **as it is**; **upstream does no path conversion**. **The two "silently opens an empty file" rows are especially
+   dangerous** — users will think the file is empty.
+   **This is upstream Isabelle behaviour, not a defect of our package**, but it must go into the user documentation.
 
-**首次调用慢是预期的**,但用户不知情会以为卡死,文档里要提一句:
-首次任何 `isabelle` 调用约 90 秒(Cygwin 自愈);首次 `isabelle vscode` 约 3.5 分钟(装扩展)。
+**A slow first call is expected**, but users who do not know will think it hangs, so the documentation should mention it:
+the first `isabelle` call of any kind takes about 90 seconds (Cygwin heals itself); the first `isabelle vscode` about 3.5
+minutes (it installs the extension).
 
-#### 🔴 conda 载荷**不含目录条目**,83 个空目录全丢了
+#### 🔴 The conda payload **has no directory entries**; all 83 empty directories were lost
 
-conda 包里只有文件、没有目录条目 ⇒ 官方 bundle 里的 **83 个空目录**在安装后全部消失,
-包括 `contrib/cygwin/{tmp, var/tmp, dev/shm, home}` 和 **`var/lib/rebase/*.d`(`rebaseall` 的状态目录)**。
+A conda package holds only files, no directory entries ⇒ the **83 empty directories** of the official bundle all
+disappear after installation, including `contrib/cygwin/{tmp, var/tmp, dev/shm, home}` and **`var/lib/rebase/*.d`
+(`rebaseall`'s state directories)**.
 
-后果:每次调 `isabelle` 都打印 `bash.exe: warning: could not find /tmp, please create!`(3–9 次)。
-**不致命**(build 和 GUI 照样工作),但 `rebaseall` 的状态目录缺失不该带上线。
-⇒ **recipe 的 build 脚本里要把空目录补回来**(`find -type d -empty` 重放)。
+Consequence: every `isabelle` call prints `bash.exe: warning: could not find /tmp, please create!` (3–9 times).
+**Not fatal** (build and GUI still work), but the missing `rebaseall` state directories should not go live.
+⇒ **The recipe's build script must put the empty directories back** (replaying `find -type d -empty`).
 
-#### ✅ **Cygwin 会自愈 —— 不需要 post-link,问题不存在**(真机实测,推翻了之前的担忧)
+#### ✅ **Cygwin heals itself — no post-link needed, the problem does not exist** (measured on a real machine, overturning the earlier worry)
 
-之前认为"`build_release` 剥掉了 Cygwin 符号链接,得有东西在用户机上跑 `cygwin_init`,
-而 conda 不跟踪 post-link 建的文件"是个**未决难题**。**实测证明它根本不是问题:**
+Earlier we thought it was an **unsolved problem** that "`build_release` strips the Cygwin symlinks, so something has to
+run `cygwin_init` on users' machines, and conda does not track the files a post-link creates". **Measurement showed it is
+no problem at all:**
 
-| | 状态 |
+| | State |
 |---|---|
-| 第一次调 `isabelle` **之前** | `uninitialized` marker 在,**947 个符号链接全部缺失** |
-| 跑 `isabelle version` | rc=0,**耗时 88.1 秒** |
-| **之后** | marker **消失**,符号链接全部恢复成带 `System` 属性的 `!<symlink>…` |
-| 第二次调用 | 20.8 秒 |
+| **before** the first `isabelle` call | the `uninitialized` marker is there, **all 947 symlinks are missing** |
+| run `isabelle version` | rc=0, **took 88.1 seconds** |
+| **after** | the marker is **gone**, and all symlinks are restored as `!<symlink>…` with the `System` attribute |
+| second call | 20.8 seconds |
 
-机理:`getsettings:118` 每次都跑 `isabelle.setup.Setup` → `Environment.init` → `cygwin_init`
-→ 恢复符号链接 + `rebaseall` + `postinstall`。**第一次调用付约 90 秒,之后就好了。**
-【2026-11-01 订正:rc=0 和 marker 消失都证明不了初始化成功——`getsettings` 把 `Setup` 的错误输出丢掉、退出码不看,
-`cygwin_init` 一开始就删 marker。一查果然失败(CI 运行 41267104571)。原因(读源码):`getsettings` 是在 Cygwin 的 bash 里
-跑它的,而 Cygwin 的 `rebaseall` 见到 ash/dash 以外的 Cygwin 进程就拒绝("only ash or dash processes are allowed during
-rebasing",exit 2),于是 `postinstall` 不会跑;符号链接恢复在 `rebaseall` 之前,所以上表看起来是好的。官方的原生启动器直接起 JVM,没有这个问题。
-现在由 `windows/isabelle.bat` 在 marker 还在时、起 bash 之前,用包里的 java 跑 Isabelle 自己的 `Setup cygwin_init`,失败就报错退出;
-`build.yml` 的 `install-windows` 断言首次调用成功、`postinstall` 写出了 `etc/passwd`,并让它失败一次作对照。】
+Mechanism: `getsettings:118` runs `isabelle.setup.Setup` every time → `Environment.init` → `cygwin_init`
+→ restore the symlinks + `rebaseall` + `postinstall`. **The first call pays about 90 seconds, and after that it is fine.**
+【Correction 2026-11-01: neither rc=0 nor the marker being gone proves that the initialization succeeded — `getsettings`
+discards `Setup`'s error output and does not look at its exit code, and `cygwin_init` deletes the marker at its very
+start. A check showed that it did indeed fail (CI run 41267104571). The cause (from reading the sources): `getsettings`
+runs it inside Cygwin's bash, and Cygwin's `rebaseall` refuses when it sees Cygwin processes other than ash/dash ("only ash
+or dash processes are allowed during rebasing", exit 2), so `postinstall` never runs; restoring the symlinks comes before
+`rebaseall`, which is why the table above looks fine. The official native launcher starts the JVM directly and does not
+have this problem.
+Now `windows/isabelle.bat`, while the marker is still there and before it starts bash, runs Isabelle's own
+`Setup cygwin_init` with the package's java, and on failure reports an error and exits; `build.yml`'s `install-windows`
+asserts that the first call succeeds and that `postinstall` wrote `etc/passwd`, and makes it fail once as a negative
+control.】
 
-#### ✅ 递归安全 + 可重定位(真机实测)
-- **递归**:本来是致命隐患 —— `getsettings:62` 把 `bin/` 放到 PATH **最前面**,而 `bin/isabelle`
-  结尾是 `exec isabelle java …`(在 bash 里**再查一次 PATH**)。若 Cygwin 会补 `.bat`,
-  每个内部工具都将无限递归。**但 Cygwin 只补 `.exe`,不补 `.bat`**
+#### ✅ Recursion-safe + relocatable (measured on a real machine)
+- **Recursion**: this was a potentially fatal hazard — `getsettings:62` puts `bin/` at the **very front** of PATH, and
+  `bin/isabelle` ends with `exec isabelle java …` (which **looks PATH up again** in bash). If Cygwin appended `.bat`,
+  every internal tool would recurse infinitely. **But Cygwin appends only `.exe`, not `.bat`**
   ([Cygwin User's Guide](https://cygwin.com/cygwin-ug-net/using-specialnames.html):
-  *"for programs that end in `.bat` and `.com`, you cannot omit the extension"*)。
-  实测 `type -a isabelle` 只有一条,`isabelle version` rc=0。
-- **可重定位**:整树 robocopy 到 `C:\other\`(29742 files / 2.342 GiB / 0 FAILED),
-  四条验收全过,PATH 里 `C:\isa` 完全不出现。**这是 conda 包能成立的前提,已满足。**
+  *"for programs that end in `.bat` and `.com`, you cannot omit the extension"*).
+  Measured: `type -a isabelle` has only one entry, `isabelle version` rc=0.
+- **Relocatability**: the whole tree robocopied to `C:\other\` (29742 files / 2.342 GiB / 0 FAILED),
+  all four acceptance checks pass, and `C:\isa` does not appear in PATH at all. **This is the precondition for a conda
+  package to work, and it is met.**
 
-### 3.7 CI runner(已确认)
+### 3.7 CI runners (confirmed)
 
-| 目标平台 | 免费官方 runner | label |
+| Target platform | Free official runner | label |
 |---|:--:|---|
 | x86_64-linux | ✅ | `ubuntu-latest` |
-| **arm64-linux** | ✅(2025-08 GA,public repo 免费) | `ubuntu-24.04-arm` |
+| **arm64-linux** | ✅ (GA 2025-08, free for public repos) | `ubuntu-24.04-arm` |
 | x86_64-windows | ✅ | `windows-latest` |
-| arm64-darwin | ✅ | `macos-15`(`macos-14` 2026-11-02 停用) |
-| x86_64-darwin | ✅ | `macos-15-intel`(唯一剩下的 Intel 镜像;`macos-13` 已退役,job 会永远排队) |
+| arm64-darwin | ✅ | `macos-15` (`macos-14` is retired 2026-11-02) |
+| x86_64-darwin | ✅ | `macos-15-intel` (the only Intel image left; `macos-13` is retired, and its jobs stay queued forever) |
 
-⇒ **全部有免费官方 runner,不需要自建。**
-⚠️ **GitHub 标准 runner 没有 KVM/嵌套虚拟化 ⇒ QEMU 进不了 CI**(本地 VM 只能是本地验证工具)。
+⇒ **There is a free official runner for every platform; nothing needs to be self-hosted.**
+⚠️ **GitHub's standard runners have no KVM/nested virtualization ⇒ QEMU cannot go into the CI** (a local VM can only be a
+local verification tool).
 
 ---
 
-## 4. 发布流水线(端到端蓝图)
+## 4. Release pipeline (end-to-end blueprint)
 
-【Isabelle2025-2 时的流水线,留作记录。2026-10-31 起的流水线见 §5.5。】
+【The pipeline of the Isabelle2025-2 era, kept as a record. For the pipeline from 2026-10-31 on, see §5.5.】
 
 ```
-① 取源      hg clone https://isabelle.in.tum.de/repos/isabelle   （--stream,实测 226MB / 108s）
-            hg update -r Isabelle2025-2                          （= 89701cf1768e）
+① fetch       hg clone https://isabelle.in.tum.de/repos/isabelle   (--stream, measured 226MB / 108s)
+              hg update -r Isabelle2025-2                          (= 89701cf1768e)
 
-② 打补丁    my_better_isabelle_prover 的版本键控 diff(patches/Isabelle2025-2/…)
-            patch -p1 -F0                                        （实测 13 个补丁干净应用）
-            ⚠️ 裸 checkout 的 `isabelle version` 不是 "Isabelle2025-2"(ISABELLE_IDENTIFIER 未写)
-               ⇒ 版本键要显式给,不能靠自动探测
+② patch       my_better_isabelle_prover's version-keyed diffs (patches/Isabelle2025-2/…)
+              patch -p1 -F0                                        (measured: 13 patches apply cleanly)
+              ⚠️ on a bare checkout, `isabelle version` is not "Isabelle2025-2" (ISABELLE_IDENTIFIER is not written)
+                 ⇒ the version key must be given explicitly; it cannot rely on auto-detection
 
-③ 提交      hg commit -m "our patches"      → REV'
-            ⚠️ 关键!build_release 从已提交 rev 做 archive,不 commit 就丢补丁
+③ commit      hg commit -m "our patches"      → REV'
+              ⚠️ crucial! build_release makes its archive from the committed rev; without a commit the patches are lost
 
-④ bootstrap Admin/init  （= components -I + components -a + scala_build)
+④ bootstrap   Admin/init  (= components -I + components -a + scala_build)
 
-⑤ 构建      Admin/build_release -r REV' -R Isabelle2025-2 -b HOL,Main -p <平台>
-              阶段一 → scala_build 把 .scala 补丁编进 isabelle.jar
-                     → build_doc(需完整 TeX)
-                     → 通用源码 archive  Isabelle2025-2.tar.gz
-              阶段二 → 下载 native 组件 + build_heaps(从打补丁的 .ML 建 HOL heap)+ 组包
+⑤ build       Admin/build_release -r REV' -R Isabelle2025-2 -b HOL,Main -p <platform>
+                stage one → scala_build compiles the .scala patches into isabelle.jar
+                          → build_doc (needs a complete TeX)
+                          → generic source archive  Isabelle2025-2.tar.gz
+                stage two → download the native components + build_heaps (builds the HOL heap from the patched .ML) + assemble the bundle
 
-⑥ 产物      Isabelle2025-2_linux.tar.gz / _linux_arm.tar.gz / _macos.tar.gz / .exe
-            + Isabelle2025-2.tar.gz(通用源码 archive,供其它平台 -S 复用)
+⑥ output      Isabelle2025-2_linux.tar.gz / _linux_arm.tar.gz / _macos.tar.gz / .exe
+              + Isabelle2025-2.tar.gz (the generic source archive, for the other platforms to reuse with -S)
 
-⑦ 打包      → conda 包(version 2025.2)→ 自建 channel
+⑦ package     → conda package (version 2025.2) → self-hosted channel
 ```
 
-### ✅✅ 五平台验证状态(2026-07-15,全部"装上并真实运行"过)
+### ✅✅ Verification status on five platforms (2026-07-15; all "installed and really run")
 
-| 平台 | 装上+CLI+heap真加载 | GUI(jEdit 真检查证明) | 怎么验的 |
+| Platform | installed + CLI + heap really loaded | GUI (jEdit really checks a proof) | How it was verified |
 |---|---|---|---|
-| linux-64 | ✅ | ✅ | Job F(CI) |
-| linux-aarch64 | ✅ | ✅ | Job H(CI) |
-| win-64 | ✅ | ✅ jEdit + **VSCode** | 真 Windows VM,亲手复核(排除旧树污染) |
-| osx-64(经 Rosetta) | ✅ **且断言真跑 x86** | 🔶 待接入 | macos-install-probe(CI);2b 断言 `ISABELLE_PLATFORM64=x86_64-darwin` |
-| osx-arm64 | ✅ | 🔶 待接入 | macos-install-probe(CI) |
+| linux-64 | ✅ | ✅ | Job F (CI) |
+| linux-aarch64 | ✅ | ✅ | Job H (CI) |
+| win-64 | ✅ | ✅ jEdit + **VSCode** | real Windows VM, re-checked by hand (ruling out contamination from an old tree) |
+| osx-64 (through Rosetta) | ✅ **and asserted to really run x86** | 🔶 to be wired in | macos-install-probe (CI); 2b asserts `ISABELLE_PLATFORM64=x86_64-darwin` |
+| osx-arm64 | ✅ | 🔶 to be wired in | macos-install-probe (CI) |
 
-- **"装上并运行"= 真 `conda create` → `isabelle version` → 真 build 一个 `Main` 之上的 session、断言 `Building HOL` 不出现。**
-  五平台**全部**过了 —— 不是"能打包",是"能跑"。
-- macOS 的 GUI:runner 有窗口服务器已实测确认(见 §5.2),真 jEdit 截图检查**待接入**。
-- ⚠️ 一次完整的 **A→H→publish→smoke 单轮全绿** 尚未发生过(各平台是分轮/旁路验的);发布那轮会是第一次端到端。
+- **"Installed and run" = a real `conda create` → `isabelle version` → a real build of a session on top of `Main`,
+  asserting that `Building HOL` does not appear.**
+  **All** five platforms passed — not "can be packaged" but "runs".
+- macOS GUI: that the runner has a window server is confirmed by measurement (see §5.2); a real jEdit screenshot check is
+  **to be wired in**.
+- ⚠️ A complete **A→H→publish→smoke run that is green in one round** has not happened yet (the platforms were verified in
+  separate rounds/side paths); the release round will be the first end to end.
 
 ---
 
-### ✅ 已实证(Linux,本机端到端跑通 —— 最早的单平台原型)
+### ✅ Proven (Linux, run end to end on the local machine — the earliest single-platform prototype)
 
-`hg clone` → 13 补丁 → `hg commit`(`5acc266a8fba`,parent = `89701cf1768e`)→
-`Admin/build_release -b HOL -p linux` → **`BUILD_RELEASE_EXIT=0`**。
+`hg clone` → 13 patches → `hg commit` (`5acc266a8fba`, parent = `89701cf1768e`) →
+`Admin/build_release -b HOL -p linux` → **`BUILD_RELEASE_EXIT=0`**.
 
-产出 **`Isabelle2025-2_linux.tar.gz`(895 MB)**,解包验证:
+It produced **`Isabelle2025-2_linux.tar.gz` (895 MB)**, verified after unpacking:
 
-| 检查 | 结果 |
+| Check | Result |
 |---|---|
 | `bin/isabelle version` | `Isabelle2025-2` ✓ |
-| `etc/ISABELLE_ID` | `5acc266a8fba`(我们的补丁 commit)✓ |
-| 补丁版 HOL heap | `heaps/polyml-5.9.2_x86_64_32-linux/HOL`(208MB)✓ |
-| 补丁在成品**源码**树 | register_thy / show_types_nv / lsp.scala ✓ |
-| 补丁编进 **`lib/classes/isabelle.jar`** | `theory_status`/`command_at_position`/`output_at_position`/`cancel_execution` 都在编译产物中 ✓ |
+| `etc/ISABELLE_ID` | `5acc266a8fba` (our patch commit) ✓ |
+| patched HOL heap | `heaps/polyml-5.9.2_x86_64_32-linux/HOL` (208MB) ✓ |
+| the patches are in the finished **source** tree | register_thy / show_types_nv / lsp.scala ✓ |
+| the patches are compiled into **`lib/classes/isabelle.jar`** | `theory_status`/`command_at_position`/`output_at_position`/`cancel_execution` are all in the compiled output ✓ |
 
-**⇒ 「Scala 补丁经 scala_build 进 jar、ML 补丁经 build_heaps 进 HOL heap」这条链路被完整证实。**
+**⇒ The chain "Scala patches go into the jar through scala_build, ML patches go into the HOL heap through build_heaps" is
+fully confirmed.**
 
 ---
 
-## 5. CI 矩阵(**已按实测重新设计**)
+## 5. CI matrix (**redesigned from measurements**)
 
-【§5.0–5.2 是自己构建时的矩阵,留作记录;其中 Windows 的 `LOCALAPPDATA`、`ML_IDENTIFIER` 为空、`log/<S>.db`
-必须随 heap 走这几条事实仍然成立。2026-10-31 起的矩阵见 §5.5。】
+【§5.0–5.2 are the matrix from when we built Isabelle ourselves, kept as a record; of them, these facts still hold:
+Windows' `LOCALAPPDATA`, `ML_IDENTIFIER` being empty, and `log/<S>.db` having to travel with the heap. For the matrix from
+2026-10-31 on, see §5.5.】
 
-### 5.0 四条铁律(全部实测,它们唯一地决定了矩阵长相)
+### 5.0 Four iron rules (all measured; they alone determine the shape of the matrix)
 
-**① 打包只能在 Linux/macOS 上做 —— 包括 Windows 的 `.exe`。**
-`Admin/build_release -p windows` **在 Windows 上跑不起来**,实机硬失败:
+**① Packaging can only be done on Linux/macOS — including the Windows `.exe`.**
+`Admin/build_release -p windows` **cannot run on Windows**; it fails hard on a real machine:
 ```
 *** java.lang.IllegalArgumentException: requirement failed: Linux or macOS platform required
 ```
-根因 `src/Pure/Admin/component_windows_app.scala:13-16`:
+Root cause, `src/Pure/Admin/component_windows_app.scala:13-16`:
 ```scala
 def tool_platform(): String = {
   require(Platform.is_unix, "Linux or macOS platform required")
 ```
-`launch4j_jar()` 与 `seven_zip()` 都走它,而 Windows 分支两个都要用。
-**铁证**:`windows_app` 组件解包后只有 `arm64-linux` / `x86_64-darwin` / `x86_64-linux`,
-**没有 `x86_64-windows`** —— **造 `.exe` 的工具链根本没有 Windows 版**。
-⇒ **`.exe` 是从 Linux 交叉打出来的。根本不存在"Windows 打包 job"。**
-官方 `Admin/Release/CHECKLIST:82` 印证:*"on fast Linux machine, with access to build_host for each platform"*。
+Both `launch4j_jar()` and `seven_zip()` go through it, and the Windows branch needs both.
+**Conclusive evidence**: the unpacked `windows_app` component contains only `arm64-linux` / `x86_64-darwin` /
+`x86_64-linux`, **no `x86_64-windows`** — **the toolchain that makes the `.exe` has no Windows version at all**.
+⇒ **The `.exe` is cross-built from Linux. A "Windows packaging job" does not exist at all.**
+The official `Admin/Release/CHECKLIST:82` confirms it: *"on fast Linux machine, with access to build_host for each
+platform"*.
 
-**② heap 只能在本平台原生构建**(§3.5,跨架构不可能)。
+**② Heaps can only be built natively on their own platform** (§3.5; across architectures it is impossible).
 
-**③ GitHub runner 之间无法互相 SSH** ⇒ 官方的 `build_host_<platform>` 机制**在 GitHub 上用不了**。
+**③ GitHub runners cannot SSH into each other** ⇒ the official `build_host_<platform>` mechanism **cannot be used on
+GitHub**.
 
-**④ 🔴🔴 heap artifact 必须连 `heaps/*/log/<S>.db` 一起传 —— 少了它,heap 就是 350MB 死重。**
-`log/` 这个名字**骗人**:`log/<S>.db` **不是日志,是 session 数据库**。`isabelle build` 判断
-"某 session 已建好且最新",**查的是这个 db,不是 heap 文件在不在**。官方 bundle 里就带着它们。
-CI 曾在上传前 `rm -rf heaps/*/log`,后果是包能装、`isabelle version` 能跑、
-**连 `isabelle build -n` 都报告"无需构建"(假阳性)**,但真 build 立刻重编 HOL 20 分钟。
-⇒ **验收绝不能用 `isabelle build -n`;必须真跑一个建在 `Main` 之上的 session,
-看到 `Building HOL` 就判失败。**(详见 §3.5)
+**④ 🔴🔴 A heap artifact must be uploaded together with `heaps/*/log/<S>.db` — without it, the heap is 350MB of dead
+weight.**
+The name `log/` **is misleading**: `log/<S>.db` **is not a log; it is the session database**. When `isabelle build` decides
+whether "a session is built and current", **it looks up this db, not whether the heap file exists**. The official bundles
+carry them.
+The CI once ran `rm -rf heaps/*/log` before uploading, with the result that the package installed, `isabelle version`
+ran, and **even `isabelle build -n` reported "nothing to build" (a false positive)**, but a real build immediately
+recompiled HOL for 20 minutes.
+⇒ **Acceptance must never use `isabelle build -n`; it must really run a session built on top of `Main`, and fail when it
+sees `Building HOL`.** (Details in §3.5)
 
-⇒ **打包与建 heap 必须解耦。**
+⇒ **Packaging and building heaps must be decoupled.**
 
-### 5.1 矩阵
+### 5.1 Matrix
 
 ```
-Job A  [ubuntu-latest]        取源 → 打补丁 → hg commit
+Job A  [ubuntu-latest]        fetch → patch → hg commit
                               Admin/build_release -r REV' -p linux,linux_arm,windows,macos
-                                                  （不带 -b！）
-                              → 通用源码 archive + 4 个平台 bundle（都不含 heap，含 Windows .exe）
-                              ⚠️ 只有这个 job 需要 hg、TeX、Admin/
+                                                  (without -b!)
+                              → generic source archive + 4 platform bundles (none with a heap; the Windows .exe included)
+                              ⚠️ only this job needs hg, TeX, Admin/
 
 Job B [ubuntu-latest]     ┐
-Job C [ubuntu-24.04-arm]  │   各自在原生 runner 上：
+Job C [ubuntu-24.04-arm]  │   each on its native runner:
 Job D [macos-14]          ├─  isabelle build -o system_heaps -b HOL,Main
-Job E [windows-latest]    ┘   （macOS 跑两遍 ML_system_apple=false/true → 双架构）
-                              → 上传 heaps/<ML_IDENTIFIER>/ 作为 artifact
+Job E [windows-latest]    ┘   (macOS runs twice, ML_system_apple=false/true → both architectures)
+                              → upload heaps/<ML_IDENTIFIER>/ as an artifact
 
-Job F  [ubuntu-latest]        下载 4 个 bundle + 全部 heap
-                              → 把 heap 注入各 bundle（tar 类直接塞；Windows 用 7zz 重造 SFX .exe）
-                              → rattler-build 打 conda 包（per-platform）
-                              → conda index --no-zst --no-bz2      ← 必需！见 §3.3 的 CDN 坑
-                              → rclone sync → R2（conda.qiyuan.me）
+Job F  [ubuntu-latest]        download the 4 bundles + all heaps
+                              → inject the heaps into each bundle (tar ones: just put them in; Windows: rebuild the SFX .exe with 7zz)
+                              → rattler-build makes the conda packages (per-platform)
+                              → conda index --no-zst --no-bz2      ← required! see the CDN pitfall in §3.3
+                              → rclone sync → R2 (conda.qiyuan.me)
 ```
 
-- **`Admin/` 必须存在于跑 build_release 的那棵树里**(4 条独立实测理由):入口脚本本身在 `Admin/`;
-  `isabelle build_release` **不是注册工具**(`*** Unknown Isabelle tool`);archive 里 `Admin/` **已被 purge**
-  (条目数 = 0);Windows 打包读 `~~/Admin/Windows/{launch4j,Cygwin}`(`~~` = **构建机**的 ISABELLE_HOME);
-  `build_host_*` 选项声明在 `Admin/etc/options`(没有它 `-b` 直接 "Unknown option")。
-- `-S` **本身不需要 hg**(实测:guest 里根本没装 hg,`-S` 全程没碰 `Mercurial.self_repository()`)。
-- 加速:`hg clone` 可缓存;`~/.isabelle/contrib`(native 组件)可缓存。
-- ⚠️ **唯一还没验证的一环:Windows runner 上原生建 heap**(VM 里卡在 `build_heaps` 的 tar 步,但那是 QEMU 太慢;
-  真 runner 上大概率可行,**未测**)。
+- **`Admin/` must exist in the tree that runs build_release** (4 independent measured reasons): the entry script itself is
+  in `Admin/`; `isabelle build_release` **is not a registered tool** (`*** Unknown Isabelle tool`); in the archive
+  `Admin/` **has been purged** (entry count = 0); Windows packaging reads `~~/Admin/Windows/{launch4j,Cygwin}` (`~~` = the
+  ISABELLE_HOME of the **build machine**); the `build_host_*` options are declared in `Admin/etc/options` (without it,
+  `-b` fails outright with "Unknown option").
+- `-S` **itself does not need hg** (measured: hg was not even installed in the guest, and `-S` never touched
+  `Mercurial.self_repository()`).
+- Speed-ups: `hg clone` can be cached; `~/.isabelle/contrib` (the native components) can be cached.
+- ⚠️ **The only link not yet verified: building the heap natively on a Windows runner** (in the VM it got stuck at
+  `build_heaps`'s tar step, but that was QEMU being too slow; on a real runner it is very likely feasible, **not
+  tested**).
 
-### 5.1.1 🔴 三条源码级纠正(CI 实作时发现,**推翻了本文早前的写法**)
+### 5.1.1 🔴 Three source-level corrections (found while implementing the CI; **they overturn what this document wrote earlier**)
 
-**① Job B–E 必须消费「平台 bundle」,不能用「通用源码 archive」**
-早前写的"取通用 archive → `isabelle components -a`"**行不通**:
-- `build_release` **把 `Admin/` 从 archive 里 purge 掉了**(`build_release.scala:540`)⇒ `components -I` 要写进 user settings 的
-  `Admin/components/main` 目录**不存在** ⇒ `getfunctions:293` 报 **"Bad component catalog file" → exit 2**。
-- archive 的 `etc/components` 里,bundled 组件只以**注释行**存在(`#bundled:polyml-…`,`record_bundled_components` 写的),
-  而 `getfunctions:302` **跳过所有 `#` 行** ⇒ `ISABELLE_COMPONENTS_MISSING` 为空 ⇒
-  **`isabelle components -a` 是个静默 no-op**(把注释变成真 `contrib/…` 条目的是 `activate_components`,
-  它**只在 per-platform bundle 阶段**运行)。
-- **⇒ 通用 archive 里没有 Poly/ML、没有 JDK,`isabelle build` 根本起不来。**
+**① Job B–E must consume the "platform bundles", not the "generic source archive"**
+What we wrote earlier, "take the generic archive → `isabelle components -a`", **does not work**:
+- `build_release` **purges `Admin/` from the archive** (`build_release.scala:540`) ⇒ the `Admin/components/main`
+  directory that `components -I` wants to write into the user settings **does not exist** ⇒ `getfunctions:293` reports
+  **"Bad component catalog file" → exit 2**.
+- In the archive's `etc/components`, the bundled components exist only as **comment lines** (`#bundled:polyml-…`,
+  written by `record_bundled_components`), and `getfunctions:302` **skips all `#` lines** ⇒ `ISABELLE_COMPONENTS_MISSING`
+  is empty ⇒ **`isabelle components -a` is a silent no-op** (what turns the comments into real `contrib/…` entries is
+  `activate_components`, which runs **only in the per-platform bundle stage**).
+- **⇒ The generic archive has no Poly/ML and no JDK; `isabelle build` cannot even start.**
 
-**正解**:各 heap job **解开自己平台的 bundle**(里面的 `contrib/` 已经是激活好的),直接 `isabelle build`。
-⇒ **Job A 应为每个 bundle 上传独立 artifact**,让每个 heap job 只下载自己那份。
+**The right way**: each heap job **unpacks its own platform's bundle** (whose `contrib/` is already activated) and runs
+`isabelle build` directly.
+⇒ **Job A should upload a separate artifact for each bundle**, so that each heap job downloads only its own.
 
-**② Windows:设 `TEMP`/`TMP`/`TMPDIR` **无效** —— 必须设 `LOCALAPPDATA`**
-Cygwin 下 `lib/scripts/getsettings:30` **无条件覆盖**它们:
+**② Windows: setting `TEMP`/`TMP`/`TMPDIR` **has no effect** — you must set `LOCALAPPDATA`**
+Under Cygwin, `lib/scripts/getsettings:30` **overwrites them unconditionally**:
 ```bash
-TMPDIR="$(cygpath -u "$LOCALAPPDATA")/Temp"     # ← 你设的 TMPDIR 被直接冲掉
+TMPDIR="$(cygpath -u "$LOCALAPPDATA")/Temp"     # ← the TMPDIR you set is simply overwritten
 ```
-而 `ISABELLE_TMP_PREFIX` 由此派生。**唯一能把 scratch 挪离 33GB C: 盘的杠杆是 `LOCALAPPDATA`**
-(同理 `HOME`/`USER_HOME`,否则由 `$USERPROFILE` 派生)。
-⇒ Job E 设这些,并在开跑前**断言 `ISABELLE_TMP_PREFIX` 确实落在 `D:`**。
+and `ISABELLE_TMP_PREFIX` is derived from it. **The only lever that moves scratch off the 33GB C: drive is
+`LOCALAPPDATA`** (likewise `HOME`/`USER_HOME`, which are otherwise derived from `$USERPROFILE`).
+⇒ Job E sets these, and before it starts **asserts that `ISABELLE_TMP_PREFIX` really lands on `D:`**.
 
-**③ `ML_IDENTIFIER` 不是 settings 变量**
-2025-2 里 `isabelle getenv ML_IDENTIFIER` **输出为空**(它在 Scala 侧计算)。
-⇒ 要拿 heap 目录名,只能 `ls heaps/` 读。
+**③ `ML_IDENTIFIER` is not a settings variable**
+In 2025-2, `isabelle getenv ML_IDENTIFIER` **prints nothing** (it is computed on the Scala side).
+⇒ To get the heap directory name, the only way is to read it with `ls heaps/`.
 
-**④ Windows 的 Cygwin bootstrap(Job E)**
-7z 解开 SFX 后,用 `isabelle_setup.jar` 的 main class 触发 `Environment.cygwin_init()`
-(其自身注释就是 *"init (e.g. after extraction via 7zip)"*)—— 恢复被剥掉的 symlink + 跑 `rebaseall`/`postinstall`,
-之后一律经 `<cygwin>\bin\bash.exe` 构建(和 Isabelle 自己的做法一致)。
+**④ Cygwin bootstrap on Windows (Job E)**
+After 7z unpacks the SFX, use the main class of `isabelle_setup.jar` to trigger `Environment.cygwin_init()`
+(its own comment is *"init (e.g. after extraction via 7zip)"*) — it restores the stripped symlinks + runs
+`rebaseall`/`postinstall`; after that, every build goes through `<cygwin>\bin\bash.exe` (consistent with what Isabelle
+itself does).
 
-### 5.2 macOS(CI 实测,`macos-14`)
+### 5.2 macOS (measured on CI, `macos-14`)
 
-- **一台 `macos-14` 就够,零前置条件。Rosetta 2 已预装、开箱可用**(`arch -x86_64` 直接过,`oahd` 在跑)。
-- **组件确实带双架构**:`polyml` 下有 4 个平台目录(`arm64-darwin`/`arm64_32-darwin`/`x86_64-darwin`/`x86_64_32-darwin`),
-  四个 `poly` 在 arm 机上**全部实跑成功**。(z3 / vampire / spass 等只有 x86_64 → **靠 Rosetta**。)
-- **🎯 单机双架构 heap 实测成功**:`ML_system_apple=false/true` 各跑一遍 → 两个不同 ML_IDENTIFIER、sha256 不同。
-  **HOL ×2 = 1h44m**(x86 经 Rosetta 55m + arm 原生 50m;**Rosetta 惩罚只有 ~10%**)。远低于 6h 上限。
-- ⚠️ ML_IDENTIFIER 是 **`_32` 变体**(`x86_64_32-darwin` / `arm64_32-darwin`),因为默认 `ML_system_64=false`;
-  `ML_system_apple` 只切 apple/非 apple,**不切 32/64**。
-- `macos-13` **事实上已死**(排队 1h50 无人认领)——但**不需要它**。
-- 官方 macOS 包**本来就自带两套 heap** ⇒ 只重打包官方包的话不用重建;**但我们打了补丁,必须重建**。
-- 实操坑:下载 dist **必须带 `?token=Isabelle`**(否则 403);**`isabelle getenv -o` 不存在**
-  (照 build_release 的做法写 `$ISABELLE_HOME_USER/etc/preferences`);**`isabelle process` 在发行包里不存在**。
+- **One `macos-14` is enough, with zero prerequisites. Rosetta 2 is preinstalled and works out of the box**
+  (`arch -x86_64` just works, `oahd` is running).
+- **The components really carry both architectures**: under `polyml` there are 4 platform directories
+  (`arm64-darwin`/`arm64_32-darwin`/`x86_64-darwin`/`x86_64_32-darwin`), and all four `poly` **really run successfully** on
+  the arm machine. (z3 / vampire / spass etc. are x86_64 only → **they rely on Rosetta**.)
+- **🎯 Heaps for both architectures on one machine: measured success**: one run each with `ML_system_apple=false/true` →
+  two different ML_IDENTIFIERs, different sha256.
+  **HOL ×2 = 1h44m** (x86 through Rosetta 55m + arm native 50m; **the Rosetta penalty is only ~10%**). Far below the 6h
+  limit.
+- ⚠️ The ML_IDENTIFIER is the **`_32` variant** (`x86_64_32-darwin` / `arm64_32-darwin`), because the default is
+  `ML_system_64=false`; `ML_system_apple` switches only apple/non-apple, **not 32/64**.
+- `macos-13` **is dead in practice** (queued 1h50 with nobody picking it up) — but **we do not need it**.
+- The official macOS bundle **already ships both heaps** ⇒ if we only repackaged the official bundle, no rebuild would be
+  needed; **but we apply patches, so we must rebuild**.
+- Practical pitfalls: downloading from dist **requires `?token=Isabelle`** (otherwise 403); **`isabelle getenv -o` does
+  not exist** (write `$ISABELLE_HOME_USER/etc/preferences` as build_release does); **`isabelle process` does not exist in
+  the release bundle**.
 
-#### ✅ **macOS 的 GUI 在 CI 里测得了**(2026-07-15 探针实测,推翻了先前"测不了"的判断)
+#### ✅ **The macOS GUI can be tested in CI** (measured by a probe 2026-07-15, overturning the earlier "cannot be tested" judgement)
 
-> 先前这里写"macOS runner 无头、GUI 测不了",依据是官方文档和 [#8951](https://github.com/actions/runner-images/issues/8951)。
-> **那个判断对 `macos-14` 是错的。** Job G 的探针(`launchctl print gui/$(id -u)` + `screencapture -x`)
-> 实测结果:
+> Earlier this place said "macOS runners are headless, the GUI cannot be tested", based on the official documentation
+> and [#8951](https://github.com/actions/runner-images/issues/8951).
+> **That judgement is wrong for `macos-14`.** Job G's probe (`launchctl print gui/$(id -u)` + `screencapture -x`)
+> measured:
 > ```
 > RESULT: screencapture SUCCEEDED -> PNG image data, 1920 x 1080, 8-bit/color RGBA
 > macOS runner HAS a usable window server
 > ```
-> **`macos-14` runner 有可用的窗口服务器,截图成功。** 所以像 Linux/Windows 一样做真 jEdit 截图检查是**可行的**。
+> **The `macos-14` runner has a usable window server; the screenshot succeeded.** So a real jEdit screenshot check like
+> on Linux/Windows is **feasible**.
 
-**教训:先探测、后断言。** 那个探针被特意做成"永不让 job 变红、只打印实测结果",正是为了把
-"未知"变成"已测量"——而它测出来的答案,和网上资料 + 我先前的推断**相反**。
-若当初直接照文档写死"macOS GUI 不可测",就会永久漏掉一个本可覆盖的平台。
+**Lesson: probe first, assert afterwards.** That probe was deliberately made to "never turn the job red, only print what it
+measured", precisely to turn "unknown" into "measured" — and the answer it measured was **the opposite** of the online
+sources + my earlier inference.
+Had we hard-coded "the macOS GUI cannot be tested" straight from the documentation, we would have permanently missed a
+platform we could cover.
 
-**已验证的**:macOS 的 CLI、两套 heap、真 build(断言 HOL 不重建)、osx-64 经 Rosetta 真跑 x86(§见 verify_install 的 2b 断言)。
-**GUI**:runner 有窗口服务器已确认;真 jEdit 截图检查**待接入**(Linux 的 `verify_gui.sh` 驱动 Xvfb,
-macOS 有真窗口服务器、不需要 Xvfb,启动路径要另写:jEdit 走 Quartz)。
+**Verified**: macOS's CLI, both heaps, a real build (asserting that HOL is not rebuilt), osx-64 really running x86
+through Rosetta (§ see verify_install's 2b assertion).
+**GUI**: that the runner has a window server is confirmed; a real jEdit screenshot check is **to be wired in** (Linux's
+`verify_gui.sh` drives Xvfb; macOS has a real window server and needs no Xvfb, so the launch path has to be written
+separately: jEdit goes through Quartz).
 
-### 5.4 CI vs 发布:架构定案(**方案 A**)
+### 5.4 CI vs release: architecture decision (**option A**)
 
-**原则:发布近乎不可逆**(包一旦上了 channel,用户可能已拉走;不能删、不能覆盖)
-⇒ **发布绝不能是 push 的副作用,必须是一次深思熟虑的动作。**
-这个动作是手动发起 `release.yml`(workflow_dispatch)—— 它依然跑在 Actions 里,只是**不由 push 触发**。
-推 tag 不发布:tag 带不了输入(build 号),只能发默认值。
+**Principle: publishing is nearly irreversible** (once a package is on the channel, users may already have pulled it; it
+can neither be deleted nor overwritten)
+⇒ **Publishing must never be a side effect of a push; it must be a deliberate act.**
+That act is dispatching `release.yml` by hand (workflow_dispatch) — it still runs in Actions, it is just **not triggered by
+a push**.
+Pushing a tag does not publish: a tag cannot carry inputs (the build number), so it could only publish the defaults.
 
 ```
 .github/workflows/
-  build.yml    ← reusable（on: workflow_call）：定义全部 job（§5.5）。只定义一次。
-  ci.yml       ← on: push / pull_request   → 调 build.yml → 本地验证 → 结束。**绝不碰 channel**
-  release.yml  ← on: workflow_dispatch → 调 build.yml → 本地验证
-                 → 上传 R2 → 发布后校验
+  build.yml    ← reusable (on: workflow_call): defines all the jobs (§5.5). Defined only once.
+  ci.yml       ← on: push / pull_request   → calls build.yml → local verification → done. **Never touches the channel**
+  release.yml  ← on: workflow_dispatch → calls build.yml → local verification
+                 → upload to R2 → post-publish check
 ```
 
-**为什么选"发布时重建"(方案 A)而不是"提升 CI 产物"(方案 B)**:
-- 发布流程**自包含、无状态**,不依赖"某次 CI run 还在不在";
-- 发出去的**一定是刚刚在同一个 run 里验证过的**字节;
-- 重建的代价对**一年几次**的发布节奏完全可接受(自己编 heap 时约 2–4 小时;2026 起不编 heap,只剩下载、打包与安装检查);
-- 这也是 PyPI/cargo 生态的**主流写法**。
-- **什么时候改用 B**:发布变频繁,或重建的不确定性开始咬人。现在不必。
+**Why "rebuild at release time" (option A) and not "promote the CI artifacts" (option B)**:
+- the release process is **self-contained and stateless**; it does not depend on "whether some CI run still exists";
+- what goes out **is guaranteed to be the bytes just verified in the same run**;
+- the cost of rebuilding is entirely acceptable for a release rhythm of **a few times a year** (about 2–4 hours when we
+  compiled the heaps ourselves; from 2026 on no heaps are compiled, and only downloading, packaging and the install checks
+  remain);
+- this is also **the mainstream way** in the PyPI/cargo ecosystems.
+- **When to switch to B**: when releases become frequent, or the uncertainty of rebuilding starts to bite. Not needed now.
 
-#### 验证拆成两半(**都不受 CDN 延迟影响**)
-| 验什么 | 怎么验 | 在哪 |
+#### Verification split in two (**neither half is affected by CDN delay**)
+| What is verified | How | Where |
 |---|---|---|
-| **包对不对**(recipe、依赖能解、装得上、`isabelle version` 能跑、heap 能加载) | **从本地 channel 目录装**:`conda create -c file:///.../channel` | **CI**(确定性,不碰网络) |
-| **字节传对没有** | 直接 HTTP GET 那个 `.conda`,比对 sha256(**`.conda` 不进 CDN 缓存,永远新鲜**) | **发布流程** |
-| channel 索引新不新 | 不用管,CDN 自己会追上(§3.3) | — |
+| **whether the package is right** (recipe, dependencies resolve, it installs, `isabelle version` runs, the heap loads) | **install from a local channel directory**: `conda create -c file:///.../channel` | **CI** (deterministic, no network) |
+| **whether the bytes were uploaded correctly** | HTTP GET that `.conda` directly and compare the sha256 (**`.conda` is not cached by the CDN, always fresh**) | **release process** |
+| whether the channel index is fresh | no need to care; the CDN catches up by itself (§3.3) | — |
 
-#### 发布凭据
-- **已把 `CONDA_R2_ACCESS_KEY_ID` / `CONDA_R2_SECRET_ACCESS_KEY` / `CONDA_R2_TOKEN_VALUE`
-  设为 `isabelle-packaging-ci` 的 GitHub secrets**,`release.yml` 在 `ubuntu-latest` 上用它们 `rclone sync` 到 R2。
-- 安全面:公开仓库 ⇒ **fork 的 PR 拿不到 secrets**(GitHub 强制);只有有写权限的人能 dispatch;
-  该 R2 token **只能写 `conda` 这一个 bucket**。
-- ⚠️ 不足:**Cloudflare R2 没有 GitHub OIDC 联邦**(AWS 有)⇒ 只能用**长期密钥**。缓解:最小权限 + 需要时轮换。
+#### Release credentials
+- **`CONDA_R2_ACCESS_KEY_ID` / `CONDA_R2_SECRET_ACCESS_KEY` / `CONDA_R2_TOKEN_VALUE` have been set as GitHub secrets of
+  `isabelle-packaging-ci`**, and `release.yml` uses them on `ubuntu-latest` to `rclone sync` to R2.
+- Security surface: public repository ⇒ **PRs from forks cannot get the secrets** (enforced by GitHub); only people with
+  write access can dispatch; the R2 token **can write only the one bucket `conda`**.
+- ⚠️ Shortcoming: **Cloudflare R2 has no GitHub OIDC federation** (AWS does) ⇒ only **long-lived keys** can be used.
+  Mitigation: least privilege + rotation when needed.
 
-#### GitHub artifacts(实测/查证)
-- **公开仓库的 Actions 与 artifact 免费**(官方:*"GitHub Actions usage is free for public repositories
-  that use standard GitHub-hosted runners"*)⇒ GB 级产物不占付费配额。
-- 默认**保留 90 天**(公开仓库可设 1–90 天)。
+#### GitHub artifacts (measured/checked)
+- **Actions and artifacts are free for public repositories** (official: *"GitHub Actions usage is free for public
+  repositories that use standard GitHub-hosted runners"*) ⇒ GB-sized outputs do not use up a paid quota.
+- **Retained for 90 days** by default (public repositories can set 1–90 days).
 
-### 5.3 Runner 磁盘(CI 实测,2026-07)——**风险已解除**
+### 5.3 Runner disk (measured on CI, 2026-07) — **risk resolved**
 
-我们的峰值需求:**`ISABELLE_TMP` 约 22 GB + 构建树约 8 GB ≈ 30 GB 同时占用**。
+Our peak need: **`ISABELLE_TMP` about 22 GB + the build tree about 8 GB ≈ 30 GB occupied at the same time**.
 
-| Runner | 开箱可用 | 30 GB 峰值实测 | 处置 |
+| Runner | Available out of the box | 30 GB peak, measured | Action |
 |---|---|---|---|
-| `ubuntu-latest` | **89 GB**(145G 根盘) | ✅ 成功,还剩 59 GB | **什么都不用做** |
-| `ubuntu-24.04-arm` | **110 GB** | ✅ 成功,还剩 80 GB | 不用腾;但**盘速慢 2.5 倍**(170 vs 430 MB/s) |
-| `windows-latest` | C: 33.5 GB / **D: 147 GB** | RUNNER_TEMP 已在 D: | ⚠️ 见下方 🔴 —— **设 `TEMP`/`TMP`/`TMPDIR` 是无效的,必须设 `LOCALAPPDATA`** |
-| `macos-14` | **仅 40 GB**(Xcode 占了 263 GB) | 只剩 10 GB,太险 | ⚠️ **必须删多余 Xcode**(实测 90 秒腾出 42 GB → 82 GB) |
+| `ubuntu-latest` | **89 GB** (145G root disk) | ✅ succeeded, 59 GB left | **nothing to do** |
+| `ubuntu-24.04-arm` | **110 GB** | ✅ succeeded, 80 GB left | no need to free space; but **the disk is 2.5 times slower** (170 vs 430 MB/s) |
+| `windows-latest` | C: 33.5 GB / **D: 147 GB** | RUNNER_TEMP is already on D: | ⚠️ see the 🔴 below — **setting `TEMP`/`TMP`/`TMPDIR` has no effect; you must set `LOCALAPPDATA`** |
+| `macos-14` | **only 40 GB** (Xcode takes 263 GB) | only 10 GB left, too risky | ⚠️ **the extra Xcodes must be deleted** (measured: 90 seconds frees 42 GB → 82 GB) |
 
-**两个被实测推翻的流传说法:**
-1. **"runner 只有 14 GB"** —— 那是 GitHub **保证的下限**,不是实际;现在根盘是 **145 GB**。
-2. **"`/mnt` 是块 74 GB 独立临时盘"** —— **已过时**。`/mnt` 现在只是根分区上的一个空目录,`/dev/sdb1` 不存在。
+**Two circulating claims overturned by measurement:**
+1. **"A runner has only 14 GB"** — that is the **lower bound GitHub guarantees**, not reality; the root disk is now **145
+   GB**.
+2. **"`/mnt` is a separate 74 GB temporary disk"** — **outdated**. `/mnt` is now just an empty directory on the root
+   partition, and `/dev/sdb1` does not exist.
 
-**顺带解决了本机那个坑**:**runner 上 `/tmp` 就在 145 GB 的 ext4 根盘上,不是 tmpfs**
-⇒ Linux 上 `ISABELLE_TMP_PREFIX` 硬编码到 `/tmp/isabelle-$USER` **在 CI 上不是问题,不用覆盖**。
+**This also settles that pitfall from the local machine**: **on the runner, `/tmp` is on the 145 GB ext4 root disk, not a
+tmpfs** ⇒ on Linux, `ISABELLE_TMP_PREFIX` being hard-coded to `/tmp/isabelle-$USER` **is not a problem on CI and need not
+be overridden**.
 
-**防御性措施**:GitHub 只承诺 14 GB ⇒ 开跑前加 `df` 断言,低于阈值才跑 cleanup
-(手工 `rm -rf` 预装工具链实测 **25 秒腾 33 GB**,比 `jlumbroso/free-disk-space` 的 3–5 分钟快得多)。
+**Defensive measure**: GitHub promises only 14 GB ⇒ add a `df` assertion before starting, and run the cleanup only below a
+threshold (deleting preinstalled toolchains by hand with `rm -rf` measured **33 GB freed in 25 seconds**, much faster than
+the 3–5 minutes of `jlumbroso/free-disk-space`).
 
-**Larger runner 用不了也没必要**:个人账号不能用 + 公开仓库要收费,且规格 150 GB ≈ 标准 runner 的 145 GB。
+**A larger runner is neither usable nor necessary**: personal accounts cannot use them + public repositories are charged
+for them, and its 150 GB ≈ the 145 GB of a standard runner.
 
-⚠️ **`macos-14` 只有 3 核 / 7 GB 内存** —— 它还要跑 HOL heap 构建 ×2(双架构),**又慢又可能内存吃紧**。
+⚠️ **`macos-14` has only 3 cores / 7 GB of memory** — and it also has to build the HOL heap ×2 (both architectures),
+**which is slow and may run short of memory**.
 
-### 5.5 2026-10-31 起的矩阵(Isabelle2026)
+### 5.5 The matrix from 2026-10-31 on (Isabelle2026)
 
-每个 job 做什么、为什么,以 `.github/workflows/build.yml` 文件头与各 job 的注释为准,这里只列形状:
+What each job does and why is defined by the header of `.github/workflows/build.yml` and the comments of each job; here we
+list only the shape:
 
 ```
-tests              [ubuntu-latest]   tests/ 的单元测试;conda 等它通过
-bundles            [ubuntu-latest]   下载五个官方平台包,按 releases/<R>/SHA256SUMS 核对 → 一个 artifact
-conda              [ubuntu-latest]   scripts/pack.sh 逐个打 conda 包(含 check_pristine.py 的断言)
-                                     → 本地 channel 装 linux-64 并真跑;两个同名环境的用户目录;post-link 重跑
-install-macos      [macos-15, macos-15-intel]   osx-arm64、osx-64 各在原生机器上装和跑(arm 上另有 GUI 检查)
-install-linux-arm  [ubuntu-24.04-arm]   linux-aarch64 装、跑、GUI 检查
-install-windows    [windows-latest]  win-64 装、首次 `isabelle` 调用(Cygwin 初始化,含失败对照)、post-link 重跑(.bat)
+tests              [ubuntu-latest]   the unit tests of tests/; conda waits for them to pass
+bundles            [ubuntu-latest]   download the five official platform bundles, check them against releases/<R>/SHA256SUMS → one artifact
+conda              [ubuntu-latest]   scripts/pack.sh makes the conda packages one by one (including check_pristine.py's assertions)
+                                     → install linux-64 from a local channel and really run it; the user directories of two environments of the same name; the post-link re-run
+install-macos      [macos-15, macos-15-intel]   osx-arm64 and osx-64 are each installed and run on a native machine (with a GUI check on arm in addition)
+install-linux-arm  [ubuntu-24.04-arm]   linux-aarch64: install, run, GUI check
+install-windows    [windows-latest]  win-64: install, the first `isabelle` call (Cygwin's initialization, with a negative control for failure), the post-link re-run (.bat)
 ```
 
-本文档与注释里一律用 job id(上表左列)称呼这些 job,不用字母(owner 2026-11-01)。
+This document and the comments always call these jobs by their job id (the left column of the table above), not by
+letters (owner, 2026-11-01).
 
-不再编 heap:官方包自带的 Pure、HOL heap 就是官方默认的 32_in_64 变体(`x86_64_32-*`、`arm64_32-*`),原样进包。
-macOS 从 2026 起是两个官方包(`_macos` 是 Intel、`_macos_arm` 是 arm),各对应一个 osx 子目录。
-`release.yml` 照旧先跑整个 `build.yml`、再发布、再从线上渠道冒烟(五个平台,钉住刚发的构建并核对 `ISABELLE_ID`)。
+No more heap compiling: the Pure and HOL heaps that come with the official bundles are the official default 32_in_64
+variant (`x86_64_32-*`, `arm64_32-*`), and go into the package as they are.
+From 2026 on, macOS has two official bundles (`_macos` is Intel, `_macos_arm` is arm), each matching one osx subdir.
+`release.yml`, as before, first runs the whole `build.yml`, then publishes, then smoke-tests from the live channel (five
+platforms, pinning the build just published and checking `ISABELLE_ID`).
 
 ---
 
-## 6. conda 包结构(设计,未实现)
+## 6. conda package structure (design, not implemented)
 
 ```
-<元包>                          noarch,depends 下面全部（名字待定，不带 aoa 前缀）
-├── isabelle                    per-platform,version 2025.2  ← 我们的补丁版 Isabelle(含预建 HOL heap)
-├── <组件包>                     noarch generic  ← 六个仓库的 .thy/.ML/jar + 组件配置(名字待定)
+<metapackage>                   noarch, depends on everything below (name to be decided, without the aoa prefix)
+├── isabelle                    per-platform, version 2025.2  ← our patched Isabelle (with a prebuilt HOL heap)
+├── <component package>          noarch generic  ← the .thy/.ML/jar of the six repositories + component configuration (name to be decided)
 ├── isamini                     noarch python
 ├── isabelle-rpc               noarch python
 ├── isarepl                     noarch python
-└── isabelle-semantic-embedding per-platform（唯一带原生 wheel 的）
+└── isabelle-semantic-embedding per-platform (the only one with a native wheel)
 ```
 
-- **channel**:`https://conda.qiyuan.me`(R2 bucket `conda`,见 §3.3)。
-- **`isabelle` 包 = 方案 A(文件全打进包)**,不是 post-link 下载(见 §3.1)。
-- version **`2025.2`**;上游 changeset + 补丁标识进 build string;改内容 bump build number。
-- **预建的 heap**:`Pure` + `HOL` + **`Main`**(`-b HOL,Main`)。`Main` 只有 3.8 MB(heap 是层级 delta,见 §3.5)。
-  **AoA 自己的 session heap(`Minilang_AoA` 链)暂不预建**——用户首次使用时自建(已确认可接受)。
-  将来若要预建,**体积不是障碍**(同样是 delta),代价只是 CI 时长。
-- 重原生依赖(torch/faiss/CUDA)从 conda-forge 拉,不是我们产出。
-- ⚠️ **faiss 的 blas 变体坑**:conda solver 会随机装出缺 mkl 的 faiss build → import 崩。
-  必须 pin `libblas=*=*openblas`(或装全 mkl)。(注:PyPI 的 `faiss-cpu` wheel 自带 openblas,没这个坑。)
+- **channel**: `https://conda.qiyuan.me` (R2 bucket `conda`, see §3.3).
+- **The `isabelle` package = option A (all files inside the package)**, not a post-link download (see §3.1).
+- version **`2025.2`**; the upstream changeset + a patch identifier go into the build string; changed content bumps the
+  build number.
+- **Prebuilt heaps**: `Pure` + `HOL` + **`Main`** (`-b HOL,Main`). `Main` is only 3.8 MB (heaps are hierarchical deltas,
+  see §3.5).
+  **AoA's own session heaps (the `Minilang_AoA` chain) are not prebuilt for now** — users build them on first use
+  (confirmed acceptable).
+  If we want to prebuild them some day, **size is no obstacle** (they are deltas too); the cost is only CI time.
+- Heavy native dependencies (torch/faiss/CUDA) are pulled from conda-forge; we do not produce them.
+- ⚠️ **The faiss blas-variant pitfall**: the conda solver may randomly install a faiss build that lacks mkl → import
+  crashes. We must pin `libblas=*=*openblas` (or install the complete mkl). (Note: PyPI's `faiss-cpu` wheel bundles
+  openblas and does not have this pitfall.)
 
-### 6.1 备选发行形态:tarball(conda-pack / uv + venv-pack)
+### 6.1 Alternative distribution form: tarball (conda-pack / uv + venv-pack)
 
-「vendor 一切 → 每平台一个 tar → 解压即用、免激活」也完全可行,而且**天然满足"不装 conda 也能用"**:
-- Python 侧:**`uv`**(可带 standalone 可重定位 CPython)+ `venv-pack`;或 conda + `conda-pack`。
-- 代价:**每平台一个 tar**(Python 原生扩展与 heap 都是平台相关的,躲不掉)。
-- 与 conda 包**不冲突**:同一套构建产物可以既发 channel、又挂 release tar。
+"Vendor everything → one tar per platform → unpack and use, no activation" is also entirely feasible, and it **naturally
+satisfies "usable without installing conda"**:
+- Python side: **`uv`** (can bring a standalone relocatable CPython) + `venv-pack`; or conda + `conda-pack`.
+- Cost: **one tar per platform** (Python native extensions and heaps are both platform-specific; no way around it).
+- **No conflict** with the conda packages: the same build outputs can both be published to the channel and attached as
+  release tars.
 
 ---
 
-## 7. 已知坑与对策
+## 7. Known pitfalls and countermeasures
 
-| 坑 | 对策 | 状态 |
+| Pitfall | Countermeasure | Status |
 |---|---|---|
-| **补丁不 commit 就被 `hg.archive` 丢掉** | 必须 `hg commit` 后用 `-r REV'` | 已固化进流程 |
-| **`build_doc` 需要完整 TeX Live** | 只在 archive job 装(`texlive-science` 含 stmaryrd、`texlive-latex-extra`、`latexmk` …) | 已解决 |
-| **`/tmp` 是 tmpfs、装不下 `ISABELLE_TMP`** | `build_heaps` 会把整个 bundle+contrib tar 到 `ISABELLE_TMP`,**峰值实测 22GB**。Linux 上 `ISABELLE_TMP_PREFIX` 硬编码为 `/tmp/isabelle-$USER`(`TMPDIR` 只对 Windows 生效)⇒ **在 user settings 里覆盖 `ISABELLE_TMP_PREFIX` 指向大盘** | 已解决 |
-| **user-settings 冲突** | release 名会让 `other_isabelle` 的 `ISABELLE_HOME_USER` 撞上构建机上已装 Isabelle 的真配置 ⇒ 用**隔离 HOME**。干净的 CI runner 没这问题 | 已解决 |
-| **组件版本漂移** | 必须用**该 rev 自带的 `Admin/components/main`**,别用镜像 tip | 已知 |
-| **Windows `.bat` 控制台挂起** | `start ""` detach,或 GUI 走官方 launch4j exe | **待修** |
-| **Windows 一次性 `-init`** | conda/tar 安装绕过 SFX AutoInstall ⇒ 必须显式做;最省心是在构建机 `-init` 后再打包 | 已知 |
-| **Session 0:窗口标题断言不可用** | CI 的 GUI 测试**必须靠截图**;确定性断言只能查进程存活 | ✅ **已实现**(见 §7.10) |
-| **Ubuntu 上没有 `7zz`** | `7zz` 是 7-Zip **上游**发行版的可执行名。Debian/Ubuntu 的 `7zip` 包(23.01+dfsg)装的是 **p7zip 风格的 `7z`**(`dpkg -L 7zip` → `/usr/bin/{7z,7za,7zr,p7zip}`,**无 `7zz`**)。⇒ 解 Windows SFX `.exe` 时**不要写死名字**:`SEVENZIP=$(command -v 7zz \|\| command -v 7z)` | 已解决 |
-| **rattler-build 默认跑跨平台的 recipe 测试** | 默认 `--test native-and-emulated`。在 Linux 上打 **win-64** 时它会执行 `isabelle.bat version` → **127** → 把一个**完好的包隔离进 `broken/`**。⇒ **必须 `--test native`** | 已解决 |
+| **patches not committed are dropped by `hg.archive`** | must `hg commit`, then use `-r REV'` | built into the process |
+| **`build_doc` needs a complete TeX Live** | install it only in the archive job (`texlive-science` with stmaryrd, `texlive-latex-extra`, `latexmk` …) | solved |
+| **`/tmp` is a tmpfs and cannot hold `ISABELLE_TMP`** | `build_heaps` tars the whole bundle+contrib into `ISABELLE_TMP`, **measured peak 22GB**. On Linux `ISABELLE_TMP_PREFIX` is hard-coded to `/tmp/isabelle-$USER` (`TMPDIR` takes effect only on Windows) ⇒ **override `ISABELLE_TMP_PREFIX` in the user settings to point at a big disk** | solved |
+| **user-settings clash** | the release name makes `other_isabelle`'s `ISABELLE_HOME_USER` collide with the real configuration of an Isabelle already installed on the build machine ⇒ use an **isolated HOME**. A clean CI runner does not have this problem | solved |
+| **component version drift** | must use **the `Admin/components/main` that comes with that rev**, not the mirror's tip | known |
+| **Windows `.bat` console hang** | detach with `start ""`, or run the GUI through the official launch4j exe | **to be fixed** |
+| **the one-time `-init` on Windows** | a conda/tar install bypasses the SFX AutoInstall ⇒ must be done explicitly; least hassle is to run `-init` on the build machine, then package | known |
+| **Session 0: window-title assertions are unusable** | the CI's GUI test **must rely on screenshots**; a deterministic assertion can only check that the process is alive | ✅ **implemented** (see §7.10) |
+| **no `7zz` on Ubuntu** | `7zz` is the executable name of 7-Zip's **upstream** distribution. Debian/Ubuntu's `7zip` package (23.01+dfsg) installs a **p7zip-style `7z`** (`dpkg -L 7zip` → `/usr/bin/{7z,7za,7zr,p7zip}`, **no `7zz`**). ⇒ When unpacking the Windows SFX `.exe`, **do not hard-code the name**: `SEVENZIP=$(command -v 7zz \|\| command -v 7z)` | solved |
+| **rattler-build runs the recipe tests across platforms by default** | the default is `--test native-and-emulated`. When packaging **win-64** on Linux it runs `isabelle.bat version` → **127** → and **quarantines a perfectly good package into `broken/`**. ⇒ **must use `--test native`** | solved |
 
-### 🔴🔴 `cmd && echo ok` 在 `set -e` 下是个**永远不会失败的假守卫**
+### 🔴🔴 `cmd && echo ok` under `set -e` is a **fake guard that can never fail**
 
-`build.yml` 里这句本意是"验证 7zz 可用":
+This line in `build.yml` was meant to "verify that 7zz is usable":
 ```bash
 7zz i > /dev/null && echo "7zz: $(7zz | head -2 | tail -1)"
 ```
-**它做不到。** bash 的 `set -e` **豁免 `&&`/`||` 列表中除最后一个之外的所有命令**。
-所以 `7zz` 不存在时,这一整行只是静默返回非零,**步骤照样绿**。
+**It cannot do that.** bash's `set -e` **exempts every command of an `&&`/`||` list except the last**.
+So when `7zz` does not exist, the whole line just silently returns nonzero, and **the step is still green**.
 
-实际后果(run `29208082084`):`command not found` **在安装步骤里就打印出来了**,被咽掉;
-真正的爆炸推迟到 **25 分钟后**的 `pack.sh` 才发生,而且此时前 4 个包已经打完(白干)。
+The actual consequence (run `29208082084`): `command not found` **was already printed in the install step**, and swallowed;
+the real explosion was postponed to `pack.sh` **25 minutes later**, by which time the first 4 packages had already been
+built (wasted work).
 
-**规则:守卫必须写成能让步骤失败的形式。**
+**Rule: a guard must be written in a form that can make the step fail.**
 ```bash
 command -v 7zz >/dev/null || command -v 7z >/dev/null || { echo "::error::no 7z binary"; exit 1; }
 ```
-写 CI 检查时**先自问:这个检查在被检查项缺失时,真的会让步骤变红吗?** 不会的话它就是装饰。
+When writing a CI check, **first ask yourself: when the thing checked is missing, does this check really turn the step
+red?** If not, it is decoration.
 
-**同一个病的另一种形态:跨平台的 recipe 测试要么致命,要么是假的。**
-rattler-build 在 Linux 上打 **osx-64 / osx-arm64** 包时,测试走 unix 分支、**在 Linux 上**跑
-macOS 包里的 bash 脚本。而 `isabelle version` 只是回显一个 settings 变量 ——
-**根本不碰任何 Darwin 二进制就"通过"了**。CI 日志里那两个绿勾**什么都没证明**。
-⇒ 用 `--test native`。真正的验收靠 build.yml 的安装检查(`conda` 与 `install-*` job:装进 conda env + 真 build 一个 session +
-GUI 截图判定),那比 recipe 内测试强得多。
+**Another form of the same disease: cross-platform recipe tests are either fatal or fake.**
+When rattler-build packages **osx-64 / osx-arm64** on Linux, the test takes the unix branch and runs the macOS package's
+bash script **on Linux**. And `isabelle version` only echoes a settings variable —
+**it "passes" without touching any Darwin binary at all**. Those two green ticks in the CI log **proved nothing**.
+⇒ Use `--test native`. The real acceptance relies on build.yml's install checks (the `conda` and `install-*` jobs: install
+into a conda env + really build a session + judge a GUI screenshot), which are much stronger than in-recipe tests.
 
-## 7.10 ✅ GUI 验证:Xvfb + jEdit + Claude Code 判截图(已实现并本机验证)
+## 7.10 ✅ GUI verification: Xvfb + jEdit + Claude Code judges the screenshot (implemented and verified locally)
 
-`scripts/verify_gui.sh`(CI repo)。**GUI 是唯一无头断言够不到的地方** ——
-`isabelle version` 和 `isabelle build` 在"jEdit 一启动就死"的包上**照样全过**。
+`scripts/verify_gui.sh` (CI repo). **The GUI is the only place headless assertions cannot reach** —
+`isabelle version` and `isabelle build` **still all pass** on a package "whose jEdit dies as soon as it starts".
 
-**判据不是"窗口出现了"(空窗口也满足)。** theory 里放**一个必过的 lemma + 一个必错的**
-(`2+2=5`),要求错误标记**恰好落在该错的那一行**。这才把"界面渲染了"升级成
-"prover 真的在通过 GUI 检查证明"。做过 negative control(空屏 → 模型答 `started: no`)。
+**The criterion is not "a window appeared" (an empty window satisfies that).** The theory holds **one lemma that must
+succeed + one that must fail** (`2+2=5`), and the error marker is required to land **exactly on the line that should
+fail**. Only this upgrades "the interface rendered" to "the prover really checks proofs through the GUI". A negative
+control was done (empty screen → the model answers `started: no`).
 
-- **鉴权只用 `CLAUDE_CODE_OAUTH_TOKEN`**(`claude setup-token`,走**订阅额度**)。
-  🔴 **绝不要设 `ANTHROPIC_API_KEY`** —— 它在 Claude Code 的鉴权链里**优先级更高**,
-  设了会静默把订阅换成按量计费。
-- **限流不等于包坏了。** 订阅额度与用户交互式使用**共享同一个池子**(实测被打满过)。
-  ⇒ **只有"模型给出了判断且判断是坏的"才能让 CI 变红;"模型没能给出判断"
-  (限流/掉登录/API 故障)只 `::warning::`。** 真的 GUI 坏了永远以
-  `structured_output.started = "no"` 的形式回来,所以判别力没有损失。
-  【2026-11-01 起(owner):发布时(`release.yml` 传 `require_gui_verdict: true`)没有判断的 GUI 检查失败,发布在上传之前停下;
-  模型对 `bad`/`good` 两行答 `unclear` 也算没有判断。`ci.yml` 照旧只警告。补救见 `RELEASE.md` 第 3 步,规则写在
-  `gui_judge.sh` 的 `unjudged`。】
-- ~~**必须从包里的 heap 目录名反推 `ML_system_64` 并写进临时 HOME 的 preferences。**~~【2026-10-31 作废(第 13 条:
-  官方默认的 32_in_64 heap 原样进包,没有要钉的变体;那份 preferences 也写进了 conda 里的 Isabelle 从来不读的目录),
-  `pin_ml` 已删。】变体不匹配时 Isabelle **不报警,直接静默重建 HOL**,而 jEdit 是在 **GUI 对话框**里建的、
-  输出**不进 `jedit.log`** ⇒ 截图检查会**全绿假通过**而包里的 heap 根本没被用。
-  所以脚本断言 `Isabelle build` 对话框不许出现;`verify_install.sh` 的真 build 断言 HOL 不重编。
-- 无头 build 的 `Building HOL` 检查与 GUI 截图检查**互补,不可互相替代**:
-  前者确定性、不需要模型在环;后者覆盖 jEdit 那条路径。**两个都要留。**
+- **Authentication uses only `CLAUDE_CODE_OAUTH_TOKEN`** (`claude setup-token`, on the **subscription quota**).
+  🔴 **Never set `ANTHROPIC_API_KEY`** — it has **higher priority** in Claude Code's authentication chain, and setting it
+  silently switches from the subscription to metered billing.
+- **Rate limiting does not mean the package is broken.** The subscription quota **shares one pool** with the owner's
+  interactive use (measured: it has been used up).
+  ⇒ **Only "the model gave a verdict and the verdict is bad" may turn the CI red; "the model could not give a verdict"
+  (rate limit / logged out / API failure) is only a `::warning::`.** A really broken GUI always comes back in the form
+  `structured_output.started = "no"`, so no discriminating power is lost.
+  【From 2026-11-01 on (owner): at release time (`release.yml` passes `require_gui_verdict: true`) a GUI check without a
+  verdict fails, and the release stops before the upload; the model answering `unclear` for the `bad`/`good` lines also
+  counts as no verdict. `ci.yml` still only warns. The remedies are in step 3 of `RELEASE.md`; the rule is written in
+  `gui_judge.sh`'s `unjudged`.】
+- ~~**The `ML_system_64` must be inferred from the package's heap directory name and written into the preferences of
+  the temporary HOME.**~~【Void from 2026-10-31 (item 13: the official default 32_in_64 heaps go into the package as they
+  are, so there is no variant to pin; and those preferences were written into a directory that the Isabelle in conda never
+  reads), `pin_ml` has been deleted.】 When the variant does not match, Isabelle **does not warn; it silently rebuilds
+  HOL**, and jEdit builds it in a **GUI dialog** whose output **does not go into `jedit.log`** ⇒ the screenshot check would
+  **pass, all green, falsely**, while the package's heap is not used at all.
+  So the script asserts that the `Isabelle build` dialog must not appear; `verify_install.sh`'s real build asserts that
+  HOL is not recompiled.
+- The headless build's `Building HOL` check and the GUI screenshot check **complement each other and cannot replace each
+  other**: the former is deterministic and needs no model in the loop; the latter covers the jEdit path. **Keep both.**
 
 ---
 
-## 7.9 ✅ 已定案:**只打 `user` 类补丁**(用户 2026-07-12 确认)
+## 7.9 ✅ Settled: **apply only the `user` category of patches** (confirmed by the owner 2026-07-12)
 
-【2026-10-31 起作废:`isabelle` 包不打任何补丁,§11。】
+【Void from 2026-10-31 on: the `isabelle` package applies no patches at all, §11.】
 
-**定案**:发布的 Isabelle **只打 `my-better-isabelle-prover` 的 `user` category**。
+**Decision**: the released Isabelle **applies only the `user` category of `my-better-isabelle-prover`**.
 
-- **`by aoa` 不需要 `register_thy`**(用户确认——早前"AoA 需要 register_thy"的推断是错的)。
-- **`Isa-REPL` 的 conda 包会在自己的安装脚本里自动打 `register_thy` 补丁**(它的特殊处理,不是 isabelle 包的事)。
-  ⚠️ 注意:那会改动 Pure 的 ML 源 ⇒ **heap 会失效并按需重建**(Isabelle 会自动处理,但用户首次要等 HOL 重建)。
+- **`by aoa` does not need `register_thy`** (confirmed by the owner — the earlier inference "AoA needs register_thy" was
+  wrong).
+- **The conda package of `Isa-REPL` applies the `register_thy` patch automatically in its own install script** (its own
+  special handling, not the isabelle package's business).
+  ⚠️ Note: that changes Pure's ML sources ⇒ **the heaps go stale and are rebuilt on demand** (Isabelle handles this
+  automatically, but on first use users have to wait for HOL to be rebuilt).
 
-### 🔴 CI 必须从 **git 源**安装补丁工具,不能用 PyPI
+### 🔴 CI must install the patch tool from the **git source**, not from PyPI
 
 ```
-git log:  593f64b  expose_foreign     ← 在 0.2.0 之后加的
-          666327c  Release 0.2.0      ← PyPI 上只有这个
-本地:     0.3.0（有 categories.toml + --category）
+git log:  593f64b  expose_foreign     ← added after 0.2.0
+          666327c  Release 0.2.0      ← the only one on PyPI
+local:    0.3.0 (has categories.toml + --category)
 ```
-⇒ **PyPI 的 0.2.0 既没有 `--category`,也没有 `expose_foreign`(user 三件套之一)。**
-⇒ CI 里改成 **`pip install git+https://github.com/xqyww123/my_better_isabelle_prover`**
-(拿到 0.3.0:categories + expose_foreign)。等 0.3.0 发到 PyPI 后可以换回。
+⇒ **PyPI's 0.2.0 has neither `--category` nor `expose_foreign` (one of the three user patches).**
+⇒ In CI, change it to **`pip install git+https://github.com/xqyww123/my_better_isabelle_prover`**
+(which gets 0.3.0: categories + expose_foreign). Once 0.3.0 is on PyPI we can switch back.
 
-### 🔴🔴 未决冲突:**别人正在把 `pide_control` + `perspective_eof_clamp` 从 2025-2 撤掉**
+### 🔴🔴 Unresolved conflict: **someone else is removing `pide_control` + `perspective_eof_clamp` from 2025-2**
 
-`my_better_isabelle_prover` 的本地工作区有**已 staged 但未提交的删除**——另一个 agent 在退役这两个 feature。
-其提交 `37c2848` 明确写:在 Isabelle2025-2 上,默认 `patch` **"applies exactly one pure-ML patch, `expose_foreign`"**。
+The local working tree of `my_better_isabelle_prover` has **staged but uncommitted deletions** — another agent is retiring
+these two features.
+Its commit `37c2848` says explicitly: on Isabelle2025-2, the default `patch` **"applies exactly one pure-ML patch,
+`expose_foreign`"**.
 
-| 时点 | `user` 集合(2025-2) |
+| Point in time | the `user` set (2025-2) |
 |---|---|
-| **现在**(git remote HEAD) | `pide_control`(5 文件)+ `perspective_eof_clamp`(1)+ `expose_foreign`(1) = **7 个 patch** |
-| **那个 agent 一旦推送退役** | **只剩 `expose_foreign`**(1 个纯 ML 补丁) |
+| **now** (git remote HEAD) | `pide_control` (5 files) + `perspective_eof_clamp` (1) + `expose_foreign` (1) = **7 patches** |
+| **once that agent pushes the retirement** | **only `expose_foreign` remains** (1 pure-ML patch) |
 
-**后果**:CI 的断言(检查 `theory_status`/`cancel_execution` 是否进了源码与 jar)**会突然失败、build 变红**
-—— 这是**响亮的失败,不是静默出错**(好事),但**必须先决定哪个才是本意**:
+**Consequence**: the CI's assertions (which check that `theory_status`/`cancel_execution` made it into the sources and the
+jar) **will suddenly fail and the build goes red**
+— this is **a loud failure, not a silent error** (a good thing), but **we must first decide which one is intended**:
 
-- **(a)** 发布包带 `pide_control` + `perspective_eof_clamp` + `expose_foreign`
-  ⇒ 需让那个 agent **别推退役**,或 CI **钉死一个 commit**。
-- **(b)** 发布包**只带 `expose_foreign`**
-  ⇒ **Isabelle-MCP 的 PIDE 扩展不再进发布包**;CI 的断言要相应改掉。
+- **(a)** the released package carries `pide_control` + `perspective_eof_clamp` + `expose_foreign`
+  ⇒ that agent must be asked **not to push the retirement**, or the CI must **pin a commit**.
+- **(b)** the released package **carries only `expose_foreign`**
+  ⇒ **Isabelle-MCP's PIDE extensions no longer go into the released package**; the CI's assertions must change
+  accordingly.
 
-**⇒ 待用户拍板。**
+**⇒ Awaiting the owner's decision.**
 
-### 类别表(`patches/categories.toml`)
+### Category table (`patches/categories.toml`)
 
-| category | features | 用途(工具作者的原话) |
+| category | features | Purpose (the tool author's own words) |
 |---|---|---|
-| **user** | `pide_control`、`perspective_eof_clamp`、`expose_foreign` | *"needed by the user-facing systems (Isabelle-MCP; Semantic_Embedding's SIMD FFI)"* |
-| **dev** | `register_thy`、`show_types_nv`、`expose_map_syn` | *"needed only by developer/experiment infrastructure (Isa-REPL, Isa-Mini's translator, AoA agent injector)"* |
+| **user** | `pide_control`, `perspective_eof_clamp`, `expose_foreign` | *"needed by the user-facing systems (Isabelle-MCP; Semantic_Embedding's SIMD FFI)"* |
+| **dev** | `register_thy`, `show_types_nv`, `expose_map_syn` | *"needed only by developer/experiment infrastructure (Isa-REPL, Isa-Mini's translator, AoA agent injector)"* |
 
-CLI:`--category {user,dev,all}`,**默认就是 `user`**(0.3.0 起)。
+CLI: `--category {user,dev,all}`, **and the default is `user`** (from 0.3.0 on).
 
-### 两个必须先解决的问题
+### Two problems that must be solved first
 
-**① PyPI 上只有 0.2.0,没有 category 功能**
-CI 里 `pip install my-better-isabelle-prover` → 装到 **0.2.0** → **会把 6 个补丁全打上**。
-⇒ 要只打 user,**必须先把 0.3.0 发到 PyPI**(该仓库由**别人**维护),**或** CI 改成从 git 源安装。
+**① PyPI has only 0.2.0, without the category feature**
+In CI, `pip install my-better-isabelle-prover` → installs **0.2.0** → **applies all 6 patches**.
+⇒ To apply only user, **0.3.0 must first be published to PyPI** (that repository is maintained by **someone else**),
+**or** the CI must install from the git source.
 
-**② 只打 user ⇒ 发布的 Isabelle 不支持 `by aoa`**
-`register_thy` 是 **dev** 类,而它是 **Isa-REPL 的硬依赖**;Isa-REPL 又在 AoA 链条里
-(`Minilang_AoA = Minilang + Isa_REPL + …`)。
-⇒ **只打 user 的包,面向的是 Isabelle-MCP + Semantic_Embedding 用户,而不是 AoA。**
-AoA 用户需自己 `patch --category all`。
+**② Applying only user ⇒ the released Isabelle does not support `by aoa`**
+`register_thy` is in the **dev** category, and it is **a hard dependency of Isa-REPL**; Isa-REPL in turn is in the AoA
+chain (`Minilang_AoA = Minilang + Isa_REPL + …`).
+⇒ **A package with only the user patches is aimed at Isabelle-MCP + Semantic_Embedding users, not at AoA.**
+AoA users have to run `patch --category all` themselves.
 
-**⇒ 待用户确认:这是否是本意?** 若是,发布定位要相应调整(本文 §1「目标」写的是"让用户能 `by aoa`",与之矛盾)。
+**⇒ Awaiting the owner's confirmation: is this what is intended?** If so, the positioning of the release must be
+adjusted accordingly (this document's §1 "Goal" says "so that users can `by aoa`", which contradicts it).
 
 ---
 
-## 7.11 🔴 补丁工具**必须 pin**,以及**更新补丁集的完整流程**
+## 7.11 🔴 The patch tool **must be pinned**, and **the full procedure for updating the patch set**
 
-【2026-10-31 起作废:CI 不再安装补丁工具,`MBI_VERSION` 与 `scripts/check_patch_sync.sh` 已删除,§11。】
+【Void from 2026-10-31 on: the CI no longer installs the patch tool, and `MBI_VERSION` and `scripts/check_patch_sync.sh`
+have been deleted, §11.】
 
-**曾经的写法(错的)**:`pip install "git+https://github.com/xqyww123/my_better_isabelle_prover"`
-—— **无 pin,取的是 HEAD**。后果:那个 repo 有人一推,**我们发布的 Isabelle 就悄悄变了**,
-而包**还叫同一个名字**(见下)。构建不可复现。
+**The former way (wrong)**: `pip install "git+https://github.com/xqyww123/my_better_isabelle_prover"`
+— **no pin, it takes HEAD**. Consequence: whenever someone pushes to that repo, **the Isabelle we release quietly
+changes**, while the package **still has the same name** (see below). The build is not reproducible.
 
-**现在**:`build.yml` 里 `MBI_VERSION="0.3.0"`,装 **PyPI 的固定版本** —— PyPI 的版本**不可变**,
-这正是发布需要的。(注意 `MLML` 里那个 submodule pin **CI 不看**;它是给本地开发用的。)
+**Now**: `MBI_VERSION="0.3.0"` in `build.yml`, installing **a fixed version from PyPI** — PyPI versions **are immutable**,
+which is exactly what a release needs. (Note that the CI **does not look at** the submodule pin in `MLML`; that is for
+local development.)
 
-### 🔴 为什么"改补丁集"必须**同时** bump `build_number`
+### 🔴 Why "changing the patch set" must **also** bump `build_number`
 
-为了 MAX_PATH,conda 的 build string 从 `<hg-changeset>_<n>` 缩成了**纯 build number**
-(`recipe.yaml:30-43`,省 12 字符)。⇒ **补丁集变了,包名仍然是 `isabelle-2025.2-0`。**
-conda **看不出这是个新包**。
+For MAX_PATH, conda's build string was shortened from `<hg-changeset>_<n>` to **just the build number**
+(`recipe.yaml:30-43`, saving 12 characters). ⇒ **When the patch set changes, the package name is still
+`isabelle-2025.2-0`.** conda **cannot tell that it is a new package**.
 
-**兜底**:`release.yml` **拒绝覆盖已发布的文件名** ⇒ 忘了 bump 的话,**发布会大声失败**,
-而不是静默给用户发旧字节。**这是设计,不是巧合。**
+**The safety net**: `release.yml` **refuses to overwrite a published filename** ⇒ if you forget the bump, **the release
+fails loudly**, instead of silently giving users old bytes. **This is by design, not by coincidence.**
 
-### 更新补丁集的完整流程 → **见 `RELEASE.md`**
+### The full procedure for updating the patch set → **see `RELEASE.md`**
 
-一句话版:改补丁 → **发 PyPI 新版** → bump `MBI_VERSION` → bump `ISA_BUILD_NUMBER` → 触发 `release.yml`。
+In one sentence: change the patches → **publish a new version to PyPI** → bump `MBI_VERSION` → bump `ISA_BUILD_NUMBER` →
+trigger `release.yml`.
 
-**唯一真正会咬人的失误:补丁只在本地改了,没发到 PyPI。**
-CI 装的是 PyPI 的固定版本,**不看** MLML 的 submodule ⇒ 你本地好用的补丁,
-**用户根本拿不到**,而 CI 全绿、包也照常发出去。经典的 "works on my machine"。
-`RELEASE.md` 的第一条就是挡这个的。
-(反过来"本地落后于已发布版本"**不是问题** —— 你是改动的源头。)
+**The only mistake that really bites: the patches were changed only locally and not published to PyPI.**
+The CI installs a fixed version from PyPI and **does not look at** MLML's submodule ⇒ patches that work for you locally
+**never reach users**, while the CI is all green and the package goes out as usual. The classic "works on my machine".
+The first item of `RELEASE.md` is there to stop exactly this.
+(The reverse, "local is behind the published version", **is not a problem** — you are the source of the changes.)
 
-## 8. 待办清单
+## 8. To-do list
 
-【2026-07 时的清单,留作记录;其中 CI、recipe、GUI 检查各项早已落地。】
+【The list as of 2026-07, kept as a record; the CI, recipe and GUI check items in it landed long ago.】
 
-| # | 事项 | 状态 |
+| # | Item | Status |
 |---|---|---|
-| A | 修 `isabelle.bat` 控制台挂起(detach) | ✅ **完成**(§3.6,`run.exe` + getopts 复刻,27/27 验收) |
-| B | 测 Windows 的 `-S` build | ✅ **完成 —— 结论是"根本没有 Windows 打包 job"**(§5.0) |
-| G | macOS 双架构验证 | ✅ **完成**(§5.2,单机 `macos-14`,HOL×2 = 1h44m) |
-| — | GitHub runner 磁盘 | ✅ **完成**(§5.3,风险解除) |
-| — | conda channel on R2 | ✅ **端到端打通**(§3.3,含 CDN 严重坑与解法) |
-| **C** | **搭 CI**(§5.1 的 Job A–F + §5.4 的三件套) | 🔄 **Job A ✅ 已跑绿;Job B–F 待做** |
-| C-A | **Job A(全平台 bundle,无 heap)—— ✅ 真 CI 上跑通并验证** | run [`29201707387`](https://github.com/xqyww123/isabelle-packaging-ci/actions/runs/29201707387) success **33m20s**,产物 **5.8 GB**;步骤 (8) 已验 `ISABELLE_ID` + **补丁进了 `isabelle.jar`** + **Windows `.exe` 从 Linux 交叉打出**;`hg clone` 已缓存(后续 run 跳过) |
-| C1 | ⚠️ 唯一未验证:**Windows runner 上原生建 heap** | 待验(可在 Job E 里直接试) |
-| **J** | 🔴 **`isabelle.bat` 改成自定位 + 挪进 `<ISABELLE_HOME>\bin\`**(现在写死路径,**进不了 conda 包**);实测递归与可重定位 | 🔄 **进行中** |
-| E | conda recipe:`isabelle` 包(把 bundle 打进包)+ 组件包 + Python 包 + 元包 | 待做 |
-| F | CI 的 GUI 截图测试(Session 0 ⇒ **窗口标题断言不可用,截图是 ground truth**;可选 Claude Code 判图,建议初期 advisory) | 待做 |
-| H | AFP 在打包方案里还没处理 | 待做 |
-| I | Cloudflare 面板:Browser Cache TTL → Respect Existing Headers;`repodata` 路径 Bypass cache(**需 zone 权限,得人工点**) | 待做 |
+| A | fix the `isabelle.bat` console hang (detach) | ✅ **done** (§3.6, `run.exe` + a getopts replica, 27/27 acceptance) |
+| B | test the `-S` build on Windows | ✅ **done — the conclusion is "there is no Windows packaging job at all"** (§5.0) |
+| G | macOS dual-architecture verification | ✅ **done** (§5.2, a single `macos-14`, HOL×2 = 1h44m) |
+| — | GitHub runner disk | ✅ **done** (§5.3, risk resolved) |
+| — | conda channel on R2 | ✅ **working end to end** (§3.3, including the serious CDN pitfall and its fix) |
+| **C** | **set up the CI** (Job A–F of §5.1 + the three workflows of §5.4) | 🔄 **Job A ✅ ran green; Job B–F to do** |
+| C-A | **Job A (bundles for all platforms, no heap) — ✅ ran and verified on real CI** | run [`29201707387`](https://github.com/xqyww123/isabelle-packaging-ci/actions/runs/29201707387) success **33m20s**, output **5.8 GB**; step (8) verified `ISABELLE_ID` + **the patches are in `isabelle.jar`** + **the Windows `.exe` is cross-built from Linux**; `hg clone` is cached (skipped by later runs) |
+| C1 | ⚠️ the only thing not verified: **building the heap natively on a Windows runner** | to verify (can be tried directly in Job E) |
+| **J** | 🔴 **make `isabelle.bat` self-locating + move it into `<ISABELLE_HOME>\bin\`** (now it hard-codes the path and **cannot go into a conda package**); measure recursion and relocatability | 🔄 **in progress** |
+| E | conda recipes: the `isabelle` package (the bundle inside the package) + component packages + Python packages + metapackage | to do |
+| F | the CI's GUI screenshot test (Session 0 ⇒ **window-title assertions are unusable; the screenshot is the ground truth**; optionally Claude Code judges the image, suggested as advisory at first) | to do |
+| H | AFP is not yet handled in the packaging plan | to do |
+| I | Cloudflare dashboard: Browser Cache TTL → Respect Existing Headers; Bypass cache for the `repodata` path (**needs zone permissions; has to be clicked by hand**) | to do |
 
-> **D(给 `my_better_isabelle_prover` 加 `build-release` 子命令)已取消** —— 那个仓库由**别人**维护。
-> 编排写进**我们自己的** `isabelle-packaging-ci`,把补丁工具当**黑盒**调用
-> (`pip install my-better-isabelle-prover` + `my-better-isabelle patch`)。
+> **D (adding a `build-release` subcommand to `my_better_isabelle_prover`) is cancelled** — that repository is
+> maintained by **someone else**.
+> The orchestration goes into **our own** `isabelle-packaging-ci`, which calls the patch tool as a **black box**
+> (`pip install my-better-isabelle-prover` + `my-better-isabelle patch`).
 
-**基础设施(已就绪,可复用)**
-- **Windows 11 QEMU VM**:`/home/qiyuan/qemu-win/`,`./run-win-vm.sh` → ~20 秒后
-  `ssh -i ssh/id_win -p 2222 isabelle@localhost` 可非交互驱动;可截图(QEMU monitor `screendump`)。
-  **CI 里做不到的真 GUI 验证,只能在这里做。**
-- **CI 仓库**:`xqyww123/isabelle-packaging-ci`(长期保留)。
-- **Linux 构建原型**:`/home/qiyuan/isa_release_proto/`(hg clone + 打补丁的树 + 产物)。
-
----
-
-## 9. 被推翻的旧方案(存档 + 推翻理由)
-
-> 旧方案:**不发布 Isabelle,而是复用用户已装的 Isabelle**;conda 包只带 AoA 组件,
-> 由 post-link 把组件路径写进用户的全局 `$ISABELLE_HOME_USER/etc/settings`(`init_component`),
-> 以便「不激活 conda 也能用」。
-
-**为什么推翻:**
-
-1. **conda 根本不跟踪这些副作用**:post-link 写到 `$PREFIX` 之外的东西,`conda remove` 不删、
-   `conda list` 不见;而清理依赖的 `pre-unlink` **不保证执行**(删 env 目录时不跑)⇒
-   用户的 Isabelle 可能被永久污染。业界已经用脚投票:post-link 下载的 `cudatoolkit-dev` **已归档弃用**。
-2. **补丁躲不过去**:AoA 需要打过补丁的 Isabelle(`register_thy` 是 Isa-REPL 的硬依赖)。
-   而**原地 patch 用户自己的 Isabelle**,不但是同一个「不跟踪的副作用」问题的更深版本
-   (改外部源码树 + 需要重编译 + 需要重建 heap),而且**没有任何包管理器为这种事背书**——
-   所有包管理器的「支持 patch」都指的是「**patch 我自己构建的源码**」(Nix/Homebrew/Debian/RPM/conda-build
-   全都如此)。想要包管理器级别的干净,就只能**分发我们自己构建的、打过补丁的 Isabelle**。
-3. **heap 也躲不过去**:官方包自带预建 HOL heap;我们改了 Pure/ML ⇒ 不能复用官方 heap ⇒
-   必须自己每平台重建(§3.5)。这已经等价于「自己走一遍发布流程」了。
-
-**结论**:「复用用户 Isabelle」看起来省事,实际上把最脏的活(原地改+重编+重建 heap+不可跟踪+不可靠清理)
-全推给了 post-link;而「自己发布补丁版 Isabelle」把这些活挪到 **CI 的构建期**,产物是干净、
-可跟踪、可复现的完整包。后者才是正路。
+**Infrastructure (ready, reusable)**
+- **Windows 11 QEMU VM**: `/home/qiyuan/qemu-win/`, `./run-win-vm.sh` → after ~20 seconds it can be driven
+  non-interactively with `ssh -i ssh/id_win -p 2222 isabelle@localhost`; screenshots are possible (QEMU monitor
+  `screendump`).
+  **Real GUI verification that the CI cannot do can only be done here.**
+- **CI repository**: `xqyww123/isabelle-packaging-ci` (kept long-term).
+- **Linux build prototype**: `/home/qiyuan/isa_release_proto/` (hg clone + the patched tree + outputs).
 
 ---
 
-## 10. 相关文档
+## 9. The overturned old plan (archived + reasons it was overturned)
 
-- `AOA_DESIGN.md`、`CONDA_ISABELLE_BRIDGE.md`、`RELEASE_PLAN.md` —— **探索期产物,均已被本文档取代**,仅供考古。
-- `contrib/my_better_isabelle_prover/` —— 补丁工具 `isabelle-patch-control` 与 feature 包的发布(§11);其
-  `ai-artifacts/ISABELLE_PATCH_CONTROL_PLAN.md` 决定 12 是对本仓库的要求。
-- `contrib/Isabelle_RPC/Isabelle_RPC_Host/paths.py` —— Windows 路径归一化(commit `5b9580c`)。
+> The old plan: **do not release Isabelle, but reuse the Isabelle that users already have installed**; the conda packages
+> carry only the AoA components, and a post-link writes the component paths into the user's global
+> `$ISABELLE_HOME_USER/etc/settings` (`init_component`), so that "it works without activating conda".
+
+**Why it was overturned:**
+
+1. **conda does not track these side effects at all**: whatever a post-link writes outside `$PREFIX`, `conda remove` does
+   not delete and `conda list` does not show; and the `pre-unlink` the cleanup depends on **is not guaranteed to run** (it
+   does not run when an env directory is deleted) ⇒ users' Isabelle may be polluted forever. The industry has already
+   voted with its feet: `cudatoolkit-dev`, which downloads in post-link, **has been archived and abandoned**.
+2. **The patches cannot be avoided**: AoA needs a patched Isabelle (`register_thy` is a hard dependency of Isa-REPL).
+   And **patching users' own Isabelle in place** is not only a deeper version of the same "untracked side effect" problem
+   (changing a foreign source tree + needing a recompile + needing to rebuild heaps), but **no package manager endorses
+   such a thing** — when any package manager "supports patches", it always means "**patching sources that I build
+   myself**" (Nix/Homebrew/Debian/RPM/conda-build all do it this way). To get package-manager-level cleanliness, the only
+   way is to **distribute a patched Isabelle that we build ourselves**.
+3. **The heaps cannot be avoided either**: the official bundles ship a prebuilt HOL heap; we change Pure/ML ⇒ we cannot
+   reuse the official heaps ⇒ we must rebuild them ourselves for each platform (§3.5). That already amounts to "running
+   the release process ourselves".
+
+**Conclusion**: "reuse users' Isabelle" looks convenient, but in fact it pushes all the dirtiest work (change in place +
+recompile + rebuild heaps + untrackable + unreliable cleanup) onto the post-link; whereas "release a patched Isabelle
+ourselves" moves that work to **the CI's build time**, and the output is a complete package that is clean, trackable and
+reproducible. The latter is the right way.
 
 ---
 
-## 11. 原版构建与 feature 包(2026-10-31 起,Isabelle2026)
+## 10. Related documents
 
-### 11.1 `isabelle` 包是什么
+- `AOA_DESIGN.md`, `CONDA_ISABELLE_BRIDGE.md`, `RELEASE_PLAN.md` — **products of the exploration phase, all superseded
+  by this document**, for archaeology only.
+- `contrib/my_better_isabelle_prover/` — the patch tool `isabelle-patch-control` and the release of the feature packages
+  (§11); decision 12 of its `ai-artifacts/ISABELLE_PATCH_CONTROL_PLAN.md` is the set of requirements on this repository.
+- `contrib/Isabelle_RPC/Isabelle_RPC_Host/paths.py` — Windows path normalization (commit `5b9580c`).
 
-- **官方平台包原样。** CI 从 `https://isabelle.in.tum.de/website-<R>/dist/` 下载五个平台包,按 `releases/<R>/SHA256SUMS`
-  (官方公布的值,每个发行版在仓库里登记一次)核对;`etc/ISABELLE_ID` 必须等于 `releases/<R>/ISABELLE_ID`(官方 changeset)。
-  不再自己 `build_release`(owner 2026-10-31):没有补丁就没有自己构建的理由,而核对"与官方相同"本来就要下载官方包。
-- **heap 是官方自带的** Pure、HOL,即官方默认的 32_in_64 变体(`ML_system_64 = false`),原样进包(owner 2026-10-31)。
-- **macOS** 的 `isa/` 是官方 app 的 `Contents/Resources/`(即 `ISABELLE_HOME`);app 外壳(启动器、`Info.plist`)不进包。
-- **与官方树的差别**——哪些文件、文件内容、符号链接目标——以 `scripts/check_pristine.py` 的 `EXPECTED` 为准,每个包打完都
-  对它断言:清单外的差别失败,清单里没用上的条目也失败。官方的空目录要以空标记文件 `.conda-keep` 出现在包里(conda 包里
-  没有目录)。文件权限位不比较(脚本说明里写了原因)。每项改动的理由写在 `scripts/pack.sh` 对应步骤的注释里,这里不重复。
-- **只支持 Isabelle2026 起**(owner 2026-10-31)。加一个新发行版的步骤见 `RELEASE.md` 第 0 步。版本号由 `pack.sh` 换算
-  (`Isabelle2026` → `2026`)。
-- 补丁工具计划决定 12 第 8 点要求的发布说明("`Foreign`、`RunCall`、`CInterface` 在原版里没了")2026 起不写:原版
-  Isabelle2026 自己就提供 `Foreign`(owner 2026-10-31)。
+---
 
-### 11.2 例外(用户 2026-10-23 裁定):feature 包经 post-link 改写 `$PREFIX/isa`
+## 11. The unpatched build and feature packages (from 2026-10-31 on, Isabelle2026)
 
-§3.1 和 §9 的原则——一切随包装进去,post-link 不生成 conda 不跟踪的东西,不原地 patch 用户的 Isabelle——对 `isabelle` 包的**内容**仍然成立:
-它从此是原版构建,不带任何补丁。补丁改由 feature 包分发,每个 feature 一个 conda 包(isabelle-expose-foreign、isabelle-light-locale……),
-由 isabelle-patch-control 在包的 post-link 里打到 `$PREFIX/isa`、在 pre-unlink 里反打。`isabelle` 包的 post-link 也参与这条例外:它重新执行
-直接依赖它的已装包的 post-link(`conda/rerun_post_links.py`)。这一步是必要的,因为重装 `isabelle`(`--force-reinstall` 或升构建)时,
-conda 重新链接包里的每个文件,feature 打在 `$PREFIX/isa` 里的补丁随之没了;`isabelle` 包的 pre-unlink 又删掉整个 Isabelle 用户目录、
-连组件登记一起(`conda/recipe.yaml`);而 conda 只跑本次事务里换了的包的钩子:`--force-reinstall isabelle` 之后,只有 `isabelle` 自己的
-post-link 有机会把 feature 和登记恢复回来;升构建之后 feature 包随之换新、由它们自己的 post-link 重打,只有组件登记还靠 `isabelle` 的
-post-link 恢复。它用 Python 写(`isabelle` 包因此依赖 python,安装时要带 `-c conda-forge`),这是与 §3.1 "post-link 不做事"原则的偏离,和组件包的
-`components -u` 钩子属同一类。这是对 §9 的一条有意的例外,理由:
+### 11.1 What the `isabelle` package is
 
-1. 用包管理系统管补丁,用户自行决定装哪些补丁:装 isabelle-light-locale 就有 light locale,不装就没有;依赖关系(light 依赖
-   future_assign_interrupt 依赖 expose_foreign)由 conda 求解器保证,版本由精确钉死保证,每个 feature 包还精确钉死它所对的 `isabelle` 构建。
-2. `isabelle` 包保持原汁原味:可核对的不变量是 Isabelle 的源码与官方发行版相同、`etc/ISABELLE_ID` 是官方 changeset,CI 用断言保证
-   (§11.1)。与官方发行版在文件与内容上的差别只有打包改动,清单就是 `scripts/check_pristine.py` 的 `EXPECTED`;heap 是官方自带的。
-3. 补丁的权威是 Isabelle 源码的 git 仓库(迁移方案),feature 包是从发布 tag 之间的 diff 自动生成的,往返一致由发布门禁保证。
+- **The official platform bundles as they are.** The CI downloads the five platform bundles from
+  `https://isabelle.in.tum.de/website-<R>/dist/` and checks them against `releases/<R>/SHA256SUMS` (the values the
+  Isabelle site publishes, registered in the repository once per release); `etc/ISABELLE_ID` must equal
+  `releases/<R>/ISABELLE_ID` (the official changeset).
+  We no longer run `build_release` ourselves (owner, 2026-10-31): without patches there is no reason to build it
+  ourselves, and checking "the same as the official one" requires downloading the official bundles anyway.
+- **The heaps are the official ones** that come with the bundles, Pure and HOL, i.e. the official default 32_in_64 variant
+  (`ML_system_64 = false`), and they go into the package as they are (owner, 2026-10-31).
+- On **macOS**, `isa/` is the official app's `Contents/Resources/` (i.e. `ISABELLE_HOME`); the app's shell (launcher,
+  `Info.plist`) does not go into the package.
+- **The differences from the official tree** — which files, the file contents, symlink targets — are defined by
+  `EXPECTED` in `scripts/check_pristine.py`, and every package is asserted against it once it is built: a difference not
+  on the list fails, and so does an entry on the list that is not used. The official empty directories must appear in the
+  package as the empty marker file `.conda-keep` (a conda package has no directories). File permission bits are not
+  compared (the script's description says why). The reason for each change is in the comment of the corresponding step of
+  `scripts/pack.sh`, and is not repeated here.
+- **Only Isabelle2026 and later are supported** (owner, 2026-10-31). The steps for adding a new release are in step 0 of
+  `RELEASE.md`. The version is derived by `pack.sh` (`Isabelle2026` → `2026`).
+- The release note required by point 8 of decision 12 of the patch tool plan ("`Foreign`, `RunCall`, `CInterface` are
+  gone from the unpatched Isabelle") is not written from 2026 on: the unpatched Isabelle2026 itself provides `Foreign`
+  (owner, 2026-10-31).
 
-边界与代价:
-- 只改渠道自己发的 `$PREFIX/isa` 那棵树。用户自装的 Isabelle 不支持(工具在非 conda 环境里要显式给 feature 目录才运行)。
-- feature 新建的文件(light 有三个)conda 不跟踪;它们随 pre-unlink 成功反打而消失,这与组件包用 `isabelle components -x` 注销自己登记的
-  做法同类(RELEASE_CHECKLIST.md §4)。pre-unlink 反打不完时留下的改动由钩子当场写进 .messages.txt(文件清单与恢复步骤,分"本次命令卸掉它"
-  与"本次命令替换它"两种情形写);包被卸掉(而不是被替换)之后 status 看不见它们。
-- `$PREFIX/isa` 自带的 heap 在打了改 `src/` 的 feature 之后不再匹配,Isabelle 在首次使用时重建到该环境的用户目录;用户接受。
-- 工具的每次写树都是逐文件的原子替换,工具自己的命令被中断只留下"部分文件已到新层级"的状态,再跑一次 apply 或 unapply 即完成。conda 事务
-  被中断(Ctrl-C)或某个 post-link 失败,则由 conda 整体回滚(conda 打印 `Rolling back transaction`):包被撤掉、post-link 已写的改动留着;
-  恢复是重装 `isabelle`(替换包的每个文件、重打装着的 feature,代价是删掉该环境的用户目录)。
-- `--force-reinstall isabelle` 替换包的每个文件并删掉该环境的用户目录。`$PREFIX/isa` 下的源码一律由 conda 管理,用户不改它们。
-- 钩子一律 exit 0(RELEASE_CHECKLIST.md §4 的规矩不变),exit 0 写在钩子文本里而不是依赖工具。两条契约见 RELEASE_CHECKLIST.md §4:
-  post-link 会动 `$PREFIX/isa` 或 Isabelle 用户目录的包必须直接依赖 `isabelle`;直接依赖 `isabelle` 的包的 post-link 必须能在任何时候重跑。
-  只间接依赖 `isabelle` 的包(isabelle-semantic-data)不被重跑。
-- 每发一个新的 `isabelle` 构建,全部 feature 包都要以新的钉死重发(批量发布 workflow 一次跑完);组件包不钉死构建、不需要重发。
+### 11.2 Exception (owner ruling 2026-10-23): feature packages rewrite `$PREFIX/isa` through post-link
+
+The principles of §3.1 and §9 — everything ships inside the package, a post-link creates nothing that conda does not
+track, users' Isabelle is not patched in place — still hold for the **contents** of the `isabelle` package: from now on
+it is an unpatched build, carrying no patches at all. Patches are distributed by feature packages instead, one conda
+package per feature (isabelle-expose-foreign, isabelle-light-locale, …), which isabelle-patch-control applies to
+`$PREFIX/isa` in the package's post-link and reverses in its pre-unlink. The `isabelle` package's post-link takes part in
+this exception too: it re-runs the post-links of the installed packages that depend on it directly
+(`conda/rerun_post_links.py`). This step is necessary because when `isabelle` is reinstalled (`--force-reinstall` or an
+upgrade to a new build), conda re-links every file of the package, and the patches the features applied in `$PREFIX/isa`
+are gone with it; the `isabelle` package's pre-unlink in addition deletes the whole Isabelle user directory, the
+component registrations included (`conda/recipe.yaml`); and conda runs only the hooks of the packages replaced in the
+current transaction: after `--force-reinstall isabelle`, only `isabelle`'s own post-link has a chance to bring the
+features and the registrations back; after an upgrade to a new build, the feature packages are replaced along with it and
+re-patch through their own post-links, and only the component registrations still rely on `isabelle`'s post-link to be
+restored. It is written in Python (so the `isabelle` package depends on python, and installing it needs
+`-c conda-forge`); this is a deviation from the §3.1 principle "a post-link does nothing", of the same kind as the
+component packages' `components -u` hooks. This is a deliberate exception to §9, for these reasons:
+
+1. The package manager manages the patches, and users decide for themselves which patches to install: install
+   isabelle-light-locale and you have light locale, do not and you do not; the dependencies (light depends on
+   future_assign_interrupt, which depends on expose_foreign) are guaranteed by the conda solver, the versions by exact
+   pins, and each feature package also pins exactly the `isabelle` build it is made for.
+2. The `isabelle` package stays pristine: the invariant that can be checked is that Isabelle's sources are the same as
+   the official release and that `etc/ISABELLE_ID` is the official changeset, which the CI guarantees with assertions
+   (§11.1). The only differences from the official release in files and contents are the packaging changes, and their
+   list is `EXPECTED` in `scripts/check_pristine.py`; the heaps are the official ones.
+3. The authority for the patches is the git repository of the Isabelle sources (the migration plan); the feature packages
+   are generated automatically from the diffs between release tags, and the release gate guarantees that the round trip
+   is consistent.
+
+Boundaries and costs:
+- Only the tree `$PREFIX/isa` that the channel itself publishes is changed. An Isabelle that users installed themselves
+  is not supported (outside a conda environment, the tool runs only when it is given the feature directory explicitly).
+- conda does not track the files a feature creates (light has three); they disappear when the pre-unlink reverses the
+  feature successfully, which is the same kind of thing as a component package unregistering its own registration with
+  `isabelle components -x` (RELEASE_CHECKLIST.md §4). Changes left behind when the pre-unlink cannot reverse everything
+  are written by the hook, on the spot, into .messages.txt (the list of files and the steps to recover, written for two
+  cases: "this command removes it" and "this command replaces it"); after the package is removed (rather than replaced),
+  status cannot see them.
+- The heaps that come with `$PREFIX/isa` no longer match once a feature that changes `src/` is applied; Isabelle rebuilds
+  them on first use into that environment's user directory; the owner accepted this.
+- Every write of the tool to the tree is an atomic per-file replacement; if one of the tool's own commands is
+  interrupted, it leaves only a state in which "some files are already at the new level", and running apply or unapply
+  once more completes it. If a conda transaction is interrupted (Ctrl-C) or some post-link fails, conda rolls back the
+  whole transaction (conda prints `Rolling back transaction`): the package is withdrawn, and the changes a post-link has
+  already written stay; the recovery is to reinstall `isabelle` (which replaces every file of the package and re-applies
+  the installed features, at the cost of deleting that environment's user directory).
+- `--force-reinstall isabelle` replaces every file of the package and deletes that environment's user directory. The
+  sources under `$PREFIX/isa` are all managed by conda; users do not change them.
+- Hooks always exit 0 (the rule of RELEASE_CHECKLIST.md §4 is unchanged), and the exit 0 is written in the hook text
+  rather than left to the tool. The two contracts are in RELEASE_CHECKLIST.md §4: a package whose post-link touches
+  `$PREFIX/isa` or the Isabelle user directory must depend on `isabelle` directly; the post-link of a package that
+  depends on `isabelle` directly must be safe to re-run at any time. A package that depends on `isabelle` only indirectly
+  (isabelle-semantic-data) is not re-run.
+- For every new `isabelle` build that is published, all feature packages must be republished with the new pins (the
+  batch release workflow does it in one run); component packages do not pin the build and need not be republished.

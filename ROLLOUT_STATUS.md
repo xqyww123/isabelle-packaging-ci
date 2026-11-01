@@ -4,7 +4,12 @@ Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one
 **current state and the decisions already made**, so a fresh session can resume without
 re-litigating anything.
 
-Last updated: 2026-10-28 — isabelle-mcp 0.7.0 (build 1), the `claude mcp add`
+Last updated: 2026-11-01 — isabelle 2026 (build 0), the official Isabelle2026 with its
+official heaps and no patches (`PACKAGING_DESIGN.md` §11). Release run 41282713954 of
+commit 4077e12: `audited 6 subdir(s)`, the smoke test green on all five platforms. No
+other package accepts it yet (see "In flight").
+
+Before that, 2026-10-28 — isabelle-mcp 0.7.0 (build 1), the `claude mcp add`
 argument-order fix for `isabelle-mcp install --isabelle-bin`, and isabelle-ai 0.3.0
 (build 2) with the mcp floor raised to it; `publish-conda.yml`'s banner step repaired on
 the way (the 2026-10-28 note below).
@@ -25,7 +30,7 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2025.2 | per-platform, 5 subdirs (predates this rollout) |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout and is the only version the packages below accept (`isabelle >=2025.2,<2025.3`) |
 | `isabelle-performant-ml` | 0.2.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms |
 | `auto-sledgehammer` | 0.2.0 | noarch generic, session |
 | `isabelle-rpc` | 0.5.1 | noarch python, session + Python host; conda only since 0.4.1 (PyPI stays at 0.4.0) |
@@ -60,6 +65,9 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 
 ## In flight
 
+- Releases that accept isabelle 2026: none yet. Each package that depends on `isabelle`
+  needs one, in the order of `RELEASE_CHECKLIST.md` §9 item 1, with `isabelle-ai` last
+  (§9 item 4); `RELEASE.md` step 4.
 - isabelle-mcp 0.7.0's PyPI publish: the v0.7.0 ci.yml run 40616658139 (Isabelle-MCP)
   waits at the `pypi` environment gate, unapproved by the owner's order (only the conda
   release was ordered). It can wait at most 30 days; after that, publishing needs

@@ -129,16 +129,16 @@ OFFICIAL_MANIFEST="$WORK/official-$SUBDIR.json"
 # package has NO working entry point on Windows: $PREFIX\Scripts\isabelle.bat (written
 # by the recipe) forwards here and would resolve to nothing.
 #
-# Copied BYTE FOR BYTE from windows/isabelle.bat, which was verified on a real Windows
-# VM: it self-locates ISABELLE_HOME from %~dp0.. (so it survives being installed into an
+# Copied BYTE FOR BYTE from windows/isabelle.bat, verified on a real Windows VM and by
+# build.yml's install-windows: it self-locates ISABELLE_HOME from %~dp0.. (so it survives being installed into an
 # arbitrary conda $PREFIX), does not recurse into itself, and detaches a GUI `jedit` into
 # its own hidden console.  Do not "improve" it here.
 #
-# Cygwin needs no help from us: build_release strips the symlinks and leaves an
-# `uninitialized` marker, but the FIRST `isabelle` call restores them by itself --
-# lib/scripts/getsettings:118 runs isabelle.setup.Setup on every invocation, which calls
-# Environment.init -> cygwin_init.  Measured on the VM: 947 symlinks missing before,
-# all present after one `isabelle version` (88s, rc=0), marker gone.  No post-link needed.
+# It also initializes Isabelle's Cygwin on first use: build_release strips the symlinks
+# and leaves an `uninitialized` marker, and while the marker is there isabelle.bat runs
+# isabelle.setup.Setup cygwin_init (symlinks, rebaseall, postinstall).  Isabelle's own
+# trigger, getsettings:118, runs it under Cygwin's bash, where rebaseall refuses to run
+# and the error is discarded (see isabelle.bat).  No post-link needed.
 # ---------------------------------------------------------------------------
 if [ "$SUBDIR" = win-64 ]; then
   BAT="$HERE/../windows/isabelle.bat"
@@ -229,8 +229,8 @@ echo "dropped $n_la libtool archive(s) (*.la)"
 # On the first `isabelle` call, Isabelle's Cygwin runs contrib/cygwin/isabelle/postinstall,
 # which under `set -e` runs setfacl/chmod on every path in permissions/*.gz -- lists of
 # every directory and file of the official tree (each one there, measured).  A listed
-# path the package lacks (the *.la of 1e) fails it -- silently, since getsettings discards
-# the error, and for good, since the initialization deleted its marker first (build.yml,
+# path the package lacks (the *.la of 1e) fails it, and with it the user's first call; the
+# initialization deleted its marker first, so it is not retried (build.yml,
 # install-windows).  So each list keeps only what ships (owner, 2026-10-31).
 # ---------------------------------------------------------------------------
 if [ "$SUBDIR" = win-64 ]; then

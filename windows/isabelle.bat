@@ -74,6 +74,21 @@ if /I "%~1"=="jedit" call :scan_jedit %*
 if defined ISABELLE_BAT_SYNC set "_ISA_GUI="
 
 if defined ISABELLE_BAT_DRYRUN goto :dryrun
+
+rem :---------------------------------------------------------------------:
+rem : Cygwin's first-use initialization (recover its symlinks, rebaseall,  :
+rem : postinstall).  Isabelle runs it from getsettings, i.e. under Cygwin's :
+rem : bash, where Cygwin's rebaseall refuses to run ("only ash or dash      :
+rem : processes are allowed during rebasing") and getsettings discards the  :
+rem : error.  So while the marker is there, run it HERE, from a JVM with no :
+rem : Cygwin process alive, as the official launcher does.  It deletes the  :
+rem : marker first: a failure is reported once, and not retried.            :
+rem :---------------------------------------------------------------------:
+if not exist "%ISABELLE_HOME%\contrib\cygwin\isabelle\uninitialized" goto :cygwin_ready
+call :cygwin_init
+if errorlevel 1 exit /b %ERRORLEVEL%
+:cygwin_ready
+
 if defined _ISA_GUI goto :gui
 
 
@@ -111,6 +126,24 @@ exit /b %ERRORLEVEL%
 :dryrun
 if defined _ISA_GUI (echo GUI) else (echo SYNC)
 exit /b 0
+
+
+rem :---------------------------------------------------------------------:
+rem : :cygwin_init -- Isabelle's own entry point for it (Setup.java), with  :
+rem : the classpath getsettings gives Setup: SCALA_INTERFACES, then         :
+rem : ISABELLE_SETUP_JAR.  Returns java's exit code.                        :
+rem :---------------------------------------------------------------------:
+:cygwin_init
+set "_ISA_JAVA="
+set "_ISA_SCALA="
+set "_ISA_CP="
+for /d %%d in ("%ISABELLE_HOME%\contrib\jdk-*") do set "_ISA_JAVA=%%~d\x86_64-windows\bin\java.exe"
+for /d %%d in ("%ISABELLE_HOME%\contrib\scala-*") do set "_ISA_SCALA=%%~d"
+for %%f in ("%_ISA_SCALA%\lib\scala3-interfaces-*.jar") do set "_ISA_CP=%%~f"
+for /d %%d in ("%ISABELLE_HOME%\contrib\isabelle_setup-*") do set "_ISA_CP=%_ISA_CP%;%%~d\lib\isabelle_setup.jar"
+echo isabelle.bat: initializing Isabelle's Cygwin, on first use only ... 1>&2
+"%_ISA_JAVA%" -classpath "%_ISA_CP%" isabelle.setup.Setup cygwin_init "%ISABELLE_HOME%" "%ISABELLE_HOME%\contrib\cygwin"
+goto :eof
 
 
 rem :---------------------------------------------------------------------:

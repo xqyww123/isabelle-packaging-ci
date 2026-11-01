@@ -110,10 +110,10 @@ build:
           # verified on a real Windows VM (PACKAGING_DESIGN.md §3.6):
           #  (1) isa\bin\isabelle.bat -- the forwarder's target -- is now installed by
           #      pack.sh (self-locating, byte-identical to windows/isabelle.bat, cmp-checked).
-          #  (2) Cygwin heals itself on the FIRST `isabelle` call: getsettings runs
-          #      Setup.classpath, which runs cygwin_init (restores symlinks + rebaseall).
-          #      No post-link needed -- but the files cygwin_init writes into isa\ are
-          #      untracked, so `conda remove isabelle` leaves them behind in
+          #  (2) Cygwin is initialized on the FIRST `isabelle` call: isa\bin\isabelle.bat
+          #      runs Setup cygwin_init (symlinks, rebaseall, postinstall) while the
+          #      marker is there.  No post-link needed -- but the files cygwin_init writes
+          #      into isa\ are untracked, so `conda remove isabelle` leaves them behind in
           #      isa\contrib\cygwin\.
           # So the win-64 command line works end to end: `isabelle version`, a real build
           # with the prebuilt heap, jEdit and vscode all verified on the VM, and the

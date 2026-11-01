@@ -93,8 +93,8 @@ is exceptional (`RELEASE_CHECKLIST.md`, "Deleting from the channel").
 - Follow `RELEASE_CHECKLIST.md` §11: read the `publish` job's audit log, and update
   `ROLLOUT_STATUS.md`.
 - If feature packages exist for `<R>`: release them against build `<N>` (`isabelle_build=<N>`,
-  `isabelle_from=channel`), as step 6 of "Releasing a feature" in the patch tool repository's
-  `RELEASE.md` says.
+  `isabelle_from=channel`), as step 8 of section 3.4 of the patch tool repository's SKILL
+  `isabelle-patch-feature` (`.claude/skills/isabelle-patch-feature/SKILL.md`) says.
 - If `<R>` was not on the channel before (a new Isabelle release, not only a new build): each
   package in the order of `RELEASE_CHECKLIST.md` §9 item 1 accepts only one Isabelle version
   (for example `isabelle >=2025.2,<2025.3`), so each needs a release that accepts `<R>`, in that

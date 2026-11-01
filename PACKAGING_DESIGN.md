@@ -510,8 +510,11 @@ conda 包里只有文件、没有目录条目 ⇒ 官方 bundle 里的 **83 个�
 机理:`getsettings:118` 每次都跑 `isabelle.setup.Setup` → `Environment.init` → `cygwin_init`
 → 恢复符号链接 + `rebaseall` + `postinstall`。**第一次调用付约 90 秒,之后就好了。**
 【2026-11-01 订正:rc=0 和 marker 消失都证明不了初始化成功——`getsettings` 把 `Setup` 的错误输出丢掉、退出码不看,
-`cygwin_init` 一开始就删 marker。成功与否只看 `ISABELLE_SETUP_CLASSPATH` 是否非空;`build.yml` 的 `install-windows` 这样断言,
-并让它失败一次作对照。】
+`cygwin_init` 一开始就删 marker。一查果然失败(CI 运行 41267104571)。原因(读源码):`getsettings` 是在 Cygwin 的 bash 里
+跑它的,而 Cygwin 的 `rebaseall` 见到 ash/dash 以外的 Cygwin 进程就拒绝("only ash or dash processes are allowed during
+rebasing",exit 2),于是 `postinstall` 不会跑;符号链接恢复在 `rebaseall` 之前,所以上表看起来是好的。官方的原生启动器直接起 JVM,没有这个问题。
+现在由 `windows/isabelle.bat` 在 marker 还在时、起 bash 之前,用包里的 java 跑 Isabelle 自己的 `Setup cygwin_init`,失败就报错退出;
+`build.yml` 的 `install-windows` 断言首次调用成功、`postinstall` 写出了 `etc/passwd`,并让它失败一次作对照。】
 
 #### ✅ 递归安全 + 可重定位(真机实测)
 - **递归**:本来是致命隐患 —— `getsettings:62` 把 `bin/` 放到 PATH **最前面**,而 `bin/isabelle`

@@ -569,26 +569,31 @@ jobs:
           python -m conda_index "$CH" --no-zst --no-bz2
           echo "T=$T" >> "$GITHUB_ENV"
 
-      # A fresh install, and the user's first `isabelle` call on it: that call runs
-      # Cygwin's initialization (symlinks, rebaseall, postinstall with the permission
-      # lists pack.sh step 3 rewrites), which deletes its marker first and never retries.
-      # getsettings runs it as `ISABELLE_SETUP_CLASSPATH="$(... Setup classpath 2>/dev/null)"`,
-      # so its result shows only there: the classpath once it succeeded, nothing if it failed.
-      # The step ends by making it fail, to show that this check can go red.
+      # A fresh install, and the user's first `isabelle` call on it.  While Cygwin's
+      # `uninitialized` marker is there, isa\bin\isabelle.bat runs Cygwin's
+      # initialization (symlinks, rebaseall, postinstall with the permission lists
+      # pack.sh step 3 rewrites) before it starts Cygwin's bash, and fails if it fails;
+      # postinstall writes etc/passwd, which the package does not ship.  The step ends by
+      # making the initialization fail, to show that this check can go red.
       - name: "win-64: install, and the first isabelle call"
         run: |
           set -euo pipefail
           ENV="$T/isaenv"
           CYG="$ENV/isa/contrib/cygwin/isabelle"
-          setup_classpath() { "$ENV/Scripts/isabelle.bat" getenv -b ISABELLE_SETUP_CLASSPATH | tr -d '\r'; }
           "$CONDA_EXE" create -y -p "$ENV" -c "file:///$T/channel" -c conda-forge --override-channels isabelle
           [ -e "$CYG/uninitialized" ] || { echo "::error::the package does not ship Cygwin's uninitialized marker"; exit 1; }
-          cp=$(setup_classpath)
-          [ -n "$cp" ] || {
-            echo "::error::Cygwin's initialization failed on the first isabelle call (isabelle.setup.Setup printed no classpath)"; exit 1; }
+          [ ! -e "$ENV/isa/contrib/cygwin/etc/passwd" ] || { echo "::error::the package ships Cygwin's etc/passwd"; exit 1; }
+          cp=$("$ENV/Scripts/isabelle.bat" getenv -b ISABELLE_SETUP_CLASSPATH | tr -d '\r') || {
+            echo "::error::the first isabelle call failed (Cygwin's initialization: its error is above)"; exit 1; }
           [ ! -e "$CYG/uninitialized" ] || { echo "::error::the first isabelle call did not initialize Cygwin"; exit 1; }
-          echo "first isabelle call: Cygwin initialized, ISABELLE_SETUP_CLASSPATH has ${#cp} characters"
+          [ -s "$ENV/isa/contrib/cygwin/etc/passwd" ] || { echo "::error::Cygwin's postinstall did not run"; exit 1; }
+          [ -n "$cp" ] || { echo "::error::isabelle.setup.Setup printed no classpath"; exit 1; }
+          echo "first isabelle call: Cygwin initialized (postinstall wrote etc/passwd), ISABELLE_SETUP_CLASSPATH has ${#cp} characters"
           echo "isabelle version -> $("$ENV/Scripts/isabelle.bat" version | tr -d '\r')"
+          # isabelle.bat's jedit detection runs its call/goto labels, which no other step reaches.
+          [ "$(ISABELLE_BAT_DRYRUN=1 "$ENV/Scripts/isabelle.bat" jedit | tr -d '\r')" = GUI ] &&
+          [ "$(ISABELLE_BAT_DRYRUN=1 "$ENV/Scripts/isabelle.bat" jedit -b | tr -d '\r')" = SYNC ] || {
+            echo "::error::isabelle.bat's jedit detection is broken"; exit 1; }
           u=$("$ENV/Scripts/isabelle.bat" getenv -b ISABELLE_HOME_USER | tr -d '\r')
           echo "ISABELLE_HOME_USER = $u"
           # scripts/pack.sh 1c, through Isabelle's own Cygwin (cksum included)
@@ -599,10 +604,10 @@ jobs:
           # The negative control: initialize again, with a postinstall that fails.
           : > "$CYG/uninitialized"
           sed -i '1i echo > /isabelle/postinstall.reached; exit 1' "$CYG/postinstall"
-          cp=$(setup_classpath || true)
+          if "$ENV/Scripts/isabelle.bat" version; then
+            echo "::error::negative control: a failing postinstall did not fail the isabelle call"; exit 1; fi
           [ -e "$CYG/postinstall.reached" ] || { echo "::error::negative control: the failing postinstall never ran"; exit 1; }
-          [ -z "$cp" ] || { echo "::error::negative control: a failing postinstall still gave a classpath"; exit 1; }
-          echo "negative control: with postinstall failing, ISABELLE_SETUP_CLASSPATH is empty"
+          echo "negative control: with postinstall failing, the first isabelle call failed"
 
       - name: "win-64: the isabelle post-link re-runs its dependents' post-links (.bat)"
         run: scripts/check_rerun.sh run "$CONDA_EXE" "file:///$T/channel" "$T/probe-env"

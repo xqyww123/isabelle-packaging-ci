@@ -139,11 +139,12 @@ jobs:
             BIN="$RUNNER_TEMP/isa/Scripts/isabelle.bat"
           fi
           echo "entry point: $BIN"
-          # The first call.  On Windows it initializes Cygwin, whose result shows only in
-          # ISABELLE_SETUP_CLASSPATH (build.yml, install-windows); elsewhere a classpath
-          # shows that Isabelle's Java setup runs.
-          cp=$("$BIN" getenv -b ISABELLE_SETUP_CLASSPATH | tr -d '\r')
-          [ -n "$cp" ] || { echo "::error::the first isabelle call failed: isabelle.setup.Setup printed no classpath"; exit 1; }
+          # The first call.  On Windows, isabelle.bat initializes Cygwin first and fails if
+          # that fails (build.yml, install-windows); a classpath shows that Isabelle's Java
+          # setup runs.
+          cp=$("$BIN" getenv -b ISABELLE_SETUP_CLASSPATH | tr -d '\r') || {
+            echo "::error::the first isabelle call failed (its error is above)"; exit 1; }
+          [ -n "$cp" ] || { echo "::error::isabelle.setup.Setup printed no classpath"; exit 1; }
           echo "first isabelle call: ISABELLE_SETUP_CLASSPATH has ${#cp} characters"
           v=$("$BIN" version)
           echo "isabelle version -> $v"

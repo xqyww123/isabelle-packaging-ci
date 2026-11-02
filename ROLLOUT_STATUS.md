@@ -5,7 +5,14 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-02 — auto-sledgehammer 0.3.0 (build 0), the port to Isabelle2026: it
+Last updated: 2026-11-02 — isabelle-rpc 0.5.2 (build 0), the port to Isabelle2026: it requires
+`isabelle >=2026,<2026.1` and `isabelle-performant-ml >=0.2.0,<0.3.0` (so 0.2.1), and 0.5.1
+stays the last release for Isabelle2025-2. Release run 41438626031 of commit 25822f9 (dry run
+41438174689): publish green, smoke green on ubuntu and windows. Its dependents on the channel,
+isabelle-minilang 0.6.0 (`>=0.4.0`) and 0.7.0 (`>=0.5.1`), require `isabelle >=2025.2,<2025.3`,
+so no solve pairs them with it.
+
+Before that, 2026-11-02 — auto-sledgehammer 0.3.0 (build 0), the port to Isabelle2026: it
 requires `isabelle >=2026,<2026.1` and `isabelle-performant-ml >=0.2.0,<0.3.0` (so 0.2.1), and
 0.2.0 stays the last release for Isabelle2025-2. Release run 41437168147 of commit a99d3dc (dry
 run 41436712514): publish green, smoke green on ubuntu and windows. Its one dependent on the
@@ -52,10 +59,10 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and `auto-sledgehammer` 0.3.0 accept 2026 (`isabelle >=2026,<2026.1`); every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2 accept 2026 (`isabelle >=2026,<2026.1`); every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
 | `isabelle-performant-ml` | 0.2.1 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms; Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `auto-sledgehammer` | 0.3.0 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2) |
-| `isabelle-rpc` | 0.5.1 | noarch python, session + Python host; conda only since 0.4.1 (PyPI stays at 0.4.0) |
+| `isabelle-rpc` | 0.5.2 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); conda only since 0.4.1 (PyPI stays at 0.4.0) |
 | `isabelle-mcp` | 0.7.1 | noarch python, no session, no hooks; Isabelle2026 only (0.7.0 build 1 is the last for 2025.2); PyPI 0.7.1 (0.7.0 is on PyPI too) |
 | `isabelle-minilang` | 0.7.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (not updated) |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
@@ -81,10 +88,10 @@ that permitted the defect deletion: `CHANNEL_OPERATIONS.md`, "Defect deletions".
 
 ## In flight
 
-- Releases that accept isabelle 2026: isabelle-mcp 0.7.1, isabelle-performant-ml 0.2.1 and
-  auto-sledgehammer 0.3.0 (2026-11-02); every other package that depends on `isabelle` still needs one: the SKILL
-  conda-release, "11. A new Isabelle release"; `isabelle-ai` goes last (`RELEASE_CHECKLIST.md`,
-  "9. Release", item 4).
+- Releases that accept isabelle 2026: isabelle-mcp 0.7.1, isabelle-performant-ml 0.2.1,
+  auto-sledgehammer 0.3.0 and isabelle-rpc 0.5.2 (2026-11-02); every other package that depends
+  on `isabelle` still needs one: the SKILL conda-release, "11. A new Isabelle release";
+  `isabelle-ai` goes last (`RELEASE_CHECKLIST.md`, "9. Release", item 4).
 - (Closed 2026-11-02.) isabelle-mcp's PyPI publishes: the owner approved the `pypi` gate of
   the v0.7.1 ci.yml run 41425364665 (after 0.7.1 was on the conda channel) and then of the
   v0.7.0 run 40616658139 (so that the docs' pin for Isabelle2025-2 resolves); both published.

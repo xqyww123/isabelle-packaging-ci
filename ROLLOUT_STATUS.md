@@ -9,7 +9,9 @@ Last updated: 2026-11-02 — isabelle-mcp 0.7.1 (build 0), the port to Isabelle2
 requires `isabelle >=2026,<2026.1`, and 0.7.0 stays the last release for Isabelle2025-2
 (tag `last-isabelle2025-2-support` in Isabelle-MCP). Release run 41425365177 of commit
 5b6decb (dry run 41424987235): publish green, smoke green on ubuntu and windows. The first
-package that accepts isabelle 2026.
+package that accepts isabelle 2026. Then, by the owner's approval, PyPI got 0.7.1 (ci.yml run
+41425364665) and the long-gated 0.7.0 (run 40616658139), so the pin the docs give for
+Isabelle2025-2, `isabelle-mcp==0.7.0`, resolves on PyPI as well.
 
 Before that, 2026-11-01 — isabelle 2026 (build 0), the official Isabelle2026 with its
 official heaps and no patches (`PACKAGING_DESIGN.md` §11). Release run 41282713954 of
@@ -40,7 +42,7 @@ by the owner's decision of 2026-10-03).
 | `isabelle-performant-ml` | 0.2.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms |
 | `auto-sledgehammer` | 0.2.0 | noarch generic, session |
 | `isabelle-rpc` | 0.5.1 | noarch python, session + Python host; conda only since 0.4.1 (PyPI stays at 0.4.0) |
-| `isabelle-mcp` | 0.7.1 | noarch python, no session, no hooks; Isabelle2026 only (0.7.0 build 1 is the last for 2025.2); PyPI 0.6.0 (0.7.0 and 0.7.1 wait at the `pypi` gate, see "In flight") |
+| `isabelle-mcp` | 0.7.1 | noarch python, no session, no hooks; Isabelle2026 only (0.7.0 build 1 is the last for 2025.2); PyPI 0.7.1 (0.7.0 is on PyPI too) |
 | `isabelle-minilang` | 0.7.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (not updated) |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
 | `json-spec` | 0.12.0 | third-party repackage, noarch — conda-forge has NO usable version |
@@ -68,14 +70,9 @@ that permitted the defect deletion: `CHANNEL_OPERATIONS.md`, "Defect deletions".
 - Releases that accept isabelle 2026: isabelle-mcp 0.7.1 (2026-11-02); every other package
   that depends on `isabelle` still needs one: the SKILL conda-release, "11. A new Isabelle
   release"; `isabelle-ai` goes last (`RELEASE_CHECKLIST.md`, "9. Release", item 4).
-- isabelle-mcp 0.7.1's PyPI publish: the v0.7.1 ci.yml run 41425364665 (Isabelle-MCP) waits
-  at the `pypi` environment gate, unapproved by the owner's order (only the conda release
-  was ordered); its test and component jobs are green.
-- isabelle-mcp 0.7.0's PyPI publish: the v0.7.0 ci.yml run 40616658139 (Isabelle-MCP)
-  waits at the `pypi` environment gate, unapproved by the owner's order (only the conda
-  release was ordered). It can wait at most 30 days; after that, publishing needs
-  `gh workflow run ci.yml -R xqyww123/Isabelle-MCP --ref v0.7.0`, which reaches the same
-  gate. Until then PyPI serves 0.6.0, which still has the `--isabelle-bin` bug.
+- (Closed 2026-11-02.) isabelle-mcp's PyPI publishes: the owner approved the `pypi` gate of
+  the v0.7.1 ci.yml run 41425364665 (after 0.7.1 was on the conda channel) and then of the
+  v0.7.0 run 40616658139 (so that the docs' pin for Isabelle2025-2 resolves); both published.
 - (Closed 2026-10-09.) The new `isabelle-semantic-data` 2026.10.09.0024 is published
   (run 37869695496: `audited 6 subdir(s)`, smoke green). It was built on cslh19 and
   handed to CI through the `prebuilt` input — see the fourth-wave notes for why.

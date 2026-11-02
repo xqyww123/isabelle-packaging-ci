@@ -48,7 +48,7 @@ THY
 unjudged() {
   echo "::warning::$1 -- the GUI is NOT verified this run; the screenshot is uploaded, look at it."
   [ "${REQUIRE_GUI_VERDICT:-false}" = true ] || return 0
-  echo "::error::a release needs a GUI verdict (REQUIRE_GUI_VERDICT); the warning above gives the reason -- see RELEASE.md, step 3"
+  echo "::error::a release needs a GUI verdict (REQUIRE_GUI_VERDICT); the warning above gives the reason -- see RELEASE_ISABELLE.md, \"A GUI check without a verdict\""
   return 1
 }
 

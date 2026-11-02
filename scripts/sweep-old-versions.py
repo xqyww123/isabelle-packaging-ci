@@ -19,8 +19,9 @@ linger:  (source ~/Current/MLML/secret.sh && python3 sweep-old-versions.py ...))
 
 A file is a *candidate* iff a strictly higher version (conda VersionOrder) of
 the same package exists in the same subdir, or a strictly higher build number
-of the same version does (the trailing _N of the build string; a build string
-without one is neither above nor below anything on that axis).  Version ties
+of the same version does (the trailing _N of the build string, or the whole
+string when it is digits only; a build string with neither is neither above
+nor below anything on that axis).  Version ties
 (07 == 7, 1.0 == 1.0.0) all survive; the newest build of the newest (or only)
 version of a package is never deletable.  Only candidates may appear in the
 plan file; execute aborts on anything else.
@@ -46,8 +47,8 @@ try:
 except ImportError:
     sys.exit(
         "error: this python cannot import conda.models — run under an "
-        "environment with the `conda` package (see RELEASE_CHECKLIST.md, "
-        "channel sweep section)."
+        "environment with the `conda` package (see CHANNEL_OPERATIONS.md, "
+        "\"Sweeping superseded versions\")."
     )
 
 ENDPOINT = "https://532d99283b5aa1e02486ee3fdcb163d5.r2.cloudflarestorage.com"
@@ -57,7 +58,7 @@ SUBDIRS = ["noarch", "linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64
 METADATA_FILES = ["index.html", "repodata.json", "repodata_from_packages.json"]
 
 # Every repo whose CI can write to the channel (concurrency gate 1).  A new
-# publishing repo MUST be added here and in RELEASE_CHECKLIST.md.
+# publishing repo MUST be added here.
 PUBLISH_REPOS = [
     "xqyww123/Isa-Mini",
     "xqyww123/Isabelle-MCP",
@@ -83,7 +84,8 @@ def find_rclone():
 
     rclone = os.environ.get("RCLONE") or shutil.which("rclone")
     if not rclone:
-        die("rclone not found (set $RCLONE or PATH); needs >= 1.74, see checklist")
+        die("rclone not found (set $RCLONE or PATH); needs >= 1.74, see CHANNEL_OPERATIONS.md, "
+            "\"Sweeping superseded versions\"")
     out = subprocess.run([rclone, "version"], capture_output=True, text=True)
     m = re.search(r"rclone v(\d+)\.(\d+)", out.stdout)
     if not m or (int(m.group(1)), int(m.group(2))) < (1, 74):
@@ -167,9 +169,10 @@ def parse_conda_filename(fn):
 
 
 def build_number_of(build):
-    """The trailing _N of a conda build string (conda-build and rattler-build
-    always emit one), or None when there is none."""
-    m = re.search(r"_(\d+)$", build)
+    """The build number in a conda build string: its trailing _N (the default
+    form, e.g. h4616a5c_0), or the whole string when it is digits only (a recipe
+    that sets the bare number, as `isabelle`'s does); None otherwise."""
+    m = re.fullmatch(r"(?:.*_)?(\d+)", build)
     return int(m.group(1)) if m else None
 
 
@@ -178,7 +181,8 @@ def compute_candidates(files):
     Returns {filename: superseder} for every file STRICTLY below a sibling of
     its package: by version (all maximal versions survive -- ties are not
     candidates), or, within one version string, by build number (a file whose
-    build string has no trailing _N neither supersedes nor is superseded)."""
+    build string has none, see build_number_of, neither supersedes nor is
+    superseded)."""
     by_name = {}
     for fn in files:
         name, version, build = parse_conda_filename(fn)
@@ -284,7 +288,7 @@ def edit_repodata(baseline_bytes, selected, label):
     parsed = json.loads(baseline_bytes)
     if parsed.get("removed", []) != []:
         die(f"{label}: repodata 'removed' is non-empty — mechanism precondition "
-            f"gone, fall back to the full re-index procedure")
+            f"gone (owner must decide)")
     deleted = {}
     for section in ("packages", "packages.conda"):
         sec = parsed.get(section, {})
@@ -403,14 +407,14 @@ def load_channel(r2):
         non_conda = sorted(n for n in names if not n.endswith(".conda"))
         if non_conda != sorted(METADATA_FILES):
             die(f"{sd}: metadata file set is {non_conda}, expected exactly "
-                f"{sorted(METADATA_FILES)} — a new repodata variant appeared; "
-                f"fall back to the full re-index procedure")
+                f"{sorted(METADATA_FILES)} — a new repodata variant appeared "
+                f"(owner must decide)")
         files[sd] = [n for n in names if n.endswith(".conda")]
         baselines[sd] = {fn: r2.cat(sd, fn) for fn in METADATA_FILES}
         for fn in ("repodata.json", "repodata_from_packages.json"):
             if json.loads(baselines[sd][fn]).get("removed", []) != []:
                 die(f"{sd}/{fn}: 'removed' is non-empty — mechanism precondition "
-                    f"gone, fall back to the full re-index procedure")
+                    f"gone (owner must decide)")
         entries[sd] = repodata_entries(json.loads(baselines[sd]["repodata.json"]))
     return files, entries, baselines
 
@@ -561,7 +565,7 @@ def cmd_execute(planfile, confirm_flag):
         print("if a publish resurrected old files, simply rerun this sweep")
 
     today = start_iso[:10]
-    print("\nRELEASE_CHECKLIST.md deletion-log rows "
+    print("\nROLLOUT_STATUS.md \"Deletion log\" rows "
           "(Package | Version | Subdir | Why | When):")
     for sd, fn, newest in log_rows:
         name, version, _build = parse_conda_filename(fn)
@@ -617,6 +621,15 @@ def cmd_selftest():
         "only-1.0-x_0.conda",
     ])
     assert c == {"p-2026.07.25-h0_0.conda": "2026.07.26.1711"}, c
+
+    # build numbers: a trailing _N, or a bare-number build string (`isabelle`)
+    assert build_number_of("h4616a5c_1") == 1 and build_number_of("pyh4616a5c_0") == 0
+    assert build_number_of("0") == 0 and build_number_of("12") == 12
+    assert build_number_of("py311") is None and build_number_of("h0_x") is None
+    c = compute_candidates(["isabelle-2026-0.conda", "isabelle-2026-1.conda",
+                            "isabelle-2025.2-0.conda"])
+    assert c == {"isabelle-2026-0.conda": "2026 build 1",
+                 "isabelle-2025.2-0.conda": "2026"}, c
 
     # filename parsing, hyphenated names
     assert parse_conda_filename("isabelle-semantic-embedding-0.2.0-hb0f4dca_0.conda") \

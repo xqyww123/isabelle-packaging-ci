@@ -1,546 +1,65 @@
-# Releasing a conda package to https://conda.qiyuan.me
+# Release steps of two packages that have not moved yet
 
-Every item below was learned by getting it wrong. The failures in this stack are
-overwhelmingly **silent**: the package installs, `conda list` shows it, and something is
-quietly not there. Read accordingly.
-
-Correct a bad release with a **new version**, not a retraction. Deleting from the channel
-is exceptional; the two grounds that exist, their procedures, and the log of every
-deletion so far are in "Deleting from the channel" below, before the numbered checklist.
-
-## The channel host
-
-conda.qiyuan.me is the R2 bucket `conda` behind a Cloudflare custom domain; the objects are
-exactly what `publish-conda.yml` pushes. Four things about that front door are not visible
-from this repository:
-
-- **Directory URLs serve their `index.html` through a Cloudflare Transform Rule** (zone
-  `qiyuan.me`, phase `http_request_transform`, expression `(http.host eq "conda.qiyuan.me"
-  and ends_with(http.request.uri.path, "/"))`, path rewritten to
-  `concat(http.request.uri.path, "index.html")`; added 2026-10-09). R2 has no index-document
-  notion of its own, so without the rule `https://conda.qiyuan.me/` is a 404 page while
-  `/index.html` is fine — which is how a visitor concluded the channel was not public.
-- **The root `index.html` carries a banner** (what the site is, how to install `isabelle-ai`)
-  from `conda/channel-banner.html`, applied by `scripts/banner-index.py` after every
-  conda-index run. Edit the banner file, never the generated page.
-- **A Worker counts downloads** (`worker/`; live since 2026-10-31). On the route
-  `conda.qiyuan.me/*` it passes every request through unchanged, counts one download of a
-  package for each of its files served whole, and adds a Downloads column to the root
-  `index.html` as it is served (`worker/index.js` says how). The counts are in the D1 database
-  `conda-downloads`: `wrangler d1 execute conda-downloads --remote --command "SELECT * FROM downloads"`.
-  **Pause the counting while you release**, so that our own CI's downloads are not counted (real
-  users' downloads in that window are not counted either):
-  `--command "INSERT OR REPLACE INTO pause VALUES (1, unixepoch() + 6 * 3600)"` right before each
-  workflow run that downloads from the channel (each dispatch and each Re-run, rehearsals
-  included), `--command "DELETE FROM pause"` after the last one. A pause ends by itself 6 hours
-  after it was last set. Mint a token of D1 Write alone for these two, give it to wrangler as the
-  next point says, and revoke it after the resume.
-  Deploy with `wrangler deploy` in `worker/`, with a token minted as the next point says. The
-  route fails open: past the free plan's daily request limit, requests skip the Worker instead
-  of getting error 1027. That is the route's `request_limit_fail_open` in
-  `/zones/<zone id>/workers/routes`, and every `wrangler deploy` recreates the route with it off
-  (seen 2026-10-31): after each deploy, `GET` the route's new id there and `PUT` it back with
-  `{"pattern": "conda.qiyuan.me/*", "script": "conda-download-counter", "request_limit_fail_open": true}`,
-  using the deploy token.
-- **`CLOUDFLARE_GOD_KEY` in `~/Current/MLML/secret.sh` is an account-owned API token**, not
-  a user token and not a Global API Key: `/user/tokens/verify` answers "Invalid API Token"
-  for it, `/accounts/<CLOUDFLARE_ACCOUNT_ID>/tokens/verify` answers `active`, and it can mint
-  further account tokens (`POST /accounts/<id>/tokens`). The rule above was added with a
-  one-hour token minted that way and revoked afterwards. The Worker's `wrangler deploy`,
-  `wrangler tail` and `wrangler d1 execute --remote` worked (2026-10-31) with a token of Workers
-  Scripts Write, D1 Write, Workers Tail Read and Account Settings Read on the account, and
-  Workers Routes Write and Zone Read on all zones of the account; mint it the same way for every
-  redeploy (with one zone only, wrangler keeps the Worker's old routes). Give wrangler that token
-  and `CLOUDFLARE_ACCOUNT_ID`, never `secret.sh`'s `CLOUDFLARE_API_TOKEN`. A freshly minted token
-  can be refused with "Authentication error [code: 10000]" for a few seconds; try again.
-  Verify the edge with `curl`: a `Python-urllib` User-Agent gets 403 from Cloudflare's bot
-  protection on every URL, conda's own client and curl do not.
-
-## Deleting from the channel
-
-A published filename is permanent: `publish-conda.yml`'s immutability guard assumes
-filenames never come back, and a lockfile pinning a deleted build turns "broken
-environment" into "environment will not resolve". Exactly two grounds for deletion
-exist — **defect deletions** (an artifact so broken it must go) and **owner-selected
-sweeps of superseded versions**. Nothing else is ever deleted, and every deletion lands
-in the log at the end of this section.
-
-### Defect deletions
-
-The bar needs stating rather than leaving to judgement: an artifact may be deleted when
-it does not merely misbehave but **renders the tool unusable and misattributes the
-cause**. `isabelle-semantic-embedding` 0.1.1's win-64 build was the first: a CRLF
-`etc/settings` put a carriage return in the classpath, `isabelle build` could then build
-no session at all — not even HOL — and the error named a jar path, so nothing pointed at
-the package responsible.
-
-If you delete one:
-
-1. **Publish the fixed version first.** Never leave a window with no working artifact.
-2. Delete only the affected **subdir's** file. Five builds of one version are five
-   artifacts; here four were fine.
-3. Re-run `conda index` for that subdir and push the regenerated index. Getting this
-   half-right is worse than not doing it: repodata that still lists a deleted file
-   resolves and then 404s at download. **Verify from outside** afterwards — the object
-   must 404 over HTTPS *and* be absent from `repodata.json`; check both, not either.
-
-   No CDN purge is needed, measured rather than assumed: `conda.qiyuan.me` returns
-   `cf-cache-status: DYNAMIC` for `repodata.json` and for `.conda` objects alike, i.e.
-   Cloudflare proxies without caching. That is also why `publish-conda.yml` has never had
-   a purge step. Re-measure before trusting this if the Cloudflare config changes.
-4. Say so in this file and in `ROLLOUT_STATUS.md`. A silent exception is how a rule
-   becomes folklore.
-
-**Doing it by hand** (there is no workflow, and one deletion does not justify writing one).
-Ubuntu's rclone 1.60 is the broken-against-R2 version — fetch ≥ 1.74 to a temp dir. Source
-the R2 credentials into `RCLONE_CONFIG_R2_*` so they never reach disk or a log. Then: pull
-the subdir, save the current `repodata.json` as a baseline, delete the file **locally**,
-re-index, and **diff the new repodata against the baseline before pushing anything** — the
-only difference may be the one removed entry, with `info`, `repodata_version` and every
-other package untouched. Only then delete on R2 and push `repodata.json`,
-`repodata_from_packages.json` and `index.html`. (File first, deliberately: a harmful
-artifact should stop being downloadable before anything else. The sweep manual below
-inverts the order for harmless old versions.) Never push `.cache/`; it is conda-index's
-local sqlite.
-
-### Sweeping superseded versions — user manual
-
-**What this is.** Old versions are deleted **when and as the owner chooses** — there is no
-automatic retention policy (reworded 2026-07-28; supersedes the 2026-07-22 "keeps only the
-latest version" phrasing). `scripts/sweep-old-versions.py` computes the **candidates** —
-files with a strictly newer `VersionOrder` version of the same package in the same
-subdir, or a strictly higher build number of the same version (the build string's
-trailing `_N`; added 2026-10-09 for the isabelle-ai 0.3.0 republish) — and the owner
-selects among them. Version ties (`2026.07.26` vs `2026.7.26`,
-`1.0` vs `1.0.0` — conda compares them equal) all survive; the newest build of a package's newest
-or only version in a subdir is never deletable. Deleting superseded versions deliberately trades
-lockfile reproducibility away; this is a private channel and the owner accepts that.
-
-The script edits the per-subdir metadata surgically and **downloads no package**. Design
-and adversarial-review record: `CONDA_CHANNEL_SWEEP_PLAN.md` in the owner's working tree.
-The pull-everything-and-re-index procedure above remains the one for **defect
-deletions** — a policy split, not a mechanical one: by the time a defect deletion is
-legal its file is usually superseded too (defect rule 1 above), so the script would
-accept it. What the script does refuse is any non-candidate, including a defective build
-of a package's *newest* version.
-
-**Prerequisites** — 1, 2 and 4 are checked at startup with an abort pointing here; a
-broken `gh` surfaces fail-closed at `execute`'s first concurrency gate (`plan` does not
-need `gh`):
-
-1. rclone ≥ 1.74 (Ubuntu's apt 1.60 is broken against R2):
-   `curl -fsSL https://rclone.org/install.sh | sudo bash`, or point `$RCLONE` at a
-   downloaded binary.
-2. A python that can `import conda.models.version` — any environment with the `conda`
-   package installed.
-3. A logged-in `gh` — the concurrency gate queries workflow runs.
-4. `CONDA_R2_ACCESS_KEY_ID` / `CONDA_R2_SECRET_ACCESS_KEY` in the environment.
-
-**Routine.** From this repo's root; `python3` must be the conda-capable one from
-prerequisite 2; `sweep-plan.txt` lands in the current directory. Run in a subshell so the
-credentials do not linger in the interactive shell:
-
-```sh
-(source ~/Current/MLML/secret.sh && python3 scripts/sweep-old-versions.py plan sweep-plan.txt)
-#  zero channel writes; lists every candidate as `subdir/filename  # superseded by X`
-# edit sweep-plan.txt: the lines you KEEP are the ones DELETED; '#' comments a line out
-(source ~/Current/MLML/secret.sh && python3 scripts/sweep-old-versions.py execute sweep-plan.txt)
-#  shows the final list, asks you to type DELETE, then acts
-```
-
-Without a tty (an agent running an owner-approved plan), `execute PLAN --confirm DELETE`
-replaces the prompt — pass it only after the owner approved that exact plan file.
-Afterwards, append the rows `execute` prints to the deletion log below (they match its
-five columns) and note the sweep in `ROLLOUT_STATUS.md`.
-
-**What `execute` does, in order** — every failure is an abort, never a warned-past write;
-an abort mid-way leaves only the safe direction (metadata already stops listing files that
-still exist — see *Interrupted?*):
-
-1. Gates on publish runs (next paragraph) and re-checks the channel-shape assumptions:
-   exactly three metadata files per subdir, `removed == []` in repodata. If either fails,
-   a new conda-index behaviour has appeared — stop and use the full re-index procedure.
-2. Recomputes the candidates and refuses any plan line that is not one (newest/only
-   versions, unknown or already-gone files).
-3. Checks that no surviving package loses a satisfiable in-channel dependency
-   (platform ∪ noarch, per platform).
-4. Shows the final list and requires the typed `DELETE` (or the `--confirm` flag above).
-5. Edits `repodata.json`, `repodata_from_packages.json`, `index.html`. The abort gate is
-   semantic and anchored on your plan: parsed(edited) must equal parsed(baseline) minus
-   exactly the selected entries.
-6. Pushes the edited metadata **before** deleting any file — fresh clients stop resolving
-   the old versions first — then deletes the files one by one.
-7. Verifies from outside, anchored on the plan file (never on its own edits): every file
-   404s over HTTPS and is gone from R2, and the live `repodata.json` key set equals
-   baseline minus plan.
-
-**Concurrency is machine-gated, not a discipline.** A publish that raced the sweep would
-re-upload the deleted files from its own full-channel snapshot (`publish-conda.yml` pulls
-the whole channel and pushes it back). The script therefore aborts when any
-release/publish/conda/wheel-named workflow is in progress or queued across the publishing
-repos — checked before executing and again before pushing — and when a `.conda` on R2 is
-newer than its subdir's `repodata.json` (the signature of an in-flight or half-failed publish:
-publishes upload packages minutes before the index). Both checks are needed: the modtime
-signal is blind to publish re-runs, the run listing to unknown repos. After the sweep it
-checks whether a publish started meanwhile and re-verifies. If a race slips through
-anyway, nothing is lost — the publish resurrects the files, and the fix is to rerun the
-sweep.
-
-**Interrupted?** Rerun **from `plan`**: a fully-deleted file is no longer a candidate, so
-feeding the old plan file back to `execute` aborts on it. A fresh `plan` re-lists the
-leftovers, the already-deleted lines simply no longer appear, and you select again. The
-script prints how many of the selected files the repodata cross-check covered, so the
-thinner guard rail on such a re-run (entries already gone from repodata) is visible rather
-than silent.
-
-**Maintenance duty — the one manual sync point.** A repo that starts publishing to the
-channel must be added both to `PUBLISH_REPOS` in the script and to this list: `Isa-Mini`,
-`Isabelle-MCP`, `Isabelle_RPC`, `Isabelle_Semantic_Embedding`, `auto_sledgehammer`,
-`Performant_Isabelle_ML`, `isabelle-packaging-ci`, `isabelle_patch_control` (all under `xqyww123/`).
-
-### Deletion log
-
-| Package | Version | Subdir | Why | When |
-|---|---|---|---|---|
-| `isabelle-semantic-embedding` | 0.1.1 | win-64 | CRLF `etc/settings` → CR in the classpath → `isabelle build` could build no session at all, not even HOL, and the error named a jar path | 2026-07-19, after 0.1.2 shipped |
-| `isabelle-rpc` | 0.3.1–0.3.4 | noarch | policy sweep (0.4.0 is latest) | 2026-07-22 |
-| `isabelle-mcp` | 0.3.0 | noarch | policy sweep (0.3.1) | 2026-07-22 |
-| `isabelle-minilang` | 0.4.0 | noarch | policy sweep (0.5.0) | 2026-07-22 |
-| `auto-sledgehammer` | 0.1.0 | noarch | policy sweep (0.1.1) | 2026-07-22 |
-| `isabelle-semantic-embedding` | 0.1.1, 0.1.2 | all four unix subdirs; win-64 had only 0.1.2 left | policy sweep (0.2.0) | 2026-07-22 |
-| `isabelle-ai` | 0.1.0 | noarch | owner-selected sweep; superseded by 0.2.0 | 2026-07-28 |
-| `isabelle-minilang` | 0.5.0 | noarch | owner-selected sweep; superseded by 0.6.0 | 2026-07-28 |
-| `isabelle-semantic-embedding` | 0.2.0 | all five platform subdirs | owner-selected sweep; superseded by 0.3.0 | 2026-07-28 |
-| `isabelle-ai` | 0.3.0 (build 0) | noarch | owner-selected sweep; superseded by 0.3.0 build 1, the republish with the raised floors (§9 item 4) | 2026-10-09 |
-
-Rows before 2026-07-28 say "policy sweep" — the automatic-retention framing of the time,
-since replaced by the owner-selected manual above.
-
-## 1. Pick the shape
-
-| Shape | When | Reference |
-|---|---|---|
-| `noarch: generic` | Isabelle session only — **no Python files** | `Performant_Isabelle_ML` |
-| `noarch: python` | anything containing a Python package | `Isabelle_RPC`, `Isabelle-MCP` |
-| per-platform | compiled artifacts | `Semantic_Embedding` (see its plan doc) |
-
-`noarch: generic` installs files at their literal path, so the builder's
-`lib/python3.12/site-packages/…` gets baked in: installed under 3.11 it creates a directory
-no interpreter reads. Installs green, `import` fails. `run: python >=3.10` does not help —
-it *permits* 3.11. `noarch: python` relocates at link time; that is the whole point.
-
-## 2. Dependency names — check what a package IS
-
-The wrong one **resolves, installs green, and dies at import**.
-
-| PyPI | conda-forge |
-|---|---|
-| `msgpack` | `msgpack-python` |
-| `lmdb` | `python-lmdb` (conda `lmdb` = the C library) |
-| `xxhash` | `python-xxhash` (conda `xxhash` = the C library) |
-| `zstandard` | `zstandard` — **no** `python-zstandard` exists; don't "fix" by analogy |
-
-The version is the tell: PyPI `lmdb` is 2.x, conda `lmdb` is 0.9.x — different software.
-
-```sh
-# what is it?
-curl -fsS https://api.anaconda.org/package/conda-forge/NAME \
-  | python3 -c "import sys,json;d=json.load(sys.stdin);print(d['latest_version'],'|',d['summary'])"
-# which platforms?  (rocksdict has no Apple Silicon)
-curl -fsS https://api.anaconda.org/package/conda-forge/NAME/files \
-  | python3 -c "import sys,json;print(sorted({f['attrs']['subdir'] for f in json.load(sys.stdin)}))"
-```
-
-Missing a platform or badly stale → repackage the upstream wheel onto our channel (§8).
-
-**Check the transitive ones too, and check them under the python you will ship.** The
-worst case is not an absent package but a *reachable broken* one: conda-forge's `json-spec`
-offers 0.10.1, which does `from collections import Mapping` (removed in Python 3.10), and
-0.11.0, which pins `importlib-metadata <6` and so cannot be solved at all — so the solver
-lands on 0.10.1, the environment resolves, installs green, and dies at import. Nothing
-local reproduces it, because locally you have PyPI's fixed version. When you repackage the
-fix, **pin its floor in your own recipe**: leaving a transitive dependency implicit leaves
-the choice to the solver, and the broken version is the one it can reach.
-
-## 3. Versions
-
-- One repo, one package, one semver.
-- If the project also ships to PyPI, **conda must never fall behind**. If PyPI gets ahead,
-  `pip install -U` removes conda's `.dist-info` and orphans the Isabelle half beyond
-  `conda remove`.
-- Don't add `./VERSION` where a version already exists (`Isabelle-MCP` uses
-  `__version__`). Two sources of truth drift.
-- No `-` in a conda version.
-
-## 4. Component hooks (session packages)
-
-`post-link` runs `isabelle components -u "$PREFIX/share/<name>"`, `pre-unlink` runs `-x`.
-
-- Write **both** `bin/*.sh` and `Scripts/*.bat`, unconditionally. conda picks by running
-  platform and silently succeeds when the file is absent → `.sh`-only installs clean on
-  Windows and never registers.
-- Don't guard with `case "$target_platform" in win-*)` — for noarch that is `noarch`, so
-  the branch never matches. Looks applied; isn't.
-- Every hook ends `exit 0`. A nonzero post-link rolls the whole install back.
-- Windows needs a throwaway warm-up **before** `components`:
-  `call "%PREFIX%\isa\bin\isabelle.bat" getenv -b ISABELLE_HOME >nul 2>&1`.
-  Cygwin heals on the first `isabelle` call, but that call's classpath is computed before
-  the heal — so the first invocation is the one that cannot run a Scala tool, and
-  `components` is one.
-- Pass a Cygwin path: `Path.check_elem` rejects `:` and `\`. Convert in pure batch
-  (`cygpath.exe` prints nothing on the runner). The drive letter needs **no** lowercasing.
-- A package that registers from its **own code** must have **no** hooks (`Isabelle-MCP`) —
-  a hook would add a second, competing `etc/components` entry.
-- A package whose post-link touches the Isabelle tree or the Isabelle user directory must
-  depend on `isabelle` **directly**. Check this at every release.
-- The post-link of a package that depends on `isabelle` directly must be safe to re-run at
-  any time: a re-run only restores what installing the package set up (its component
-  registration, its patches), changes nothing else, and is idempotent (running it twice is
-  running it once). The `isabelle` post-link re-runs these (`conda/rerun_post_links.py`).
-
-## 5. ROOT exposure
-
-`isabelle components -u` exposes the component's **whole** ROOT. A session whose directory
-or imports are not shipped breaks **every** `isabelle build` in the user's environment,
-including unrelated ones. Move test/dev sessions to their own ROOT in an unshipped
-subdirectory (`Isa-Mini/Agent/AoA_REPL/ROOT`, `Semantic_Embedding/Test/ROOT`). Verify with
-a control — an invented session name must error.
-
-## 6. Python halves
-
-- Build with `$PYTHON -m pip install . --no-deps --no-build-isolation`. That is what makes
-  the `.dist-info`; **without it pip cannot see the package** and will install PyPI's copy
-  over conda's files.
-- Declare `entry_points` in the recipe.
-- setuptools' glob **skips hidden entries**: `Foo/**/*` matches nothing under `Foo/.claude/`.
-  Spell the dot out — `Foo/.claude/**/*`. The obvious pattern ships an empty directory.
-- A user who ran `pip install` first keeps a stale `.dist-info`; no packaging choice fixes
-  that — document `pip uninstall NAME` before `conda install`.
-
-## 7. Workflow gotchas
-
-Copy an existing `release-conda.yml`, then read every line — the copies do diverge, and
-the divergences are defects.
-
-- `"$CONDA/bin/python" -m conda_index`, never bare `python` (setup-miniconda leaves
-  `/usr/bin/python` first). This shipped to two repos.
-- `--build-num`, not `--build-number` (rattler-build exits 2).
-- Step outputs don't cross jobs — export a job `outputs:` block.
-- `conda-forge` must be in the channel list for anything with Python deps.
-- Secrets are **per repo** and passed **explicitly**, never `secrets: inherit` (naming them
-  re-arms `required: true`, so an unseeded repo fails at resolution with a named error):
-  `gh secret set CONDA_R2_{ACCESS_KEY_ID,SECRET_ACCESS_KEY} -R xqyww123/REPO`
-- Entry point in tests is `<prefix>/bin/isabelle` or `<prefix>/Scripts/isabelle.bat` —
-  **not** `<prefix>/isa/bin/isabelle`, the distribution's unix launcher, which ships on
-  Windows too and which Git-Bash calls executable. Dispatch on `$RUNNER_OS`.
-- On Windows `isabelle getenv` returns `/cygdrive/c/…`; Git-Bash needs `/c/…`.
-- Under Git-Bash, `cmd.exe /c foo.bat` **starts cmd interactively and never runs the
-  batch**: MSYS rewrites any argument shaped like a unix path, so `/c` arrives as
-  `C:/Program Files/Git/c`. Use `MSYS_NO_PATHCONV=1 cmd.exe //c "$(cygpath -w …)"`. The
-  give-away is a Windows banner and a prompt in the log, with no error.
-- conda's link scripts are **dotfiles** (`.<pkg>-post-link.bat`). `ls -l` hides them, so a
-  listing that reports "no hooks" may just be missing `-a`.
-- `conda remove` without `--force` takes base `isabelle` with it, whose own pre-unlink
-  deletes the namespaced `ISABELLE_HOME_USER` — so an "entry is gone" check proves nothing.
-- `$CONDA/bin/python` is ubuntu-only. On Windows Miniconda is `%CONDA%\python.exe` with no
-  `bin/` at all. Dispatch on `$RUNNER_OS` the moment a matrix gains a Windows leg.
-- A **multi-line `python -c "…"` body must start at column 0**, which ends the enclosing
-  YAML block scalar and makes the whole workflow unparseable. GitHub then runs *nothing*
-  and says only "This run likely failed because of a workflow file issue". Keep such
-  snippets on one line.
-- Calling a reusable workflow whose job declares `id-token: write` requires the **caller**
-  to grant it, even when that job is skipped: permissions are validated while the run is
-  built, before any `if:`. Otherwise `startup_failure`, with no jobs and no annotation.
-  `actionlint` does not catch this — but it does catch most other structural errors, and
-  it is worth a run before every dispatch.
-
-## 7b. rattler-build specifics
-
-- rattler-build **does** run conda link scripts in the `tests:` environment — but it
-  gives the hook the **invoking user's `HOME`** while the test script gets a rattler temp
-  one (measured 2026-08-25, rattler-build 0.69.1). Two consequences. (a) A test that
-  probes for the *automatic* post-link's effect reads an unregistered state and is a
-  false red; invoke the hooks explicitly, with one environment for hook and probe and a
-  `HOME` inside `$PREFIX`. (b) The matching pre-unlink is **never** run at teardown, so
-  every `rattler-build build` of a component recipe leaves a permanent entry in
-  `$HOME/.isabelle/Isabelle2025-2-conda-<envdir>/etc/components` pointing at a deleted
-  temp prefix — after which every `isabelle` call in a conda environment directory of
-  that name prints `### Missing Isabelle component: …`. Clean it by hand, or build in a
-  container. CI runners are ephemeral, so publish safety is unaffected.
-- No `bash` in the build environment on **Windows** ("interpreter `bash` was not found").
-  Write the build script in `python` — it removes the whole class and keeps one script for
-  every platform.
-- `source.file_name:` renaming a wheel breaks pip, which parses the filename for
-  name/version/abi/platform.
-- `dynamic_linking.binary_relocation: false` when repackaging a foreign wheel: rattler-build
-  rewrites load commands by default, upstream wheels have no spare header padding, and
-  `install_name_tool` then fails on macOS. The rewrite was never wanted — a PyPI wheel is
-  self-contained by construction.
-- `include:` in a matrix does **not** make a cross product: entries whose keys are absent
-  from the base matrix are merged into every combination in order, each overwriting the
-  last. Use an object-valued matrix key.
-- macOS runners' system python is PEP 668 managed — `pip install` needs
-  `--break-system-packages` there.
-- Map release-asset names from the **subdir you know**, not `uname -m`: macOS says `arm64`
-  where assets say `aarch64`, and the same expression works on linux-aarch64 by coincidence.
-- `--render-only` is a free pre-flight: it catches schema errors and prints the variant
-  list, which is how you confirm `build.python.version_independent` actually took (one
-  variant, not one per python).
-- setuptools >= 77 **normalises the wheel filename to lowercase** (`isabelle_semantic_…`,
-  not `Isabelle_Semantic_…`), and so the `.dist-info` inside it. A glob or `find -name`
-  written in the PyPI casing matches nothing on POSIX and silently works on Windows, where
-  fnmatch normcases. Glob `*.whl` and assert the count; use `find -iname` for dist-info.
-- Adding a python to an **already-published** version: build only the new leg. A rebuilt
-  `.conda` is not guaranteed byte-identical to the published one, and the publish guard
-  refuses the run. Parameterise the matrix rather than re-running it whole.
-- A plain YAML scalar cannot contain the two characters **`": "`**. A `python -c` test
-  command with `print('found: ', x)` in it fails the *whole recipe* to parse, and the error
-  points at the end of the line, not at the colon.
-- `build.python.version_independent` relocates like `noarch: python`: `$PREFIX/bin` **and**
-  `$PREFIX/Scripts` both become `python-scripts/`, and `site-packages/` loses its
-  `lib/pythonX.Y` prefix. Write to bin/ and Scripts/ as usual, but anything **inspecting
-  the built artifact** must look under `python-scripts/`.
-- Declare console scripts as recipe `entry_points` — with them, conda generates the wrapper
-  at link time and it is correctly *absent* from the payload, so assert its absence, not
-  its presence.
-- **rattler-build needs about twice the archive's size in RAM.** After writing the
-  `.conda` it re-indexes the output channel, and rattler_index reads the whole package
-  into a `Vec<u8>` (`reader.bytes().collect()`) to compute sha256/md5 — measured at a
-  17.2 GiB peak for the 8.99 GiB `isabelle-semantic-data`, which reclaimed 15 GiB hosted
-  runners three times with nothing in the log but "the runner has received a shutdown
-  signal" (runs 37565271795, 37570530666, 37573774046; the VM dies 3–8 min after
-  "Checking for symlinks"). `--no-test` does not avoid it (the re-index runs on both
-  paths), and rattler_index 0.33.2 has the same code. Anything over ~5 GiB is built
-  off-runner — §9 item 3. Install clients are unaffected: a `conda`/`micromamba` install
-  of that package peaks at 614 MiB.
-
-## 8. Repackaging a third-party dependency
-
-conda-forge missing a platform or badly stale? Repackage upstream's own wheel — cheap, and
-not a build to maintain:
-
-```yaml
-source: [{url: "https://files.pythonhosted.org/…/PKG-VER-TAG.whl", sha256: "…"}]
-build:  {number: 0, script: "$PYTHON -m pip install <the wheel> --no-deps"}
-```
-
-One recipe per platform tag. Record why we carry it and when to drop it.
+How to release any package: the SKILL conda-release (`.claude/skills/conda-release/SKILL.md`). `RELEASE.md` sends
+here for the steps of `isabelle-semantic-data` (item 3) and `isabelle-ai` (item 4).
 
 ## 9. Release
 
-Pause the download counter while you release ("The channel host").
+3. **`isabelle-semantic-data` is built on a big-memory machine, not on the runner**: rattler-build needs about twice
+   the archive in RAM, and the payload is 19 GB. The runner still does everything else: `release-semantic-db.yml`
+   takes the finished `.conda` through its `prebuilt` input and runs the unchanged sanity check, artifact handoff,
+   immutability guard and smoke on it. The package is built from the owner's snapshot on Hugging Face, so what was
+   synced is what ships, never a local database (the snapshot is uploaded beforehand, and only on the owner's order,
+   by the SKILL sync-semantic-embedding-db). Pause the download counter before step 1 (the SKILL conda-release, "4.
+   Before: pause the download counter"). Then, on a machine with ≥ 40 GB RAM, ≥ 60 GB disk and a fast link (cslh19
+   did it: export 1 min, rattler-build 8 min, upload 30 min):
 
-1. **Dependencies first** — `verify` installs from the live channel, so run deps must
-   already be published. Order: `isabelle` → `isabelle-performant-ml` →
-   `auto-sledgehammer` → `isabelle-rpc` → `isabelle-semantic-embedding` →
-   `isabelle-minilang`. `isabelle-mcp` depends only on `isabelle` and can go any
-   time after it. `isabelle-nunchaku` is no longer released (owner, 2026-10-31);
-   the published 0.5.2 stays on the channel.
-2. **Generic notes for the components' release workflows** (these apply to the
-   `release-*.yml` a component actually has — there is no `release-conda.yml`
-   in this repository):
-   - dry run first, with `-f dry_run=true`: it stops after `verify` and
-     publishes nothing;
-   - tag annotated (`git tag -a`), never lightweight — the provenance checks
-     resolve the peeled `^{}` ref, which only annotated tags have;
-   - if `publish` fails partway and the cause is outside the workflow code (a
-     secret, R2, a transient failure): fix it, then **re-run failed jobs**; where
-     the guard compares sha256 over https, a byte-identical re-upload resumes
-     instead of dead-ending. A re-run never picks up a fix to the workflow
-     itself: it keeps the caller's workflow file from the run's commit and
-     `publish-conda.yml` from the first attempt's commit (GitHub: "re-running
-     failed jobs or a specific job in a workflow will use the reusable workflow
-     from the same commit SHA of the first attempt"). For a workflow fix,
-     dispatch again — with the same build number if the failure came before the
-     upload, with `build_number` bumped (the owner's call) if after it; the
-     superseded build is then a sweep candidate. isabelle-mcp 0.7.0 went out
-     this way on 2026-10-28 (run 40616658488 stranded build 0; build 1 published).
-3. **The data package (`isabelle-semantic-data`) is built on a big-memory machine,
-   not on the runner** — §7b, last bullet: rattler-build needs ~2× the archive in RAM
-   and the payload is 19 GB. The runner still does everything else; `release-semantic-db`
-   takes the finished `.conda` through its `prebuilt` input and runs the unchanged sanity
-   check, artifact handoff, publish guard and smoke on it. The owner's HF upload is still
-   the input (it is uploaded beforehand only on the owner's order, `sync-semantic-embedding-db`
-   skill). Then, on a
-   machine with ≥ 40 GB RAM, ≥ 60 GB disk and a fast link (cslh19 did it: export 1 min,
-   rattler-build 8 min, upload 30 min):
+   1. An environment with the **channel's own library**, so the export is the one CI would have run:
 
-   1. An environment with the **channel's own library**, so the export is the one CI
-      would have run: `micromamba create -p env --override-channels -c
-      https://conda.qiyuan.me -c conda-forge python=3.12 "isabelle-semantic-embedding>=0.3.0"
-      huggingface_hub zstd`.
-   2. `hf_hub_download` of `contrib/Semantic_Embedding/Isabelle_Semantic_Embedding.tar.zst`
-      from `ANTPG/MLML-data` (the cached HF token). The path it returns is a **symlink** —
-      `readlink -f` it: `zstd` refuses symlinked inputs and `stat` without `-L` reports
-      the link's size. Check the size against `data/manifest.json`.
-   3. `zstd -dc … | tar -x` somewhere with room; `SEMANTIC_DB_DIR=<that dir>
-      env/bin/isabelle-semantics export payload`; delete the extracted database.
-   4. rattler-build **0.69.1, the version the workflow pins**, on the recipe from
-      `main`, with `SEMANTIC_DATA_VERSION` (the manifest's `created_at` through
-      `version_of_created_at`) and `SEMANTIC_DATA_PAYLOAD` set, `--build-num <N>` (the
-      `build_number` you dispatch in step 6; 0 for a new snapshot),
-      `--no-test`, `-c https://conda.qiyuan.me -c conda-forge` — and **`TMPDIR` on a
-      real disk**: rattler-build stages the archive under `/tmp`, which on cslh19 is a
-      32 GB tmpfs that a 9 GB archive fills.
-   5. Upload the `.conda` to `ANTPG/MLML-data` under `contrib/Semantic_Embedding/conda/`
-      (`HfApi().upload_file`, commit message naming the machine). This is a release
-      artifact, not a dev-sync file: it is **not** added to `data/manifest.json`.
-   6. `gh workflow run release-semantic-db.yml -R xqyww123/isabelle-packaging-ci
-      -f prebuilt=contrib/Semantic_Embedding/conda/<name>.conda -f build_number=<N> -f dry_run=true`;
-      green → the same with `-f dry_run=false`. The sanity step fails when the package's
-      version or build number disagrees with the manifest or with `build_number`. Read the publish job's audit line and
-      the smoke as for any other package (§11).
+      ```sh
+      micromamba create -p env --override-channels -c https://conda.qiyuan.me -c conda-forge python=3.12 "isabelle-semantic-embedding>=0.3.0" huggingface_hub zstd
+      ```
+   2. Download the snapshot, with the cached HF token:
+      `hf_hub_download(repo_id="ANTPG/MLML-data", repo_type="dataset", filename="contrib/Semantic_Embedding/Isabelle_Semantic_Embedding.tar.zst")`.
+      The path it returns is a **symlink**: `readlink -f` it, since `zstd` refuses symlinked inputs and `stat` without
+      `-L` reports the link's size. Check the size against MLML's `data/manifest.json`.
+   3. `zstd -dc … | tar -x` somewhere with room, then export and delete the extracted database:
 
-   The script that did it on 2026-10-09 is reproducible from these steps; what it is
-   NOT is a build of the owner's local database — the HF snapshot is the input, so what
-   was synced is what ships.
-4. **`isabelle-ai` goes last, and its floors are the channel's newest at that moment —
-   every release, no exceptions.** The metapackage has no content: its `depends` list IS
-   the release. Before dispatching `release-isabelle-ai.yml`, set each floor in
-   `conda/metapackage/isabelle-ai/recipe.yaml` (`isabelle-minilang`, `isabelle-mcp`,
-   `isabelle-semantic-data`) to the newest version published on the channel, whether or
-   not the old floor "still works" — a lagging floor means `conda update isabelle-ai`
-   updates nothing and users never see the wave. A version already published whose
-   floors must move is republished under the **same version** with the workflow's
-   `build_number` input bumped (the channel's immutability guard refuses only an
-   identical filename; `conda install isabelle-ai=X` takes the highest build): 0.3.0
-   went out as build 0 with the 0.2.0 floors and again as build 1 with the current ones
-   on 2026-10-09, which is when the owner made this a rule; build 0 was then swept
-   (deletion log above).
+      ```sh
+      SEMANTIC_DB_DIR=<the tarball's single top directory> env/bin/isabelle-semantics export payload
+      ```
+   4. Build with rattler-build at the version the workflow pins, on `conda/data/isabelle-semantic-data/recipe.yaml`
+      from `main`, with `SEMANTIC_DATA_PAYLOAD` set to the absolute path of step 3's `payload` directory and
+      `SEMANTIC_DATA_VERSION` set to the version of that payload's own `MANIFEST.json` (not MLML's
+      `data/manifest.json`):
 
-## 10. What verification must assert
+      ```sh
+      env/bin/python -c "import json; from Isabelle_Semantic_Embedding.snapshot_sync import version_of_created_at as v; print(v(json.load(open('payload/MANIFEST.json'))['created_at']))"
+      ```
 
-A green install proves very little. Each of these caught a real defect:
+      Pass `--build-num <N>` (the `build_number` you dispatch in step 6; 0 for a new snapshot), `--no-test` and
+      `-c https://conda.qiyuan.me -c conda-forge`, and put **`TMPDIR` on a real disk**: rattler-build stages the
+      archive under `/tmp`, which on cslh19 is a 32 GB tmpfs that a 9 GB archive fills.
+   5. Upload the `.conda` to the dataset `ANTPG/MLML-data` under `contrib/Semantic_Embedding/conda/`
+      (`HfApi().upload_file(..., repo_id="ANTPG/MLML-data", repo_type="dataset")`, commit message naming the machine).
+      This is a release artifact, not a dev-sync file: it is **not** added to `data/manifest.json`.
+   6. One dispatch, started and watched by the SKILL conda-release, "7. Start and watch a run":
 
-- unpack the `.conda` and check the payload (the zip file list alone shows nothing);
-- both hook sets present, `.bat` is CRLF, hook path literal matches the install location;
-- no hardcoded `lib/pythonX.Y` anywhere;
-- the component **is registered** — read `etc/components`, don't infer;
-- the session **builds** from the installed package;
-- Python half: import, console script on PATH, `importlib.metadata.version`, and
-  `pip install NAME` saying "already satisfied";
-- pre-unlink **unregisters**, non-vacuously (§7 on `--force`);
-- smoke on **windows-latest as well as ubuntu-latest** — Windows failure is silent and
-  cannot be inferred from a green Linux leg.
+      ```sh
+      gh workflow run release-semantic-db.yml -R xqyww123/isabelle-packaging-ci -f prebuilt=contrib/Semantic_Embedding/conda/<name>.conda -f build_number=<N> -f dry_run=false
+      ```
 
-When a test passes, ask what a broken implementation would have done. Several of ours
-passed for the wrong reason until a negative control was run against the pre-fix code.
-
-A recurring shape: **the code under test is not on the path the test takes.** A cold-cache
-check that only `import`ed the module proved nothing, because the risky open lives inside
-a coroutine — it never touched a directory, never read the env var it set, and would have
-stayed green against exactly the failure it was named for. Before trusting a check, find
-the line it is supposed to execute and confirm the test reaches it.
-
-## 11. After publishing
-
-```sh
-curl -fsS https://conda.qiyuan.me/noarch/repodata.json | python3 -m json.tool | head
-```
-
-**Update `ROLLOUT_STATUS.md`.** Its "Published on https://conda.qiyuan.me" table names
-the version and shape of every package, and a row moves only on publication — so moving
-it is a post-publish step, not part of the release commit.
-
-Read the publish job's **audit log**, not its check mark: it prints one line per subdir and
-`audited N subdir(s)`. It used to be able to pass having inspected nothing.
+      The sanity step fails when the package's version or build number disagrees with the manifest or with
+      `build_number`. The build number is inside the uploaded `.conda`: when the SKILL gives a new run another build
+      number ("8. The build number"), start again at step 3 (step 4 moved the payload into the package; the new export
+      is a new version), build with that number, and upload the new file in step 5.
+4. **`isabelle-ai` goes last, after the packages its floors name, and its floors are the channel's newest at that
+   moment, every release, no exceptions.** The metapackage has no content: its `depends` list IS the release. Before
+   dispatching `release-isabelle-ai.yml`, set each floor in `conda/metapackage/isabelle-ai/recipe.yaml`
+   (`isabelle-minilang`, `isabelle-mcp`, `isabelle-semantic-data`) to the newest version published on the channel,
+   whether or not the old floor "still works": a lagging floor means `conda update isabelle-ai` updates nothing and
+   users never get the new versions. The floor edit is a release step, not a fix: commit it by the SKILL's "2.
+   Rules", in a commit the owner approves, and push it to `main` before the dispatch; the dispatch builds `main`'s
+   recipe, and the sanity step checks only the dependency names. A version already published whose floors must move
+   is republished under the **same version** with the workflow's `build_number` input bumped (`publish-conda.yml`'s
+   immutability guard refuses only an identical filename; `conda install isabelle-ai=X` takes the highest build).

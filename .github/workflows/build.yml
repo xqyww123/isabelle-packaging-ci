@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           SUMS="ci/releases/$RELEASE/SHA256SUMS"
-          [ -f "$SUMS" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ (RELEASE.md, step 0)"; exit 1; }
+          [ -f "$SUMS" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ (RELEASE_ISABELLE.md, \"Register the release\")"; exit 1; }
           mkdir -p "$DL"
           while read -r _ f; do
             echo "=== $f ==="

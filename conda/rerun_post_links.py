@@ -7,7 +7,7 @@ hooks of the packages a transaction replaces.  So after `--force-reinstall isabe
 brings back both the patches and the registrations.  A new isabelle build replaces the feature
 packages too, and they re-patch through their own post-links, so there it brings back only the
 registrations (PACKAGING_DESIGN.md §11.2).  So every such post-link must be safe to re-run
-(RELEASE_CHECKLIST.md §4).
+(PACKAGING_RULES.md, "Post-link contracts").
 
 Only direct dependents count, dependencies first.  Each script runs as conda runs a post-link
 (run_script in conda/core/link.py): in the activated environment, which it inherits from the

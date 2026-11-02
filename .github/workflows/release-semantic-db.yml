@@ -9,16 +9,15 @@
 #   -> rattler-build the data package (one post-link hook) -> publish.
 #
 # Without `prebuilt`, this runner does all of it.  rattler-build needs about twice
-# the archive in RAM (RELEASE_CHECKLIST.md §7b), so a package too large for a hosted
-# runner is exported and built off-runner from the same snapshot with the same
-# recipe, and handed in through `prebuilt`, which skips those steps.  The sanity
-# check, the publish guard and the smoke run on both paths.
+# the archive in RAM, so a package too large for a hosted runner is exported and
+# built off-runner from the same snapshot with the same recipe, and handed in
+# through `prebuilt`, which skips those steps.  The sanity check, the publish guard
+# and the smoke run on both paths.
 #
 # The package version is YYYY.MM.DD.HHMM (UTC), derived from the created_at the
 # export stamped (L15) -- there is no version input: the manifest is the single
-# clock.  How to release: RELEASE_CHECKLIST.md, "9. Release" (item 3 holds this
-# package's own build steps).  NOTE dry_run DEFAULTS TO TRUE: a dispatch without
-# it builds and validates but publishes nothing.
+# clock.  How to release: the SKILL conda-release.  NOTE dry_run DEFAULTS TO TRUE:
+# a dispatch without it builds and validates but publishes nothing.
 #
 # Secrets: HF_TOKEN (read access to the ANTPG/MLML-data dataset) and the shared
 # CONDA_R2_* channel credentials.

@@ -2,7 +2,7 @@ name: ci
 
 # Continuous integration: package the official Isabelle release on every push / PR.
 # Does NOT touch the conda channel -- publishing lives in release.yml.
-# A manual run with `build_number` is also the rehearsal before a release (RELEASE.md, step 2).
+# A manual run with `build_number` is also the rehearsal before a release (RELEASE_ISABELLE.md, "Rehearse the feature packages").
 
 on:
   push:

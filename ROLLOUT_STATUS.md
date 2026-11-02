@@ -1,8 +1,9 @@
 # conda rollout — where we are
 
-Companion to `RELEASE_CHECKLIST.md`. That file holds the durable rules; this one holds the
-**current state and the decisions already made**, so a fresh session can resume without
-re-litigating anything.
+How to release: the SKILL conda-release (`.claude/skills/conda-release/SKILL.md`). Rules for
+package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL_OPERATIONS.md`.
+This file holds the **current state and the decisions already made**, so a fresh session can
+resume without re-litigating anything.
 
 Last updated: 2026-11-01 — isabelle 2026 (build 0), the official Isabelle2026 with its
 official heaps and no patches (`PACKAGING_DESIGN.md` §11). Release run 41282713954 of
@@ -54,20 +55,14 @@ CRLF `etc/settings` defect and two ML path defects, in sequence, each hidden beh
 previous one.
 
 (Historical note: 0.1.1 of `isabelle-semantic-embedding` outlived its win-64 defect
-deletion on the four non-Windows subdirs until the 2026-07-22 sweep removed it. See
-RELEASE_CHECKLIST.md for the bar that permitted the defect deletion.)
-
-Verify from outside CI:
-```sh
-curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
-  | python3 -c "import json,sys;d=json.load(sys.stdin);pk={**d.get('packages',{}),**d.get('packages.conda',{})};[print(v['name'],v['version']) for v in sorted(pk.values(),key=lambda x:x['name'])]"
-```
+deletion on the four non-Windows subdirs until the 2026-07-22 sweep removed it. The bar
+that permitted the defect deletion: `CHANNEL_OPERATIONS.md`, "Defect deletions".)
 
 ## In flight
 
 - Releases that accept isabelle 2026: none yet. Each package that depends on `isabelle`
-  needs one, in the order of `RELEASE_CHECKLIST.md` §9 item 1, with `isabelle-ai` last
-  (§9 item 4); `RELEASE.md` step 4.
+  needs one: the SKILL conda-release, "11. A new Isabelle release"; `isabelle-ai` goes last
+  (`RELEASE_CHECKLIST.md`, "9. Release", item 4).
 - isabelle-mcp 0.7.0's PyPI publish: the v0.7.0 ci.yml run 40616658139 (Isabelle-MCP)
   waits at the `pypi` environment gate, unapproved by the owner's order (only the conda
   release was ordered). It can wait at most 30 days; after that, publishing needs
@@ -83,7 +78,7 @@ curl -fsS https://conda.qiyuan.me/noarch/repodata.json \
 2026-07-22, after the second wave: the channel was swept — 16 stale files deleted across
 all six subdirs (rpc 0.3.1–0.3.4, mcp 0.3.0, minilang 0.4.0, auto-sledgehammer 0.1.0,
 semantic-embedding 0.1.1/0.1.2), under what was then framed as a latest-version-only
-retention policy. Per-file log in `RELEASE_CHECKLIST.md`.
+retention policy. Per-file log: "Deletion log" below.
 
 2026-07-28: superseded-version deletion **reworded from that automatic-retention framing
 to owner-selected sweeps** — no automatic policy; the owner picks from computed candidates
@@ -91,8 +86,8 @@ to owner-selected sweeps** — no automatic policy; the owner picks from compute
 `scripts/sweep-old-versions.py` edits the per-subdir metadata surgically — no package
 downloads, machine-gated against concurrent publish runs, verification anchored on the
 owner's plan file. Design + three-reviewer adversarial-debate record:
-`CONDA_CHANNEL_SWEEP_PLAN.md` in the owner's working tree; user manual: the "Sweeping
-superseded versions" section of `RELEASE_CHECKLIST.md`. First run deleted 7 files
+`CONDA_CHANNEL_SWEEP_PLAN.md` in the owner's working tree; user manual:
+`CHANNEL_OPERATIONS.md`, "Sweeping superseded versions". First run deleted 7 files
 (isabelle-ai 0.1.0, isabelle-minilang 0.5.0, isabelle-semantic-embedding 0.2.0 × 5
 platform subdirs), all externally verified; every package on the channel again has
 exactly one version.
@@ -119,8 +114,8 @@ candidate now.
 ## Notes from the fourth wave (2026-10-03/04)
 
 The content released is each repository's state at the moment the owner said "release"
-(2026-10-03), plus the edits approved for the release itself. Order as in
-RELEASE_CHECKLIST.md §9; every package went dry run → annotated tag → tag run, and every
+(2026-10-03), plus the edits approved for the release itself. Dependencies first; every
+package went dry run → annotated tag → tag run, and every
 publish job's audit read `audited 6 subdir(s)`.
 
 - **The isabelle-performant-ml series moved to 0.2.x**, and the three recipes that capped
@@ -154,8 +149,7 @@ publish job's audit read `audited 6 subdir(s)`.
   `semantic-data >=2026.07.26`) under the recipe's old doctrine of raising a floor only
   when the pair stops working below it. The owner overruled that on 2026-10-09: a
   metapackage whose floors lag is one `conda update isabelle-ai` does nothing with, so
-  every isabelle-ai release carries the channel's newest versions — now
-  RELEASE_CHECKLIST §9 item 4. Build 1 (same version, `build_number=1`, the input the
+  every isabelle-ai release carries the channel's newest versions. Build 1 (same version, `build_number=1`, the input the
   workflow has for exactly this; dry run 37886355252, publish 37886735015, smoke green)
   floors `minilang >=0.7.0`, `mcp >=0.6.0`, `semantic-data >=2026.10.09`; build 0 was
   deleted the same day with the sweep tool (below). The smoke now also asserts
@@ -214,8 +208,8 @@ the "recipe beside its source" rule presupposes a source, and this has none. Its
 directory rather than `conda/third-party/`, whose name carries "upstream's artifact, pinned
 by sha256" — none of which applies. Floors, not exact pins: a metapackage that pins `==`
 must be republished for every release of either half. (Since 2026-10-09 it is
-republished at every wave regardless, with its floors raised to the channel's newest —
-RELEASE_CHECKLIST §9 item 4; floors rather than `==` still let the solver move up
+republished at every wave regardless, with its floors raised to the channel's newest;
+floors rather than `==` still let the solver move up
 between waves.) Empty by construction, and the
 workflow asserts exactly that — no file outside `info/`, `depends` equal to those two and
 nothing more, `subdir: noarch`. Dry-run green on the first attempt.
@@ -239,8 +233,8 @@ Suspect the dependencies before the hook.
 
 ## Decisions already made — do not reopen
 
-- **One repo = one conda package.** A repo's Python and Isabelle halves are one project and
-  ship together.
+- **A component's Python and Isabelle halves are one conda package.** They are one project
+  and ship together. (A repository may release more than one package.)
 - **Each component owns its own CI** (`release-conda.yml` in its own repo). Only the R2
   publish step is shared, via `publish-conda.yml` here. Copies of the release workflow are
   allowed to drift; the drift that is a *defect* is "same operation spelled two ways".
@@ -263,88 +257,23 @@ Suspect the dependencies before the hook.
   them** — no downloading someone else's binary, no shelling a PyPI wheel. `wheels.yml`
   already builds them on native runners; the conda job consumes that, called via
   `workflow_call` rather than copied.
+- **A component registers in the installing user's directory**: its post-link writes
+  `$ISABELLE_HOME_USER/etc/components`, Isabelle's supported path, which keeps the base
+  package unaware of components. A `components.d` drop-in in the base `etc/settings` was
+  rejected. Accepted limitation: on a shared or read-only environment other users do not
+  see the registration.
 - Existing published packages are **never** retracted or rebuilt. Improvements apply from
   each package's next release. Deletion has exactly two grounds, both procedural in
-  `RELEASE_CHECKLIST.md`'s "Deleting from the channel" section: the defect bar (an
-  artifact that renders the tool unusable AND misattributes the cause, deletable only
-  after the fixed version is published — used once, for `isabelle-semantic-embedding`
-  0.1.1 **win-64 only**: a CRLF `etc/settings` left `isabelle build` unable to build any
-  session on Windows, HOL included, with an error naming a jar path rather than the
-  package) and owner-selected sweeps of superseded versions (since 2026-07-28).
-
----
-
-## Lessons from this session that are NOT yet obvious from the code
-
-The generalisable rules are in `RELEASE_CHECKLIST.md`. These are the ones about *how the
-work went wrong*, which is the part that repeats.
-
-### A green test can be green for the wrong reason
-
-Repeatedly, the thing that caught a real bug was a **negative control** — running the same
-test against the pre-fix code and confirming it fails.
-
-- The proof-cache test passed twice before it was valid: once because the theory was never
-  actually reprocessed (Isabelle keys on content, not mtime), once because an
-  `auto_sledgehammer` call in the test appended to the cache and masked the truncation the
-  test existed to detect.
-- Matrix case "I" in an earlier plan reported a pass for a configuration that *could not
-  fail* — the guard short-circuited before reaching the code under test.
-
-Before believing a pass, ask: what would a broken implementation have printed?
-
-### A "portable" expression that works on one platform by coincidence
-
-Two instances in one afternoon:
-
-- `find -maxdepth 3` for `.dist-info` matched on Windows (`Lib/site-packages`, depth 3) and
-  failed on every unix leg (`lib/python3.X/site-packages`, depth 4) — on a perfectly good
-  package.
-- `rattler-build-$(uname -m)-apple-darwin` 404s on macOS (`uname` says `arm64`, the asset is
-  `aarch64`) while working on linux-aarch64 purely because uname says `aarch64` there.
-
-When a platform-dependent expression is right on one leg and wrong on another, the passing
-leg is usually the coincidence.
-
-### GitHub Actions specifics that cost a round trip each
-
-- `include:` does **not** make a cross product. Entries whose keys are absent from the base
-  matrix are merged into every combination in order, each overwriting the last — five
-  platform entries produced three jobs all wearing the *last* platform. Use an
-  object-valued matrix key.
-- Step outputs do not cross jobs; export a job `outputs:` block.
-- A reusable workflow gets the **calling** repo's secrets. Pass them explicitly so
-  `required: true` is armed.
-- macOS runners' system python is PEP 668 managed — `pip install` needs
-  `--break-system-packages` there.
-
-### rattler-build specifics
-
-- No `bash` in the build environment on **Windows** ("interpreter `bash` was not found").
-  Writing the build script in `python` removes the whole class.
-- `--build-num`, not `--build-number`.
-- `source.file_name:` renaming a wheel breaks pip, which parses the filename for
-  name/version/abi/platform.
-- `dynamic_linking.binary_relocation: false` is **required** when repackaging a foreign
-  wheel: rattler-build rewrites load commands by default, and upstream wheels are not
-  linked with spare header padding, so `install_name_tool` fails on macOS. The rewrite was
-  never wanted — a PyPI wheel is self-contained by construction.
-
-### Two Isabelle-specific traps worth remembering
-
-- `isabelle components -u` exposes a component's **whole** ROOT, so an unshipped session in
-  it breaks *every* build in a user's environment.
-- On Windows, the first `isabelle` call is the one that cannot run a Scala tool: Cygwin
-  heals itself on that call, but the Java classpath is computed before the heal finishes.
-  Hooks therefore need a throwaway bash-only call before `components`.
+  `CHANNEL_OPERATIONS.md`, "Deleting from the channel": the defect bar (an
+  artifact that renders the tool unusable AND misattributes the cause; used once, for
+  `isabelle-semantic-embedding` 0.1.1 win-64 only: "Deletion log" below) and
+  owner-selected sweeps of superseded versions (since 2026-07-28).
 
 ---
 
 ## Resuming
 
-Nothing of the fourth wave is left. A future data release repeats the off-runner
-build (the `prebuilt` input's description says what it expects) until rattler_index
-stops reading packages whole.
+Nothing of the fourth wave is left.
 
 **Expect dry runs to fail, and let them.** semantic-embedding's first release took about
 eight; this wave took one or two per package, each failure on something real (a stale
@@ -352,5 +281,23 @@ whitelist, a concurrent commit) or on CI noise (a timing test, a SIGPIPE race). 
 point moved forward each time rather than any single run being wasted. Budget for that
 rather than treating a red dry run as a setback.
 
-Repo notes: `Isabelle_RPC`, `Isabelle_Semantic_Embedding` and `Isabelle-MCP` use
-`master`, the others use `main`. `Semantic_Embedding` was **renamed on GitHub** to `Isabelle_Semantic_Embedding`.
+`Semantic_Embedding` was **renamed on GitHub** to `Isabelle_Semantic_Embedding`.
+
+## Deletion log
+
+| Package | Version | Subdir | Why | When |
+|---|---|---|---|---|
+| `channel-smoke-test` | 0.1.x | unknown | a test package; its deletion was not logged | unknown |
+| `isabelle-semantic-embedding` | 0.1.1 | win-64 | CRLF `etc/settings` → CR in the classpath → `isabelle build` could build no session at all, not even HOL, and the error named a jar path | 2026-07-19, after 0.1.2 shipped |
+| `isabelle-rpc` | 0.3.1–0.3.4 | noarch | policy sweep (0.4.0 is latest) | 2026-07-22 |
+| `isabelle-mcp` | 0.3.0 | noarch | policy sweep (0.3.1) | 2026-07-22 |
+| `isabelle-minilang` | 0.4.0 | noarch | policy sweep (0.5.0) | 2026-07-22 |
+| `auto-sledgehammer` | 0.1.0 | noarch | policy sweep (0.1.1) | 2026-07-22 |
+| `isabelle-semantic-embedding` | 0.1.1, 0.1.2 | all four unix subdirs; win-64 had only 0.1.2 left | policy sweep (0.2.0) | 2026-07-22 |
+| `isabelle-ai` | 0.1.0 | noarch | owner-selected sweep; superseded by 0.2.0 | 2026-07-28 |
+| `isabelle-minilang` | 0.5.0 | noarch | owner-selected sweep; superseded by 0.6.0 | 2026-07-28 |
+| `isabelle-semantic-embedding` | 0.2.0 | all five platform subdirs | owner-selected sweep; superseded by 0.3.0 | 2026-07-28 |
+| `isabelle-ai` | 0.3.0 (build 0) | noarch | owner-selected sweep; superseded by 0.3.0 build 1, the republish with the raised floors | 2026-10-09 |
+
+Rows dated 2026-07-22 say "policy sweep": the automatic-retention framing of the time,
+since replaced by owner-selected sweeps.

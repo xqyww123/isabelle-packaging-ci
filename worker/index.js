@@ -1,5 +1,5 @@
-// The download counter in front of https://conda.qiyuan.me (RELEASE_CHECKLIST.md, "The channel
-// host"). Requests pass through to the R2 bucket unchanged; a package file served whole counts one
+// The download counter in front of https://conda.qiyuan.me (deploying it: wrangler.toml).
+// Requests pass through to the R2 bucket unchanged; a package file served whole counts one
 // download of its package, unless counting is paused (while we release, so that our own CI's
 // downloads are not counted); the channel's front page gets a Downloads column.
 

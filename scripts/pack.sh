@@ -38,7 +38,7 @@ for v in SUBDIR BUNDLE OUT; do
 done
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OFFICIAL_ID_FILE="$HERE/../releases/$RELEASE/ISABELLE_ID"
-[ -f "$OFFICIAL_ID_FILE" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ISABELLE_ID (RELEASE.md, step 0)"; exit 1; }
+[ -f "$OFFICIAL_ID_FILE" ] || { echo "::error::$RELEASE is not registered: no releases/$RELEASE/ISABELLE_ID (RELEASE_ISABELLE.md, \"Register the release\")"; exit 1; }
 PYTHON="${PYTHON:-python3}"           # needs zstandard (or Python >= 3.14) for check_pristine.py
 WORK="${WORK:-$(mktemp -d)}"
 STAGE="$WORK/stage"

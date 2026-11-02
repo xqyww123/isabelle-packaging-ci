@@ -143,7 +143,8 @@ $ conda create -n smoke -c https://conda.qiyuan.me --override-channels channel-s
 ```
 The custom domain **takes effect immediately**; Content-Type / compression negotiation / CORS **need no attention**;
 **R2 multipart upload works** (a large 1 GB package is OK).
-`channel-smoke-test` **stays on the channel as a long-term health probe** — whenever it installs, the chain is working.
+`channel-smoke-test` has since left the channel; what may be deleted, and how: `CHANNEL_OPERATIONS.md`,
+"Deleting from the channel".
 
 #### CDN caching: **a propagation delay, not a correctness problem** (wording corrected)
 
@@ -160,7 +161,7 @@ conda prefers the `.zst` ⇒ **a newly published version may become visible only
 published 0.1.1, and a clean conda installed 0.1.0).
 
 **This is not "publishing the wrong package"; it is a delay**: package files are **immutable** (their names contain
-version+build), and **we do not delete old packages** ⇒
+version+build), and old packages are deleted only as `CHANNEL_OPERATIONS.md`, "Deleting from the channel", allows ⇒
 users who get a stale index only install an **old version that really exists and works**; nothing breaks.
 Brief inconsistency between edge nodes is **normal** in package ecosystems (conda-forge / PyPI both have CDNs), and users
 do not all update at the same moment anyway.
@@ -172,7 +173,8 @@ In practice it is often much shorter (low-traffic objects are evicted from the e
 
 **The only real correctness risk**: if one day we **delete/withdraw** a package, a stale index would point to a file that
 is gone → 404.
-⇒ **Avoidance: never delete packages; for changed content only bump `build_number`** (which is our rule anyway).
+⇒ **Avoidance: for changed content bump `build_number`**; deletions follow `CHANNEL_OPERATIONS.md`,
+"Deleting from the channel".
 
 #### ✅ The right fix: Cloudflare's defaults are **the opposite** of what we need; two Cache Rules correct them
 
@@ -1053,7 +1055,7 @@ control was done (empty screen → the model answers `started: no`).
   `structured_output.started = "no"`, so no discriminating power is lost.
   【From 2026-11-01 on (owner): at release time (`release.yml` passes `require_gui_verdict: true`) a GUI check without a
   verdict fails, and the release stops before the upload; the model answering `unclear` for the `bad`/`good` lines also
-  counts as no verdict. `ci.yml` still only warns. The remedies are in step 3 of `RELEASE.md`; the rule is written in
+  counts as no verdict. `ci.yml` still only warns. The remedies are in `RELEASE_ISABELLE.md`, "A GUI check without a verdict"; the rule is written in
   `gui_judge.sh`'s `unjudged`.】
 - ~~**The `ML_system_64` must be inferred from the package's heap directory name and written into the preferences of
   the temporary HOME.**~~【Void from 2026-10-31 (item 13: the official default 32_in_64 heaps go into the package as they
@@ -1165,7 +1167,7 @@ For MAX_PATH, conda's build string was shortened from `<hg-changeset>_<n>` to **
 **The safety net**: `release.yml` **refuses to overwrite a published filename** ⇒ if you forget the bump, **the release
 fails loudly**, instead of silently giving users old bytes. **This is by design, not by coincidence.**
 
-### The full procedure for updating the patch set → **see `RELEASE.md`**
+### The full procedure for updating the patch set
 
 In one sentence: change the patches → **publish a new version to PyPI** → bump `MBI_VERSION` → bump `ISA_BUILD_NUMBER` →
 trigger `release.yml`.
@@ -1173,7 +1175,6 @@ trigger `release.yml`.
 **The only mistake that really bites: the patches were changed only locally and not published to PyPI.**
 The CI installs a fixed version from PyPI and **does not look at** MLML's submodule ⇒ patches that work for you locally
 **never reach users**, while the CI is all green and the package goes out as usual. The classic "works on my machine".
-The first item of `RELEASE.md` is there to stop exactly this.
 (The reverse, "local is behind the published version", **is not a problem** — you are the source of the changes.)
 
 ## 8. To-do list
@@ -1270,8 +1271,8 @@ reproducible. The latter is the right way.
   package as the empty marker file `.conda-keep` (a conda package has no directories). File permission bits are not
   compared (the script's description says why). The reason for each change is in the comment of the corresponding step of
   `scripts/pack.sh`, and is not repeated here.
-- **Only Isabelle2026 and later are supported** (owner, 2026-10-31). The steps for adding a new release are in step 0 of
-  `RELEASE.md`. The version is derived by `pack.sh` (`Isabelle2026` → `2026`).
+- **Only Isabelle2026 and later are supported** (owner, 2026-10-31). The steps for adding a new release are in
+  `RELEASE_ISABELLE.md`, "Register the release". The version is derived by `pack.sh` (`Isabelle2026` → `2026`).
 - The release note required by point 8 of decision 12 of the patch tool plan ("`Foreign`, `RunCall`, `CInterface` are
   gone from the unpatched Isabelle") is not written from 2026 on: the unpatched Isabelle2026 itself provides `Foreign`
   (owner, 2026-10-31).
@@ -1312,7 +1313,7 @@ Boundaries and costs:
   is not supported (outside a conda environment, the tool runs only when it is given the feature directory explicitly).
 - conda does not track the files a feature creates (light has three); they disappear when the pre-unlink reverses the
   feature successfully, which is the same kind of thing as a component package unregistering its own registration with
-  `isabelle components -x` (RELEASE_CHECKLIST.md §4). Changes left behind when the pre-unlink cannot reverse everything
+  `isabelle components -x`. Changes left behind when the pre-unlink cannot reverse everything
   are written by the hook, on the spot, into .messages.txt (the list of files and the steps to recover, written for two
   cases: "this command removes it" and "this command replaces it"); after the package is removed (rather than replaced),
   status cannot see them.
@@ -1326,10 +1327,8 @@ Boundaries and costs:
   the installed features, at the cost of deleting that environment's user directory).
 - `--force-reinstall isabelle` replaces every file of the package and deletes that environment's user directory. The
   sources under `$PREFIX/isa` are all managed by conda; users do not change them.
-- Hooks always exit 0 (the rule of RELEASE_CHECKLIST.md §4 is unchanged), and the exit 0 is written in the hook text
-  rather than left to the tool. The two contracts are in RELEASE_CHECKLIST.md §4: a package whose post-link touches
-  `$PREFIX/isa` or the Isabelle user directory must depend on `isabelle` directly; the post-link of a package that
-  depends on `isabelle` directly must be safe to re-run at any time. A package that depends on `isabelle` only indirectly
+- Hooks always exit 0, and the exit 0 is written in the hook text rather than left to the tool. The two contracts are
+  in `PACKAGING_RULES.md`, "Post-link contracts". A package that depends on `isabelle` only indirectly
   (isabelle-semantic-data) is not re-run.
 - For every new `isabelle` build that is published, all feature packages must be republished with the new pins (the
   batch release workflow does it in one run); component packages do not pin the build and need not be republished.

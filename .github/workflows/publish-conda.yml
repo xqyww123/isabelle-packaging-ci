@@ -14,6 +14,8 @@
 #   gh secret set CONDA_R2_ACCESS_KEY_ID     -R xqyww123/<repo>
 #   gh secret set CONDA_R2_SECRET_ACCESS_KEY -R xqyww123/<repo>
 #
+# A new calling repo is also added to PUBLISH_REPOS in scripts/sweep-old-versions.py.
+#
 #   jobs:
 #     publish:
 #       needs: build

@@ -196,7 +196,7 @@ than silent.
 **Maintenance duty — the one manual sync point.** A repo that starts publishing to the
 channel must be added both to `PUBLISH_REPOS` in the script and to this list: `Isa-Mini`,
 `Isabelle-MCP`, `Isabelle_RPC`, `Isabelle_Semantic_Embedding`, `auto_sledgehammer`,
-`Performant_Isabelle_ML`, `isabelle-packaging-ci` (all under `xqyww123/`).
+`Performant_Isabelle_ML`, `isabelle-packaging-ci`, `isabelle_patch_control` (all under `xqyww123/`).
 
 ### Deletion log
 

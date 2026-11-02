@@ -66,6 +66,7 @@ PUBLISH_REPOS = [
     "xqyww123/auto_sledgehammer",
     "xqyww123/Performant_Isabelle_ML",
     "xqyww123/isabelle-packaging-ci",
+    "xqyww123/isabelle_patch_control",
 ]
 PUBLISH_WORKFLOW_RE = re.compile(r"release|publish|conda|wheel", re.I)
 

@@ -4,10 +4,9 @@ schema_version: 1
 # Isabelle stack, as a conda DATA package (SEMANTIC_DB_LAYERED_PLAN.md).
 #
 # The payload is the read-only "system" layer of the layered semantic DB:
-# extracted LMDB stores plus a MANIFEST.json, produced by the release
-# workflow's `isabelle-semantics export` run over the Hugging Face dev-sync
-# snapshot (release-semantic-db.yml).  The read facade in
-# isabelle-semantic-embedding discovers it at
+# extracted LMDB stores plus a MANIFEST.json, produced by `isabelle-semantics
+# export` over the Hugging Face dev-sync snapshot (release-semantic-db.yml).
+# The read facade in isabelle-semantic-embedding discovers it at
 # $PREFIX/share/isabelle-semantic-data/ and layers it under the user's
 # writable DB; user machines never merge it and never write to it.
 #
@@ -35,8 +34,8 @@ schema_version: 1
 # depend on the data, L3: the library stays lean; `isabelle-ai` carries the
 # batteries), so no cycle.
 #
-# Version = YYYY.MM.DD.HHMM (UTC), derived from the payload manifest's
-# created_at by the workflow (plan L15; the manifest is the single clock).
+# Version = YYYY.MM.DD.HHMM (UTC): SEMANTIC_DATA_VERSION is version_of_created_at
+# of the payload manifest's created_at (plan L15; the manifest is the single clock).
 # The build number is a packaging revision only.
 
 context:
@@ -46,9 +45,8 @@ package:
   name: isabelle-semantic-data
   version: ${{ version }}
 
-# No `source:`.  The exported payload directory, produced earlier in the same
-# workflow run, is handed to the build script by path (script.env below) and
-# MOVED into the prefix.  A `source: path:` would make rattler-build copy the
+# No `source:`.  The exported payload directory is handed to the build script by
+# path (SEMANTIC_DATA_PAYLOAD, script.env below) and MOVED into the prefix.  A `source: path:` would make rattler-build copy the
 # whole tree into its work directory first, and with a 17 GB vector store that
 # extra copy is what ran the runner out of disk (run 37557142231).
 

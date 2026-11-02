@@ -1,21 +1,24 @@
 # Publish the `isabelle-semantic-data` data package to https://conda.qiyuan.me.
 #
-# The release chain (SEMANTIC_DB_LAYERED_PLAN.md, L7/L18): Hugging Face holds the
-# dev-synced working database (uploaded by `manage_data.py update`); this workflow
-# turns it into the published artifact.  Everything content-shaping runs HERE, on
-# the runner, never on a dev machine:
+# The release chain (SEMANTIC_DB_LAYERED_PLAN.md, L7): Hugging Face holds the
+# dev-synced working database (uploaded by `manage_data.py update`); the package is
+# made from that snapshot, never from a local database:
 #
 #   download the HF tarball -> `isabelle-semantics export` (drop tombstones, build
 #   the system experience index, stamp the manifest, compacting rewrite, gates)
 #   -> rattler-build the data package (one post-link hook) -> publish.
 #
+# Without `prebuilt`, this runner does all of it.  rattler-build needs about twice
+# the archive in RAM (RELEASE_CHECKLIST.md §7b), so a package too large for a hosted
+# runner is exported and built off-runner from the same snapshot with the same
+# recipe, and handed in through `prebuilt`, which skips those steps.  The sanity
+# check, the publish guard and the smoke run on both paths.
+#
 # The package version is YYYY.MM.DD.HHMM (UTC), derived from the created_at the
-# export just stamped (L15) -- there is no version input: the manifest is the
-# single clock.  Dispatch it with `isabelle-semantics release` (which runs a soft
-# HF-freshness check first and asks dry-run-or-real) or manually:
-#     gh workflow run release-semantic-db --repo xqyww123/isabelle-packaging-ci -f dry_run=false
-# NOTE dry_run DEFAULTS TO TRUE: a bare dispatch builds and validates but
-# publishes nothing.
+# export stamped (L15) -- there is no version input: the manifest is the single
+# clock.  How to release: RELEASE_CHECKLIST.md, "9. Release" (item 3 holds this
+# package's own build steps).  NOTE dry_run DEFAULTS TO TRUE: a dispatch without
+# it builds and validates but publishes nothing.
 #
 # Secrets: HF_TOKEN (read access to the ANTPG/MLML-data dataset) and the shared
 # CONDA_R2_* channel credentials.
@@ -197,7 +200,11 @@ jobs:
           PY
           df -h / | tail -1
 
-      - name: "Sanity: link hooks, reader-library floor, payload in place"
+      - name: "Sanity: link hooks, reader-library floor, payload, version and build number"
+        # Login shell: the version check imports the released library installed above.
+        shell: bash -l {0}
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
           set -euo pipefail
           pkg=$(find out -name 'isabelle-semantic-data-*.conda' | head -1)
@@ -250,8 +257,20 @@ jobs:
             exit 1
           fi
           python3 - "$work" <<'PY'
-          import json, pathlib, re, sys
-          idx = json.loads((pathlib.Path(sys.argv[1]) / "info" / "index.json").read_text())
+          import json, os, pathlib, re, sys
+          from Isabelle_Semantic_Embedding.snapshot_sync import version_of_created_at
+          work = pathlib.Path(sys.argv[1])
+          idx = json.loads((work / "info" / "index.json").read_text())
+          manifest = json.loads((work / "share" / "isabelle-semantic-data" / "MANIFEST.json").read_text())
+          # Both paths must agree with the manifest and the dispatch: a prebuilt
+          # package carries the version and build number it was built with.
+          version = version_of_created_at(manifest["created_at"])
+          if idx.get("version") != version:
+              raise SystemExit(f"::error::package version {idx.get('version')}, but the manifest's created_at gives {version}")
+          build = int(os.environ["BUILD_NUMBER"])
+          if idx.get("build_number") != build:
+              raise SystemExit(f"::error::package build number {idx.get('build_number')}, but build_number={build} was dispatched: "
+                               f"rebuild with --build-num {build}, or dispatch with build_number={idx.get('build_number')}")
           deps = idx.get("depends", [])
           print("depends =", deps)
           # Exactly ONE dependency: the reader-library floor (user decision
@@ -261,7 +280,8 @@ jobs:
               raise SystemExit(f"::error::expected exactly the isabelle-semantic-embedding floor, got {deps}")
           if idx.get("subdir") != "noarch":
               raise SystemExit(f"::error::expected noarch, got {idx.get('subdir')}")
-          print("  OK  noarch, exactly the one post-link hook, the reader-library floor, payload present")
+          print(f"  OK  noarch, exactly the one post-link hook, the reader-library floor, payload present, "
+                f"version {version} build {build}")
           PY
 
       - name: Lay the package out as <subdir>/*.conda for publish-conda.yml

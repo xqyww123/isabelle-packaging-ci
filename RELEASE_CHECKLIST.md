@@ -460,7 +460,8 @@ Pause the download counter while you release ("The channel host").
    and the payload is 19 GB. The runner still does everything else; `release-semantic-db`
    takes the finished `.conda` through its `prebuilt` input and runs the unchanged sanity
    check, artifact handoff, publish guard and smoke on it. The owner's HF upload is still
-   the input (publish the snapshot first, `sync-semantic-embedding-db` skill). Then, on a
+   the input (it is uploaded beforehand only on the owner's order, `sync-semantic-embedding-db`
+   skill). Then, on a
    machine with ≥ 40 GB RAM, ≥ 60 GB disk and a fast link (cslh19 did it: export 1 min,
    rattler-build 8 min, upload 30 min):
 
@@ -476,7 +477,8 @@ Pause the download counter while you release ("The channel host").
       env/bin/isabelle-semantics export payload`; delete the extracted database.
    4. rattler-build **0.69.1, the version the workflow pins**, on the recipe from
       `main`, with `SEMANTIC_DATA_VERSION` (the manifest's `created_at` through
-      `version_of_created_at`) and `SEMANTIC_DATA_PAYLOAD` set, `--build-num 0`,
+      `version_of_created_at`) and `SEMANTIC_DATA_PAYLOAD` set, `--build-num <N>` (the
+      `build_number` you dispatch in step 6; 0 for a new snapshot),
       `--no-test`, `-c https://conda.qiyuan.me -c conda-forge` — and **`TMPDIR` on a
       real disk**: rattler-build stages the archive under `/tmp`, which on cslh19 is a
       32 GB tmpfs that a 9 GB archive fills.
@@ -484,8 +486,9 @@ Pause the download counter while you release ("The channel host").
       (`HfApi().upload_file`, commit message naming the machine). This is a release
       artifact, not a dev-sync file: it is **not** added to `data/manifest.json`.
    6. `gh workflow run release-semantic-db.yml -R xqyww123/isabelle-packaging-ci
-      -f prebuilt=contrib/Semantic_Embedding/conda/<name>.conda -f dry_run=true`;
-      green → the same with `-f dry_run=false`. Read the publish job's audit line and
+      -f prebuilt=contrib/Semantic_Embedding/conda/<name>.conda -f build_number=<N> -f dry_run=true`;
+      green → the same with `-f dry_run=false`. The sanity step fails when the package's
+      version or build number disagrees with the manifest or with `build_number`. Read the publish job's audit line and
       the smoke as for any other package (§11).
 
    The script that did it on 2026-10-09 is reproducible from these steps; what it is

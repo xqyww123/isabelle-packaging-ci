@@ -350,8 +350,7 @@ stops reading packages whole.
 eight; this wave took one or two per package, each failure on something real (a stale
 whitelist, a concurrent commit) or on CI noise (a timing test, a SIGPIPE race). The failure
 point moved forward each time rather than any single run being wasted. Budget for that
-rather than treating a red dry run as a setback. Four of the six `release-conda.yml`
-workflows default `dry_run` to **false** — always pass `-f dry_run=true` explicitly.
+rather than treating a red dry run as a setback.
 
 Repo notes: `Isabelle_RPC`, `Isabelle_Semantic_Embedding` and `Isabelle-MCP` use
 `master`, the others use `main`. `Semantic_Embedding` was **renamed on GitHub** to `Isabelle_Semantic_Embedding`.

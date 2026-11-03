@@ -5,7 +5,16 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-03 — the first feature packages: `isabelle-patch-control` 1.0.0 (build
+Last updated: 2026-11-03 — isabelle-rpc 0.5.3 (build 0): `Context_Callbacks.entry_of_name`
+returns the raw `Position.T` and `pack_pos` flattens it, totally (wire unchanged), for
+Semantic_Embedding's Isabelle2026 port. Same requirements as 0.5.2 (`isabelle >=2026,<2026.1`,
+`isabelle-performant-ml >=0.2.0,<0.3.0`). Release run 41663973356 of commit 84d278e (dry run
+41663357367): publish green, smoke green on ubuntu and windows; `download-counter.py check`
+printed nothing. Its dependents on the channel, isabelle-minilang and
+isabelle-semantic-embedding, require `isabelle >=2025.2,<2025.3` in every published build, so no
+solve pairs them with it.
+
+Before that, 2026-11-03 — the first feature packages: `isabelle-patch-control` 1.0.0 (build
 `pyh4616a5c_0`, the patch tool, MIT) and `isabelle-bicompose-rename-fix` 2026.0.1 (build
 `Isabelle2026_0`), released together by the patch tool's batch workflow `release-features.yml`
 (not by this repository; the SKILL isabelle-patch-feature, 3.4 step 8). The feature package pins
@@ -73,12 +82,12 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 pins the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2 and 0.5.3 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 pins the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
 | `isabelle-patch-control` | 1.0.0 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
 | `isabelle-bicompose-rename-fix` | 2026.0.1 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; released by the patch tool's `release-features.yml` |
 | `isabelle-performant-ml` | 0.2.1 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms; Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `auto-sledgehammer` | 0.3.0 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2) |
-| `isabelle-rpc` | 0.5.2 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); conda only since 0.4.1 (PyPI stays at 0.4.0) |
+| `isabelle-rpc` | 0.5.3 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); conda only since 0.4.1 (PyPI stays at 0.4.0) |
 | `isabelle-mcp` | 0.7.1 | noarch python, no session, no hooks; Isabelle2026 only (0.7.0 build 1 is the last for 2025.2); PyPI 0.7.1 (0.7.0 is on PyPI too) |
 | `isabelle-minilang` | 0.7.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (not updated) |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |

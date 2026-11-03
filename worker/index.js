@@ -1,21 +1,15 @@
 // The download counter in front of https://conda.qiyuan.me (deploying it: wrangler.toml).
 // Requests pass through to the R2 bucket unchanged; a package file served whole counts one
-// download of its package, unless counting is paused (while we release, so that our own CI's
-// downloads are not counted); the channel's front page gets a Downloads column.
+// download of its package; the channel's front page gets a Downloads column. Our own pipelines
+// download from https://conda-ci.qiyuan.me, a second address of the same bucket; no route sends its
+// requests here.
 
 // <name>-<version>-<build>.conda: conda allows no '-' in a version or a build string.
 const PACKAGE_FILE = /\/([^/]+)-[^/-]+-[^/-]+\.(?:conda|tar\.bz2)$/;
 const FRONT_PAGE = new Set(["/", "/index.html"]);
 
-// pause holds at most one row: counting is paused until that Unix time.
-const SCHEMA = [
-  "CREATE TABLE IF NOT EXISTS downloads (package TEXT PRIMARY KEY, n INTEGER NOT NULL)",
-  "CREATE TABLE IF NOT EXISTS pause (id INTEGER PRIMARY KEY CHECK (id = 1), until INTEGER NOT NULL)",
-];
-const COUNT_UNLESS_PAUSED = `
-  INSERT INTO downloads (package, n)
-  SELECT ?1, 1 WHERE NOT EXISTS (SELECT 1 FROM pause WHERE until > unixepoch())
-  ON CONFLICT (package) DO UPDATE SET n = n + 1`;
+const SCHEMA = ["CREATE TABLE IF NOT EXISTS downloads (package TEXT PRIMARY KEY, n INTEGER NOT NULL)"];
+const COUNT = "INSERT INTO downloads (package, n) VALUES (?1, 1) ON CONFLICT (package) DO UPDATE SET n = n + 1";
 
 export default {
   async fetch(request, env, ctx) {
@@ -34,7 +28,7 @@ async function batch(db, ...statements) {
 }
 
 async function count(db, name) {
-  await batch(db, db.prepare(COUNT_UNLESS_PAUSED).bind(name));
+  await batch(db, db.prepare(COUNT).bind(name));
 }
 
 async function frontPage(request, db) {

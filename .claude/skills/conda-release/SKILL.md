@@ -1,6 +1,6 @@
 ---
 name: conda-release
-description: How to release a package to the conda channel conda.qiyuan.me — find its release workflow, pause the download counter, dry-run and tag or dispatch, watch the run, recover from a failed job, and check after publishing. Read it before you release any package there, or a set of packages for a new Isabelle release. Not for feature packages (the SKILL isabelle-patch-feature), not for writing a recipe or a workflow or changing how one builds (isabelle-packaging-ci's PACKAGING_RULES.md), nor for deleting from the channel (its CHANNEL_OPERATIONS.md).
+description: How to release a package to the conda channel conda.qiyuan.me — find its release workflow, dry-run and tag or dispatch, watch the run, recover from a failed job, and check after publishing. Read it before you release any package there, or a set of packages for a new Isabelle release. Not for feature packages (the SKILL isabelle-patch-feature), not for writing a recipe or a workflow or changing how one builds (isabelle-packaging-ci's PACKAGING_RULES.md), nor for deleting from the channel (its CHANNEL_OPERATIONS.md).
 ---
 
 # Releasing a package to conda.qiyuan.me
@@ -57,16 +57,20 @@ the procedure for any package; a package's own extra steps are in its repository
   on a dry run) publishes on every dispatch; the repository's `RELEASE.md` says how to check such a package without
   publishing.
 
-## 4. Before: pause the download counter
+## 4. Before: check where the workflows download from
 
-Pause the download counter right before anything that downloads package files from the channel (every workflow
-run: dispatch, tag push, re-run; and any environment a `RELEASE.md` has you set up outside GitHub's runners):
+The download counter counts the package files served whole at https://conda.qiyuan.me, the address users install
+from. Our own pipelines download the same files from https://conda-ci.qiyuan.me, whose downloads the download counter
+does not count, so a release needs nothing from you about the download counter. Before the first run, check the
+repository's workflows:
 
 ```sh
-(source ~/Current/MLML/secret.sh && python3 ~/Current/MLML/contrib/isabelle-packaging-ci/scripts/download-counter.py pause)
+python3 ~/Current/MLML/contrib/isabelle-packaging-ci/scripts/download-counter.py check <repo>
 ```
 
-A pause ends by itself 6 hours after it was last set. Resume: section 10.
+It prints nothing when no workflow downloads from https://conda.qiyuan.me. Otherwise it prints each line that does:
+release anyway, and name those lines when you tell the owner what you published (section 10). Anything a `RELEASE.md`
+has you install from the channel outside GitHub's runners comes from https://conda-ci.qiyuan.me too.
 
 ## 5. A tag-released package
 
@@ -147,11 +151,10 @@ Take the first case that fits:
 - After the last run of everything ordered, check that `conda search` (section 8) lists each new build as the
   newest build of its version. If one is missing, re-run the publish job of any of the release's runs by section 7
   (`--job`); it pulls the channel again and rebuilds the index.
-- Tell the owner what you published, and which packages on the channel depend on it directly but were not in the
-  order (`depends` in each subdir's `repodata.json`).
+- Tell the owner what you published, which packages on the channel depend on it directly but were not in the
+  order (`depends` in each subdir's `repodata.json`), and any line section 4's check printed.
 - Update isabelle-packaging-ci's `ROLLOUT_STATUS.md`, "Published on https://conda.qiyuan.me", and its "Last updated"
   line, in a commit of its own (section 2).
-- Resume the download counter: the command of section 4 with `resume`.
 
 ## 11. A new Isabelle release
 

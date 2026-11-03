@@ -10,8 +10,7 @@ here for the steps of `isabelle-semantic-data` (item 3) and `isabelle-ai` (item 
    takes the finished `.conda` through its `prebuilt` input and runs the unchanged sanity check, artifact handoff,
    immutability guard and smoke on it. The package is built from the owner's snapshot on Hugging Face, so what was
    synced is what ships, never a local database (the snapshot is uploaded beforehand, and only on the owner's order,
-   by the SKILL sync-semantic-embedding-db). Pause the download counter before step 1 (the SKILL conda-release, "4.
-   Before: pause the download counter"). Then, on a machine with ≥ 40 GB RAM, ≥ 60 GB disk and a fast link (cslh19
+   by the SKILL sync-semantic-embedding-db). Then, on a machine with ≥ 40 GB RAM, ≥ 60 GB disk and a fast link (cslh19
    did it: export 1 min, rattler-build 8 min, upload 30 min):
 
    1. An environment with the **channel's own library**, so the export is the one CI would have run:

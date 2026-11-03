@@ -76,6 +76,9 @@ Hence:
   `MSYS_NO_PATHCONV=1`, Git-Bash rewrites `/c` into a path and cmd starts interactively without running the batch (the
   log shows a Windows banner and a prompt, and no error). With it, keep the single slash: `//c` would reach cmd as it
   is and fail the same way.
+- Run `python3 ~/Current/MLML/contrib/isabelle-packaging-ci/scripts/download-counter.py check <checkout>` on the
+  checkout of every repository whose workflows or actions you change. It prints nothing when none of them downloads
+  from https://conda.qiyuan.me; each line it prints breaks the rule in "What releasing relies on".
 
 ## What releasing relies on
 
@@ -85,6 +88,14 @@ Hence:
   repository: a row in `RELEASE.md`'s table and the file it names).
 - A repository that publishes for the first time gets the two R2 secrets and an entry in `PUBLISH_REPOS` of
   `scripts/sweep-old-versions.py`, as `publish-conda.yml`'s header says.
+- Everything a workflow downloads from the channel comes from https://conda-ci.qiyuan.me, which serves the same files as
+  https://conda.qiyuan.me, the users' address, but whose downloads the download counter does not count. That includes a
+  command a workflow reads from a document (replace the address before running it), every tool a workflow runs (pass the
+  address explicitly; a tool's default is the users' address), and every command in a `RELEASE.md` that installs package
+  files from the channel. https://conda.qiyuan.me appears in a workflow only on comment lines (whose text starts with
+  `#`), in `name:` values, and on a line ending with `# the users' address, not a download`. That comment goes only on a
+  line that checks text or makes a ranged request (neither is counted), or that defines a variable used only for those
+  (`PUBLIC` in `publish-conda.yml`).
 
 ## Repackaging a third-party wheel
 

@@ -1,20 +1,18 @@
-# The download counter of conda.qiyuan.me: index.js. Pausing and resuming it:
-# scripts/download-counter.py. The counts: `wrangler d1 execute conda-downloads --remote
-# --command "SELECT * FROM downloads"`.
+# The download counter of conda.qiyuan.me: index.js. Deploy it, and query its database,
+# with scripts/download-counter.py (deploy, sql). It counts what its route sends it; our
+# own pipelines download from https://conda-ci.qiyuan.me, which no route covers
+# (CHANNEL_OPERATIONS.md).
 #
-# Deploy with `wrangler deploy` here, giving wrangler a token minted with
-# CLOUDFLARE_GOD_KEY (CHANNEL_OPERATIONS.md, "CLOUDFLARE_GOD_KEY") and
-# CLOUDFLARE_ACCOUNT_ID, never secret.sh's CLOUDFLARE_API_TOKEN. The token needs Workers
-# Scripts Write, D1 Write, Workers Tail Read and Account Settings Read on the account, and
-# Workers Routes Write and Zone Read on all zones of the account (with one zone only,
-# wrangler keeps the Worker's old routes).
+# `download-counter.py deploy` mints the deploy token with CLOUDFLARE_GOD_KEY (wrangler
+# never gets secret.sh's CLOUDFLARE_API_TOKEN), deploys this directory as committed at
+# HEAD, and PUTs the route's request_limit_fail_open back to true. Every `wrangler deploy`
+# recreates the route with it off; with it on, requests past the free plan's daily request
+# limit skip the Worker instead of getting error 1027.
 #
-# The route fails open: past the free plan's daily request limit, requests skip the Worker
-# instead of getting error 1027. That is the route's request_limit_fail_open in
-# /zones/<zone id>/workers/routes, and every `wrangler deploy` recreates the route with it
-# off: after each deploy, GET the route's new id there and PUT it back with
-# {"pattern": "conda.qiyuan.me/*", "script": "conda-download-counter",
-# "request_limit_fail_open": true}, using the deploy token.
+# Test a change only against a local origin (`wrangler dev --local --local-upstream
+# 127.0.0.1:<port> --upstream-protocol http --persist-to <fresh dir>`); without
+# `--local-upstream`, wrangler dev forwards to https://conda.qiyuan.me, through the live
+# Worker, and is counted.
 name = "conda-download-counter"
 main = "index.js"
 compatibility_date = "2026-10-01"

@@ -15,6 +15,20 @@ Known, and left as it is by the owner: the front page links each subdirectory wi
 (`href="noarch"`), and such a URL answers 404, since the rule rewrites only paths that end in `/`
 (`https://conda.qiyuan.me/noarch/` works).
 
+## The address for our own pipelines
+
+https://conda-ci.qiyuan.me is a second R2 custom domain of the bucket `conda`, with no Worker route and no Transform
+Rule. Our own pipelines download from it so that the download counter does not count their downloads. Never give the
+download counter's Worker a route that covers it (such as `*.qiyuan.me/*`): `scripts/download-counter.py deploy` checks
+the zone's routes after wrangler has run, and exits with an error naming any route that covers it. To recreate it: the
+dashboard (R2, bucket `conda`, Settings, Custom Domains, Add), with the same minimum TLS version as conda.qiyuan.me's
+custom domain; or, as it was made on 2026-11-02, with a token minted for Workers R2 Storage Write on the account: `GET
+/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/conda/domains/custom` gives conda.qiyuan.me's `zoneId` and `minTLS`, and a
+`POST` on the same path with `{"domain": "conda-ci.qiyuan.me", "zoneId": "<that zoneId>", "enabled": true, "minTLS":
+"<that minTLS>"}` attaches it; its `status` (`ownership`, `ssl`) turned `active` within five minutes.
+https://conda-ci.qiyuan.me/ answers 404, since the Transform Rule covers only conda.qiyuan.me; its `index.html` is the
+channel's front page without the Downloads column.
+
 ## `CLOUDFLARE_GOD_KEY`
 
 `CLOUDFLARE_GOD_KEY` in `~/Current/MLML/secret.sh` is an account-owned API token, not a user token and not a Global
@@ -23,7 +37,8 @@ API Key: on `https://api.cloudflare.com/client/v4`, `GET /user/tokens/verify` an
 with the permissions one task needs (`POST /accounts/$CLOUDFLARE_ACCOUNT_ID/tokens`, with `expires_on`), and to
 revoke that token when the task is done (`DELETE /accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/<token id>`);
 `scripts/download-counter.py` does exactly this. A freshly minted token can be refused for a few seconds with
-"Authentication error [code: 10000]"; try again. Run anything that needs a secret as
+"Authentication error [code: 10000]", on any call, also after an earlier call with it succeeded: retry each call that
+gets it (`scripts/download-counter.py` does). Run anything that needs a secret as
 `(source ~/Current/MLML/secret.sh && …)`, and print no token.
 
 ## Deleting from the channel
@@ -87,6 +102,8 @@ plan file is refused.
 
 ## Described next to their files
 
-- The download counter, the Cloudflare Worker in front of the channel, and how to deploy the Worker:
-  `worker/wrangler.toml`. Pausing and resuming the download counter: `scripts/download-counter.py`.
+- The download counter, the Cloudflare Worker in front of https://conda.qiyuan.me: `worker/wrangler.toml`. Deploying the
+  Worker, querying its database, and checking where workflows download from: `scripts/download-counter.py` (`check`
+  needs no secret; `deploy` runs wrangler, measured with 4.151.1, as `$WRANGLER` or else `wrangler` on `PATH`, and
+  wrangler needs Node.js 22 or later on `PATH`).
 - The banner on the channel's front page: `conda/channel-banner.html`, applied by `scripts/banner-index.py`.

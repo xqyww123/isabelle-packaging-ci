@@ -76,6 +76,10 @@ jobs:
     # below therefore stays on the run-scoped token path, which needs no extra scope.
     env:
       CH: ${{ github.workspace }}/channel
+      # Everything this job downloads from the channel comes from CHANNEL, the same bucket at an address the
+      # download counter does not count.
+      CHANNEL: https://conda-ci.qiyuan.me
+      PUBLIC: https://conda.qiyuan.me  # the users' address, not a download
       R2_BUCKET: conda
       PKG: ${{ inputs.package_name }}
     steps:
@@ -96,7 +100,7 @@ jobs:
           set -euo pipefail
           echo '<html><body></body></html>' > "$RUNNER_TEMP/banner-probe.html"
           python3 packaging-ci/scripts/banner-index.py "$RUNNER_TEMP/banner-probe.html" packaging-ci/conda/channel-banner.html
-          grep -q 'conda create -n .* -c https://conda.qiyuan.me' "$RUNNER_TEMP/banner-probe.html"
+          grep -q "conda create -n .* -c $PUBLIC" "$RUNNER_TEMP/banner-probe.html"
 
       - name: Download the built packages
         uses: actions/download-artifact@v4
@@ -196,7 +200,7 @@ jobs:
               fi
 
               want=$(sha256sum "$f" | cut -d' ' -f1)
-              got=$(curl -fsSL "https://conda.qiyuan.me/$sub/$fn" | sha256sum | cut -d' ' -f1) || got="<unreadable>"
+              got=$(curl -fsSL "$CHANNEL/$sub/$fn" | sha256sum | cut -d' ' -f1) || got="<unreadable>"
               if [ "$want" = "$got" ]; then
                 echo "  resume  : $sub/$fn is already uploaded, byte-identical -- continuing"
               else
@@ -271,7 +275,7 @@ jobs:
           for d in "$RUNNER_TEMP/pkgs"/*/; do
             sub=$(basename "$d")
             rd="$RUNNER_TEMP/repodata-$sub.json"
-            curl -fsSL "https://conda.qiyuan.me/$sub/repodata.json" -o "$rd" || {
+            curl -fsSL "$CHANNEL/$sub/repodata.json" -o "$rd" || {
               echo "::error::$sub has no repodata.json on the channel"; fail=1; continue; }
             # One line on purpose: a multi-line `python -c` would put continuation
             # lines at column 0, which ends this YAML block scalar.
@@ -281,7 +285,7 @@ jobs:
             for f in "$d"*.conda; do
               [ -e "$f" ] || continue
               fn=$(basename "$f")
-              url="https://conda.qiyuan.me/$sub/$fn"
+              url="$CHANNEL/$sub/$fn"
               want=$(sha256sum "$f" | cut -d' ' -f1)
               got=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1) || got="<unreadable>"
               if [ "$want" = "$got" ]; then
@@ -290,6 +294,12 @@ jobs:
                 echo "::error::$url does not match the package we built"
                 echo "        built:  $want"
                 echo "        served: $got"
+                fail=1
+              fi
+              # The users' address too, by a ranged request: R2 answers it with 206, which is never counted.
+              got_head=$(curl -fsS -r 0-65535 "$PUBLIC/$sub/$fn" | sha256sum | cut -d' ' -f1) || got_head="<unreadable>"
+              if [ "$(head -c 65536 "$f" | sha256sum | cut -d' ' -f1)" != "$got_head" ]; then
+                echo "::error::$PUBLIC/$sub/$fn does not serve the package's first 64 KiB"
                 fail=1
               fi
               if grep -qxF "$fn" "$RUNNER_TEMP/indexed-$sub.txt"; then
@@ -341,7 +351,7 @@ jobs:
             [ -n "$files" ] || continue          # not a package subdir (e.g. .cache)
             audited=$((audited + 1))
             rd="$RUNNER_TEMP/audit-$sub.json"
-            curl -fsSL "https://conda.qiyuan.me/$sub/repodata.json" -o "$rd" || {
+            curl -fsSL "$CHANNEL/$sub/repodata.json" -o "$rd" || {
               echo "::error::$sub holds packages but has no repodata.json"; fail=1; continue; }
             $CONDA/bin/python -c "import json,sys; d=json.load(open(sys.argv[1])); print('\n'.join(sorted(set(d.get('packages.conda',{}))|set(d.get('packages',{})))))" \
               "$rd" > "$RUNNER_TEMP/audit-indexed-$sub.txt"

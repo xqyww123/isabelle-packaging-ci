@@ -52,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           conda create -y -n t \
-            -c https://conda.qiyuan.me -c conda-forge --override-channels \
+            -c https://conda-ci.qiyuan.me -c conda-forge --override-channels \
             "${{ inputs.package }}"
           conda activate t
           conda list "${{ inputs.package }}"

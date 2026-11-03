@@ -10,7 +10,7 @@
 # THE ONLY THING THAT CAN FAIL HERE is the solve.  There is no build, no script and no
 # payload, so a green run means exactly one thing: both halves resolve together from the
 # channel and import in the same environment.  That is why the build step passes our own
-# channel -- without `-c https://conda.qiyuan.me` the run requirements are unfindable and
+# channel -- without `-c https://conda-ci.qiyuan.me` the run requirements are unfindable and
 # the tests cannot run at all.
 name: release-isabelle-ai
 
@@ -60,7 +60,7 @@ jobs:
             --recipe conda/metapackage/isabelle-ai/recipe.yaml \
             --output-dir out \
             --build-num "${{ inputs.build_number }}" \
-            -c https://conda.qiyuan.me -c conda-forge
+            -c https://conda-ci.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
 
       - name: "Sanity: the package is EMPTY and depends on exactly the two halves"
@@ -127,7 +127,7 @@ jobs:
       CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
 
   smoke:
-    name: "Smoke: conda install from conda.qiyuan.me"
+    name: "Smoke: conda install from conda-ci.qiyuan.me"
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -139,11 +139,11 @@ jobs:
           auto-update-conda: true
           python-version: "3.12"
 
-      - name: "conda install -c https://conda.qiyuan.me isabelle-ai"
+      - name: "conda install -c https://conda-ci.qiyuan.me isabelle-ai"
         shell: bash -l {0}
         run: |
           set -euo pipefail
-          conda install -y -c https://conda.qiyuan.me -c conda-forge isabelle-ai
+          conda install -y -c https://conda-ci.qiyuan.me -c conda-forge isabelle-ai
           python -c "import IsaMini, IsaMini.AoA, isabelle_mcp; print('both halves import')"
           isabelle version
           test -f "$CONDA_PREFIX/share/isabelle-semantic-data/MANIFEST.json" \

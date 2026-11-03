@@ -142,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           conda create -y -p "$RUNNER_TEMP/isa" \
-            -c https://conda.qiyuan.me --override-channels isabelle
+            -c https://conda-ci.qiyuan.me --override-channels isabelle
           ls "$RUNNER_TEMP/isa/isa/bin/"
 
       - name: "Q3: does isabelle.bat components -u accept /cygdrive/C vs /cygdrive/c?"
@@ -329,7 +329,7 @@ jobs:
           set -euo pipefail
           CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
           echo "channel dir = $CH"
-          conda create -y -n t -c "file:///$CH" -c https://conda.qiyuan.me \
+          conda create -y -n t -c "file:///$CH" -c https://conda-ci.qiyuan.me \
             --override-channels isabelle-performant-ml 2>&1 | tee inst.log
           if grep -qi "LinkError\|post-link script failed" inst.log; then
             echo "::warning::the install reported a link failure"
@@ -425,7 +425,7 @@ jobs:
         run: |
           set -uo pipefail
           CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
-          conda create -y -n u -c "file:///$CH" -c https://conda.qiyuan.me \
+          conda create -y -n u -c "file:///$CH" -c https://conda-ci.qiyuan.me \
             --override-channels isabelle-performant-ml 2>&1 | tail -25
           echo "PREFIX_U=$CONDA\\envs\\u" >> "$GITHUB_ENV"
 
@@ -472,7 +472,7 @@ jobs:
           set -uo pipefail
           CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
           conda remove -y -n u isabelle-performant-ml 2>&1 | tail -5
-          conda install -y -n u -c "file:///$CH" -c https://conda.qiyuan.me \
+          conda install -y -n u -c "file:///$CH" -c https://conda-ci.qiyuan.me \
             --override-channels isabelle-performant-ml 2>&1 | tail -15
 
       - name: "D3: components after the warm re-install"
@@ -489,7 +489,7 @@ jobs:
         shell: bash -l {0}
         run: |
           set -uo pipefail
-          conda create -y -n w -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tail -5
+          conda create -y -n w -c https://conda-ci.qiyuan.me --override-channels isabelle 2>&1 | tail -5
           echo "PREFIX_W=$CONDA\\envs\\w" >> "$GITHUB_ENV"
 
       - name: "E1: record env w's components file (isabelle only)"
@@ -513,7 +513,7 @@ jobs:
         run: |
           set -uo pipefail
           CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
-          conda install -y -n w -c "file:///$CH" -c https://conda.qiyuan.me \
+          conda install -y -n w -c "file:///$CH" -c https://conda-ci.qiyuan.me \
             --override-channels isabelle-performant-ml 2>&1 | tail -15
 
       - name: "E1 verdict + E2: invoke the SHIPPED .bat exactly as conda would"
@@ -543,7 +543,7 @@ jobs:
         run: |
           set -uo pipefail
           CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
-          conda create --dry-run --json -n zz -c "file:///$CH" -c https://conda.qiyuan.me \
+          conda create --dry-run --json -n zz -c "file:///$CH" -c https://conda-ci.qiyuan.me \
             --override-channels isabelle-performant-ml > dry.json 2>/dev/null
           python -c "import json;d=json.load(open('dry.json'));print('LINK order:');[print('  %2d %s' % (i,p.get('name'))) for i,p in enumerate(d['actions']['LINK'])]"
 
@@ -551,7 +551,7 @@ jobs:
         shell: bash -l {0}
         run: |
           set -uo pipefail
-          conda create -y -n y -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tail -3
+          conda create -y -n y -c https://conda-ci.qiyuan.me --override-channels isabelle 2>&1 | tail -3
           echo "PREFIX_Y=$CONDA\\envs\\y" >> "$GITHUB_ENV"
           # do NOT invoke isabelle here: Cygwin must stay cold
 
@@ -560,7 +560,7 @@ jobs:
         run: |
           set -uo pipefail
           CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
-          conda install -y -n y -c "file:///$CH" -c https://conda.qiyuan.me \
+          conda install -y -n y -c "file:///$CH" -c https://conda-ci.qiyuan.me \
             --override-channels isabelle-performant-ml 2>&1 | tail -10
 
       - name: "F verdict"
@@ -635,7 +635,7 @@ jobs:
         shell: bash -l {0}
         run: |
           set -uo pipefail
-          conda create -y -n z -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tail -3
+          conda create -y -n z -c https://conda-ci.qiyuan.me --override-channels isabelle 2>&1 | tail -3
           # isabelle is NEVER invoked here -- Cygwin stays cold, as in F
           conda install -y -n z ./hooklogprobe-0.0.1-0.tar.bz2 2>&1 | tail -10
           echo "PREFIX_Z=$CONDA\\envs\\z" >> "$GITHUB_ENV"
@@ -708,7 +708,7 @@ jobs:
         shell: bash -l {0}
         run: |
           set -uo pipefail
-          conda create -y -n q -c https://conda.qiyuan.me --override-channels isabelle 2>&1 | tail -3
+          conda create -y -n q -c https://conda-ci.qiyuan.me --override-channels isabelle 2>&1 | tail -3
           conda install -y -n q ./warmhookprobe-0.0.1-0.tar.bz2 2>&1 | tail -5
           echo "PREFIX_Q=$CONDA\\envs\\q" >> "$GITHUB_ENV"
 
@@ -741,7 +741,7 @@ jobs:
         run: |
           set -uo pipefail
           CH="$(echo "$RUNNER_TEMP/local-channel" | tr '\\' '/')"
-          conda create -y -n r -c "file:///$CH" -c https://conda.qiyuan.me \
+          conda create -y -n r -c "file:///$CH" -c https://conda-ci.qiyuan.me \
             --override-channels isabelle-performant-ml 2>&1 | tail -3
           echo "PREFIX_R=$CONDA\\envs\\r" >> "$GITHUB_ENV"
 

@@ -36,7 +36,7 @@ jobs:
       - name: Install isabelle-minilang from the live channel
         run: |
           set -euo pipefail
-          conda create -y -n p -c https://conda.qiyuan.me -c conda-forge \
+          conda create -y -n p -c https://conda-ci.qiyuan.me -c conda-forge \
             --override-channels isabelle-minilang
           eval "$(conda shell.bash hook)"; conda activate p
           echo "CONDA_PREFIX=$CONDA_PREFIX"

@@ -17,7 +17,7 @@ here for the steps of `isabelle-semantic-data` (item 3) and `isabelle-ai` (item 
    1. An environment with the **channel's own library**, so the export is the one CI would have run:
 
       ```sh
-      micromamba create -p env --override-channels -c https://conda.qiyuan.me -c conda-forge python=3.12 "isabelle-semantic-embedding>=0.3.0" huggingface_hub zstd
+      micromamba create -p env --override-channels -c https://conda-ci.qiyuan.me -c conda-forge python=3.12 "isabelle-semantic-embedding>=0.3.0" huggingface_hub zstd
       ```
    2. Download the snapshot, with the cached HF token:
       `hf_hub_download(repo_id="ANTPG/MLML-data", repo_type="dataset", filename="contrib/Semantic_Embedding/Isabelle_Semantic_Embedding.tar.zst")`.
@@ -38,7 +38,7 @@ here for the steps of `isabelle-semantic-data` (item 3) and `isabelle-ai` (item 
       ```
 
       Pass `--build-num <N>` (the `build_number` you dispatch in step 6; 0 for a new snapshot), `--no-test` and
-      `-c https://conda.qiyuan.me -c conda-forge`, and put **`TMPDIR` on a real disk**: rattler-build stages the
+      `-c https://conda-ci.qiyuan.me -c conda-forge`, and put **`TMPDIR` on a real disk**: rattler-build stages the
       archive under `/tmp`, which on cslh19 is a 32 GB tmpfs that a 9 GB archive fills.
    5. Upload the `.conda` to the dataset `ANTPG/MLML-data` under `contrib/Semantic_Embedding/conda/`
       (`HfApi().upload_file(..., repo_id="ANTPG/MLML-data", repo_type="dataset")`, commit message naming the machine).

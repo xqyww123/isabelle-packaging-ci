@@ -73,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           conda create -y -p "$RUNNER_TEMP/isa" \
-            -c https://conda.qiyuan.me --override-channels isabelle >/dev/null
+            -c https://conda-ci.qiyuan.me --override-channels isabelle >/dev/null
           S="$RUNNER_TEMP/isa/isa/etc/settings"
           grep -q '^ISABELLE_HEAPS="\$ISABELLE_HOME_USER/heaps"$' "$S" \
             || { echo "::error::anchor missing"; exit 1; }

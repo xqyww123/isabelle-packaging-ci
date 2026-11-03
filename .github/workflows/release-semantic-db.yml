@@ -63,7 +63,7 @@ jobs:
           # the export must run on the same code users read the payload with.
           # Same floor as the data package's own run dependency: dispatching
           # before a compatible library is published must fail HERE, loudly.
-          conda install -y -c https://conda.qiyuan.me -c conda-forge \
+          conda install -y -c https://conda-ci.qiyuan.me -c conda-forge \
             "isabelle-semantic-embedding>=0.3.0"
           python -m pip install --quiet "huggingface_hub"
           isabelle-semantics --help >/dev/null
@@ -165,7 +165,7 @@ jobs:
             --output-dir out \
             --build-num "${{ inputs.build_number }}" \
             --no-test \
-            -c https://conda.qiyuan.me -c conda-forge
+            -c https://conda-ci.qiyuan.me -c conda-forge
           kill "$MON" 2>/dev/null || true
           find out -name '*.conda' -print
           df -h / | tail -1
@@ -310,7 +310,7 @@ jobs:
       CONDA_R2_SECRET_ACCESS_KEY: ${{ secrets.CONDA_R2_SECRET_ACCESS_KEY }}
 
   smoke:
-    name: "Smoke: conda install from conda.qiyuan.me"
+    name: "Smoke: conda install from conda-ci.qiyuan.me"
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -320,11 +320,11 @@ jobs:
           auto-update-conda: true
           python-version: "3.12"
 
-      - name: "conda install -c https://conda.qiyuan.me isabelle-semantic-data"
+      - name: "conda install -c https://conda-ci.qiyuan.me isabelle-semantic-data"
         shell: bash -l {0}
         run: |
           set -euo pipefail
-          conda install -y -c https://conda.qiyuan.me -c conda-forge \
+          conda install -y -c https://conda-ci.qiyuan.me -c conda-forge \
             isabelle-semantic-data isabelle-semantic-embedding
           test -f "$CONDA_PREFIX/share/isabelle-semantic-data/MANIFEST.json"
           # The read facade must discover it as the conda-delivered system DB.

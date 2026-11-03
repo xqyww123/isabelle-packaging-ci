@@ -80,7 +80,7 @@ jobs:
   # cached for 4h never exists.  There is no propagation window to wait out.
   # ---------------------------------------------------------------------------
   smoke:
-    name: "Smoke: conda install from conda.qiyuan.me (${{ matrix.runner }})"
+    name: "Smoke: conda install from conda-ci.qiyuan.me (${{ matrix.runner }})"
     needs: [build, publish]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
@@ -110,7 +110,7 @@ jobs:
           auto-activate-base: true
           activate-environment: ""
 
-      - name: "conda install -c https://conda.qiyuan.me -c conda-forge isabelle"
+      - name: "conda install -c https://conda-ci.qiyuan.me -c conda-forge isabelle"
         run: |
           set -euo pipefail
           # Pin the build just published, by the version build.yml reports: unpinned,
@@ -119,7 +119,7 @@ jobs:
           # Capture the install output: conda prints the package's post-link message
           # (its .messages.txt) here, and we assert it appeared -- so this smoke also
           # verifies the post-install hint on every platform, including the Windows .bat.
-          conda create -y -p "$RUNNER_TEMP/isa" -c https://conda.qiyuan.me -c conda-forge \
+          conda create -y -p "$RUNNER_TEMP/isa" -c https://conda-ci.qiyuan.me -c conda-forge \
             --override-channels "isabelle=$VERSION=$BUILD_NUMBER" 2>&1 | tee "$RUNNER_TEMP/create.log"
           grep -q "Isabelle is installed" "$RUNNER_TEMP/create.log" \
             || { echo "::error::post-install hint (.messages.txt) did not print"; exit 1; }

@@ -22,8 +22,9 @@ schema_version: 1
 # back; a floor lets the solver take newer ones.  A floor that lags holds users back just
 # as silently -- `conda update isabelle-ai` against an old floor updates nothing -- so
 # EVERY isabelle-ai release raises each floor to the newest version on the channel at
-# that moment (RELEASE_CHECKLIST.md §9, owner's rule of 2026-10-09).  The floors below
-# are therefore the versions this release was tested with, and the solver can only go up.
+# that moment (owner's rule of 2026-10-09): release-isabelle-ai.yml computes them
+# (scripts/isabelle-ai-plan.py) and passes them in ISABELLE_AI_FLOOR_*.  The floors are
+# therefore the versions this release was tested with, and the solver can only go up.
 
 context:
   version: ${{ env.get("ISABELLE_AI_VERSION", default="0.1.0") }}
@@ -44,16 +45,13 @@ requirements:
     # The two halves plus the data.  Nothing else: adding `isabelle` or `isabelle-rpc`
     # here would be restating what the halves already require, and a metapackage that
     # duplicates its children's dependency lists is a second place for them to drift.
-    #
-    # Floors as of the 0.3.0 republish (build 2, 2026-10-28): the newest of each on the
-    # channel that day.
-    - isabelle-minilang >=0.7.0
-    - isabelle-mcp >=0.7.0
+    - isabelle-minilang >=${{ env.get("ISABELLE_AI_FLOOR_MINILANG") }}
+    - isabelle-mcp >=${{ env.get("ISABELLE_AI_FLOOR_MCP") }}
     # The pre-built semantic database (the read-only system layer).  A hard dependency
     # HERE, deliberately not of isabelle-semantic-embedding: the library stays lean,
     # the batteries-included metapackage carries the batteries (plan L3).  The floor is
     # the newest payload on the channel, like the two above.
-    - isabelle-semantic-data >=2026.10.09
+    - isabelle-semantic-data >=${{ env.get("ISABELLE_AI_FLOOR_SEMANTIC_DATA") }}
 
 tests:
   # A metapackage's only failure mode is a run requirement that does not solve or does not

@@ -12,6 +12,10 @@
 # channel and import in the same environment.  That is why the build step passes our own
 # channel -- without `-c https://conda-ci.qiyuan.me` the run requirements are unfindable and
 # the tests cannot run at all.
+#
+# The floors and the build number come from the channel's index (scripts/isabelle-ai-plan.py):
+# each floor is the newest version of that package on the channel, and the build number is the
+# next one free for the version.
 name: release-isabelle-ai
 
 on:
@@ -21,10 +25,6 @@ on:
         description: "isabelle-ai version to publish"
         type: string
         default: "0.1.0"
-      build_number:
-        description: "conda build number - BUMP if republishing the same version with changed deps"
-        type: string
-        default: "0"
       dry_run:
         description: "Build and test only -- do NOT publish to the channel"
         type: boolean
@@ -38,6 +38,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      ISABELLE_AI_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -49,9 +51,13 @@ jobs:
           chmod +x rattler-build
           ./rattler-build --version
 
+      # The floors, the build number and the file name, for every later step (the recipe reads them).
+      - name: "Plan: the floors and the build number, from the channel's index"
+        run: |
+          set -euo pipefail
+          python3 scripts/isabelle-ai-plan.py plan --rattler-build ./rattler-build | tee -a "$GITHUB_ENV"
+
       - name: Build
-        env:
-          ISABELLE_AI_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           # Our channel FIRST: isabelle-minilang and isabelle-mcp exist nowhere else, and
@@ -59,15 +65,14 @@ jobs:
           ./rattler-build build \
             --recipe conda/metapackage/isabelle-ai/recipe.yaml \
             --output-dir out \
-            --build-num "${{ inputs.build_number }}" \
             -c https://conda-ci.qiyuan.me -c conda-forge
           find out -name '*.conda' -print
 
-      - name: "Sanity: the package is EMPTY and depends on exactly the two halves"
+      - name: "Sanity: the package is the planned one, EMPTY, and depends on exactly the planned floors"
         run: |
           set -euo pipefail
-          pkg=$(find out -name 'isabelle-ai-*.conda' | head -1)
-          [ -n "$pkg" ] || { echo "::error::no package produced"; exit 1; }
+          pkg=out/noarch/$ISABELLE_AI_FILE
+          [ -f "$pkg" ] || { echo "::error::the package is not the planned $pkg"; find out -name '*.conda'; exit 1; }
           python3 -m pip install --quiet zstandard
           work=$(mktemp -d)
           python3 - "$pkg" "$work" <<'PY'
@@ -86,19 +91,8 @@ jobs:
 
           # The dependency list IS the deliverable, so assert it rather than trusting the
           # recipe to have been read correctly.
-          python3 - "$work" <<'PY'
-          import json, pathlib, sys, re
-          idx = json.loads((pathlib.Path(sys.argv[1]) / "info" / "index.json").read_text())
-          deps = idx.get("depends", [])
-          print("depends =", deps)
-          names = sorted(re.split(r"[ <>=!]", d, 1)[0] for d in deps)
-          expected = ["isabelle-mcp", "isabelle-minilang", "isabelle-semantic-data"]
-          if names != expected:
-              raise SystemExit(f"::error::expected exactly {expected}, got {names}")
-          if idx.get("subdir") != "noarch":
-              raise SystemExit(f"::error::expected noarch, got {idx.get('subdir')}")
-          print("  OK  empty, noarch, exactly the two halves plus the data")
-          PY
+          python3 scripts/isabelle-ai-plan.py check "$work/info/index.json"
+          echo "  OK  empty, noarch, the planned build, exactly the planned floors"
 
       - name: Lay the package out as <subdir>/*.conda for publish-conda.yml
         run: |

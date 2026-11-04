@@ -19,15 +19,28 @@ Known, and left as it is by the owner: the front page links each subdirectory wi
 
 https://conda-ci.qiyuan.me is a second R2 custom domain of the bucket `conda`, with no Worker route and no Transform
 Rule. Our own pipelines download from it so that the download counter does not count their downloads. Never give the
-download counter's Worker a route that covers it (such as `*.qiyuan.me/*`): `scripts/download-counter.py deploy` checks
-the zone's routes after wrangler has run, and exits with an error naming any route that covers it. To recreate it: the
-dashboard (R2, bucket `conda`, Settings, Custom Domains, Add), with the same minimum TLS version as conda.qiyuan.me's
-custom domain; or, as it was made on 2026-11-02, with a token minted for Workers R2 Storage Write on the account: `GET
-/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/conda/domains/custom` gives conda.qiyuan.me's `zoneId` and `minTLS`, and a
-`POST` on the same path with `{"domain": "conda-ci.qiyuan.me", "zoneId": "<that zoneId>", "enabled": true, "minTLS":
-"<that minTLS>"}` attaches it; its `status` (`ownership`, `ssl`) turned `active` within five minutes.
-https://conda-ci.qiyuan.me/ answers 404, since the Transform Rule covers only conda.qiyuan.me; its `index.html` is the
-channel's front page without the Downloads column.
+download counter's Worker a route that covers https://conda-ci.qiyuan.me (such as `*.qiyuan.me/*`).
+`scripts/download-counter.py deploy` reads the routes of the zone `qiyuan.me` after wrangler has run, and exits with an
+error naming any route that covers https://conda-ci.qiyuan.me: such a route is then already live, so tell the owner at
+once. `deploy --dry-run` makes the same check without deploying.
+
+To recreate https://conda-ci.qiyuan.me, do what was done on 2026-11-02, through the API
+(`https://api.cloudflare.com/client/v4`), not the dashboard: its minimum TLS version must equal conda.qiyuan.me's, and
+Cloudflare documents that setting only for the API. Mint the token as "`CLOUDFLARE_GOD_KEY`" below says, with Workers
+R2 Storage Write (permission group `bf7481a1826f439697cb59a20b22293e`) on the account and nothing else;
+`scripts/download-counter.py`'s `minted()` mints and revokes it, and its `Token.call` retries code 10000.
+1. `GET /accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets/conda/domains/custom` lists the bucket's custom domains. Take
+   `zoneId` and `minTLS` from conda.qiyuan.me's entry. If conda-ci.qiyuan.me is listed already, skip step 2.
+2. A `POST` on the same path attaches conda-ci.qiyuan.me, with this body:
+   `{"domain": "conda-ci.qiyuan.me", "zoneId": "<that zoneId>", "enabled": true, "minTLS": "<that minTLS>"}`
+3. Repeat the `GET` until `ownership` and `ssl` in conda-ci.qiyuan.me's `status` are both `active` (on 2026-11-02,
+   within five minutes; if not after ten, tell the owner). Then `noarch/repodata.json` answers 200 on both hosts with
+   the same `etag`.
+
+https://conda-ci.qiyuan.me/ answers 404, because the Transform Rule covers only conda.qiyuan.me.
+https://conda-ci.qiyuan.me/index.html is the channel's front page without the Downloads column, which only the
+download counter's Worker adds: if that page ever shows the column, a route covers https://conda-ci.qiyuan.me; tell the
+owner.
 
 ## `CLOUDFLARE_GOD_KEY`
 

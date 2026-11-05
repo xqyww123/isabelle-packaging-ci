@@ -24,7 +24,6 @@ on:
       version:
         description: "isabelle-ai version to publish"
         type: string
-        default: "0.1.0"
       dry_run:
         description: "Build and test only -- do NOT publish to the channel"
         type: boolean

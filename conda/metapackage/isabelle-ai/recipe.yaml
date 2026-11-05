@@ -27,7 +27,7 @@ schema_version: 1
 # therefore the versions this release was tested with, and the solver can only go up.
 
 context:
-  version: ${{ env.get("ISABELLE_AI_VERSION", default="0.1.0") }}
+  version: ${{ env.get("ISABELLE_AI_VERSION") }}
 
 package:
   name: isabelle-ai

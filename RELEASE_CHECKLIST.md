@@ -1,7 +1,7 @@
-# Release steps of two packages that have not moved yet
+# Release steps of a package that has not moved yet
 
 How to release any package: the SKILL conda-release (`.claude/skills/conda-release/SKILL.md`). `RELEASE.md` sends
-here for the steps of `isabelle-semantic-data` (item 3) and `isabelle-ai` (item 4).
+here for the steps of `isabelle-semantic-data` (item 3).
 
 ## 9. Release
 
@@ -52,13 +52,3 @@ here for the steps of `isabelle-semantic-data` (item 3) and `isabelle-ai` (item 
       `build_number`. The build number is inside the uploaded `.conda`: when the SKILL gives a new run another build
       number ("8. The build number"), start again at step 3 (step 4 moved the payload into the package; the new export
       is a new version), build with that number, and upload the new file in step 5.
-4. **`isabelle-ai` goes last, after the packages its floors name, and its floors are the channel's newest at that
-   moment, every release, no exceptions.** The metapackage has no content: its `depends` list IS the release. Before
-   dispatching `release-isabelle-ai.yml`, set each floor in `conda/metapackage/isabelle-ai/recipe.yaml`
-   (`isabelle-minilang`, `isabelle-mcp`, `isabelle-semantic-data`) to the newest version published on the channel,
-   whether or not the old floor "still works": a lagging floor means `conda update isabelle-ai` updates nothing and
-   users never get the new versions. The floor edit is a release step, not a fix: commit it by the SKILL's "2.
-   Rules", in a commit the owner approves, and push it to `main` before the dispatch; the dispatch builds `main`'s
-   recipe, and the sanity step checks only the dependency names. A version already published whose floors must move
-   is republished under the **same version** with the workflow's `build_number` input bumped (`publish-conda.yml`'s
-   immutability guard refuses only an identical filename; `conda install isabelle-ai=X` takes the highest build).

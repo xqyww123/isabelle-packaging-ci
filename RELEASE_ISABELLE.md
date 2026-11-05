@@ -1,6 +1,7 @@
-# Releasing `isabelle`
+# Releasing `isabelle` and `isabelle-ai`
 
-This adds to the SKILL conda-release (`.claude/skills/conda-release/SKILL.md`).
+This adds to the SKILL conda-release (`.claude/skills/conda-release/SKILL.md`). `isabelle-ai` is in its own section,
+the last one.
 
 `isabelle` is the official Isabelle release with no patches (`PACKAGING_DESIGN.md`, "11. The unpatched build and
 feature packages"). Patches ship as separate feature packages, released from the patch tool repository
@@ -75,3 +76,28 @@ If feature packages exist for `<R>`, release them on the owner's order against b
 feature", step 8, says.
 
 Why the CI is built the way it is: `PACKAGING_DESIGN.md`.
+
+## `isabelle-ai`
+
+`isabelle-ai` is a metapackage: it has no files of its own. It depends on `isabelle-minilang`, `isabelle-mcp` and
+`isabelle-semantic-data`, each with a floor: the lowest version of it that `isabelle-ai` accepts. Release it after
+these three, and only when the newest version of each on the channel installs together with the others. In a new
+Isabelle release it is the last of the set, once all of them accept the new series (the SKILL, "11. A new Isabelle
+release"). Its recipe has no `isabelle` bound and no caps, so that section's two checks do not apply to it.
+
+Release it with one dispatch (the SKILL, "6. A dispatch"), with the version the owner names:
+
+```sh
+gh workflow run release-isabelle-ai.yml -R xqyww123/isabelle-packaging-ci -f version=<version> -f dry_run=false
+```
+
+The workflow computes the floors and the build number (`scripts/isabelle-ai-plan.py`): the floor of each of the three
+is its newest version on the channel, and the build number is the next one free for the version. To raise the floors
+of a version already published, dispatch the same version again: the new run gets the next build number.
+
+Stop and tell the owner when the `build` job fails in one of these ways:
+- its step "Plan: the floors and the build number, from the channel's index" refuses a version that is not dotted
+  numbers (such as the pre-release `0.8.0rc1`): the version you dispatched, or a version of `isabelle-ai` or of the
+  three on the channel;
+- its step "Build" fails because the newest versions of the three do not install together (it installs them on Linux
+  to test the package).

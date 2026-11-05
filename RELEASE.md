@@ -7,7 +7,7 @@ where those steps are:
 | Package | Its own steps |
 |---|---|
 | `isabelle` | `RELEASE_ISABELLE.md` |
-| `isabelle-ai` | `RELEASE_CHECKLIST.md`, "9. Release", item 4 |
+| `isabelle-ai` | `RELEASE_ISABELLE.md`, "`isabelle-ai`" |
 | `isabelle-semantic-data` | `RELEASE_CHECKLIST.md`, "9. Release", item 3 |
 | `rocksdict` | `RELEASE_ROCKSDICT.md` |
 

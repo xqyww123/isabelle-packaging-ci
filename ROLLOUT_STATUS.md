@@ -116,7 +116,7 @@ that permitted the defect deletion: `CHANNEL_OPERATIONS.md`, "Defect deletions".
 - Releases that accept isabelle 2026: isabelle-mcp 0.7.1, isabelle-performant-ml 0.2.1,
   auto-sledgehammer 0.3.0 and isabelle-rpc 0.5.2 (2026-11-02); every other package that depends
   on `isabelle` still needs one: the SKILL conda-release, "11. A new Isabelle release";
-  `isabelle-ai` goes last (`RELEASE_CHECKLIST.md`, "9. Release", item 4).
+  `isabelle-ai` goes last (`RELEASE_ISABELLE.md`, "`isabelle-ai`").
 - (Closed 2026-11-02.) isabelle-mcp's PyPI publishes: the owner approved the `pypi` gate of
   the v0.7.1 ci.yml run 41425364665 (after 0.7.1 was on the conda channel) and then of the
   v0.7.0 run 40616658139 (so that the docs' pin for Isabelle2025-2 resolves); both published.
@@ -202,7 +202,7 @@ publish job's audit read `audited 6 subdir(s)`.
   when the pair stops working below it. The owner overruled that on 2026-10-09: a
   metapackage whose floors lag is one `conda update isabelle-ai` does nothing with, so
   every isabelle-ai release carries the channel's newest versions. Build 1 (same version, `build_number=1`, the input the
-  workflow has for exactly this; dry run 37886355252, publish 37886735015, smoke green)
+  workflow had for this; dry run 37886355252, publish 37886735015, smoke green)
   floors `minilang >=0.7.0`, `mcp >=0.6.0`, `semantic-data >=2026.10.09`; build 0 was
   deleted the same day with the sweep tool (below). The smoke now also asserts
   `isabelle-semantics status` prints `system : conda …` — the installed library really
@@ -263,7 +263,7 @@ must be republished for every release of either half. (Since 2026-10-09 it is
 republished at every wave regardless, with its floors raised to the channel's newest;
 floors rather than `==` still let the solver move up
 between waves.) Empty by construction, and the
-workflow asserts exactly that — no file outside `info/`, `depends` equal to those two and
+workflow asserted exactly that — no file outside `info/`, `depends` equal to those two and
 nothing more, `subdir: noarch`. Dry-run green on the first attempt.
 
 **`isabelle-minilang`'s Windows registration was never minilang's bug.** Its Windows smoke

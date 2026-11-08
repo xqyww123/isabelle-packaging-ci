@@ -5,7 +5,24 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-06 — `isabelle-bicompose-rename-fix` 2026.0.2 (build `Isabelle2026_0`,
+Last updated: 2026-11-09 — isabelle-performant-ml 0.3.0 (build 0) and isabelle-rpc 0.6.0
+(build 0). Theory_Hash moved from Isabelle_RPC to Performant_Isabelle_ML, computed natively by a
+streaming XXH3 128-bit (XXHash, the native library's new `xxhash.c`), every hash the same bit for
+bit; `Theory.resolve_theory`; the native library's self-test and the verify job now run on all five
+platforms. isabelle-rpc 0.6.0 keeps `Theory_Hash_Store` and the two callbacks, drops the Python
+`xxhash128_theory` and python-xxhash, and carries PIDE_Loader (59397ad). Requirements:
+isabelle-performant-ml `isabelle >=2026,<2026.1`; isabelle-rpc 0.6.0 `isabelle >=2026,<2026.1`,
+`isabelle-performant-ml >=0.3.0,<0.4.0` (0.5.x caps `<0.3.0`, so conda never pairs an old
+isabelle-rpc with the moved Theory_Hash). performant-ml: release run 42512348974 of commit 2230786
+(dry run 42511638847); isabelle-rpc: release run 42514016045 of commit 832f0f7 (dry run
+42513702197, whose verify installed performant-ml 0.3.0 from the channel). Publish green and smoke
+green on ubuntu and windows for both; `download-counter.py check` printed nothing for either.
+Dependents on the channel: auto-sledgehammer 0.3.0 requires `isabelle-performant-ml
+>=0.2.0,<0.3.0`, so it keeps 0.2.1 and cannot be installed together with isabelle-rpc 0.6.0 --
+no published Isabelle2026 package needs both yet; isabelle-minilang for Isabelle2026 will, so
+auto-sledgehammer's cap must move first. isabelle-rpc 0.5.2 and 0.5.3 keep performant-ml 0.2.1.
+
+Before that, 2026-11-06 — `isabelle-bicompose-rename-fix` 2026.0.2 (build `Isabelle2026_0`,
 release tag `Isabelle2026/bicompose_rename_fix/2`) and `isabelle-patch-control` 1.0.1 (build
 `pyh4616a5c_0`), released together by the patch tool's `release-features.yml`. 2026.0.2 has the
 same patch as 2026.0.1, now with license metadata (`BSD-3-Clause`, from the feature's
@@ -94,12 +111,12 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2 and 0.5.3 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
 | `isabelle-patch-control` | 1.0.1 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
 | `isabelle-bicompose-rename-fix` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; license BSD-3-Clause (2026.0.1 has none); released by the patch tool's `release-features.yml` |
-| `isabelle-performant-ml` | 0.2.1 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms; Isabelle2026 only (0.2.0 is the last for 2025.2) |
+| `isabelle-performant-ml` | 0.3.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms (thread CPU clocks, the xxh128 theory hash); Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `auto-sledgehammer` | 0.3.0 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2) |
-| `isabelle-rpc` | 0.5.3 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); conda only since 0.4.1 (PyPI stays at 0.4.0) |
+| `isabelle-rpc` | 0.6.0 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); needs performant-ml 0.3.x since 0.6.0; conda only since 0.4.1 (PyPI stays at 0.4.0) |
 | `isabelle-mcp` | 0.7.1 | noarch python, no session, no hooks; Isabelle2026 only (0.7.0 build 1 is the last for 2025.2); PyPI 0.7.1 (0.7.0 is on PyPI too) |
 | `isabelle-minilang` | 0.7.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (not updated) |
 | `rocksdict` | 0.3.29 | third-party repackage, 5 subdirs x CPython 3.11-3.14 |
@@ -125,9 +142,12 @@ that permitted the defect deletion: `CHANNEL_OPERATIONS.md`, "Defect deletions".
 
 ## In flight
 
-- Releases that accept isabelle 2026: isabelle-mcp 0.7.1, isabelle-performant-ml 0.2.1,
-  auto-sledgehammer 0.3.0 and isabelle-rpc 0.5.2 (2026-11-02); every other package that depends
-  on `isabelle` still needs one: the SKILL conda-release, "11. A new Isabelle release";
+- Releases that accept isabelle 2026: isabelle-mcp 0.7.1, isabelle-performant-ml 0.2.1 and
+  0.3.0, auto-sledgehammer 0.3.0 and isabelle-rpc 0.5.2, 0.5.3 and 0.6.0 (2026-11-02..09);
+  auto-sledgehammer's `<0.3.0` cap on performant-ml must move before isabelle-minilang for
+  Isabelle2026 (it needs auto-sledgehammer and isabelle-rpc 0.6.0 together); every other
+  package that depends on `isabelle` still needs one: the SKILL conda-release, "11. A new
+  Isabelle release";
   `isabelle-ai` goes last (`RELEASE_ISABELLE.md`, "`isabelle-ai`").
 - (Closed 2026-11-02.) isabelle-mcp's PyPI publishes: the owner approved the `pypi` gate of
   the v0.7.1 ci.yml run 41425364665 (after 0.7.1 was on the conda channel) and then of the

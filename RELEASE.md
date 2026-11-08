@@ -8,7 +8,6 @@ where those steps are:
 |---|---|
 | `isabelle` | `RELEASE_ISABELLE.md` |
 | `isabelle-ai` | `RELEASE_ISABELLE.md`, "`isabelle-ai`" |
-| `isabelle-semantic-data` | `RELEASE_CHECKLIST.md`, "9. Release", item 3 |
 | `rocksdict` | `RELEASE_ROCKSDICT.md` |
 
 `json-spec` has none.

@@ -5,7 +5,19 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-03 — isabelle-rpc 0.5.3 (build 0): `Context_Callbacks.entry_of_name`
+Last updated: 2026-11-06 — `isabelle-bicompose-rename-fix` 2026.0.2 (build `Isabelle2026_0`,
+release tag `Isabelle2026/bicompose_rename_fix/2`) and `isabelle-patch-control` 1.0.1 (build
+`pyh4616a5c_0`), released together by the patch tool's `release-features.yml`. 2026.0.2 has the
+same patch as 2026.0.1, now with license metadata (`BSD-3-Clause`, from the feature's
+`tools/license.txt`; its `LICENSE` in `info/licenses/`), homepage, a README whose install line
+names the package itself, and `tools/release_build.sh`, so CI builds its test session. Release run
+42185376976 of commit a5e36b1 (dry run 42172977165, green on every job): publish green, smoke green
+on ubuntu and windows (it installs 2026.0.2 by the README's line). `download-counter.py check` printed
+two lines, release-features.yml:70 `PUBLIC` and smoke.yml:23's input default: both the users'
+address that smoke replaces by https://conda-ci.qiyuan.me before installing, not downloads. No
+package on the channel depends on either package.
+
+Before that, 2026-11-03 — isabelle-rpc 0.5.3 (build 0): `Context_Callbacks.entry_of_name`
 returns the raw `Position.T` and `pack_pos` flattens it, totally (wire unchanged), for
 Semantic_Embedding's Isabelle2026 port. Same requirements as 0.5.2 (`isabelle >=2026,<2026.1`,
 `isabelle-performant-ml >=0.2.0,<0.3.0`). Release run 41663973356 of commit 84d278e (dry run
@@ -82,9 +94,9 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2 and 0.5.3 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 pins the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
-| `isabelle-patch-control` | 1.0.0 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
-| `isabelle-bicompose-rename-fix` | 2026.0.1 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; released by the patch tool's `release-features.yml` |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2 and 0.5.3 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle-patch-control` | 1.0.1 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
+| `isabelle-bicompose-rename-fix` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; license BSD-3-Clause (2026.0.1 has none); released by the patch tool's `release-features.yml` |
 | `isabelle-performant-ml` | 0.2.1 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms; Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `auto-sledgehammer` | 0.3.0 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `isabelle-rpc` | 0.5.3 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); conda only since 0.4.1 (PyPI stays at 0.4.0) |

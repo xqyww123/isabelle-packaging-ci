@@ -5,7 +5,19 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-11 — `isabelle-sledgehammer-fact-trigger` 2026.0.1 (build `Isabelle2026_0`,
+Last updated: 2026-11-11 — `isabelle-sledgehammer-fact-trigger` 2026.0.2 (build `Isabelle2026_0`,
+release tag `Isabelle2026/sledgehammer_fact_trigger/2`), a fix of 2026.0.1 found by a second code
+review: `try0`, and so Sledgehammer's tactic provers, printed each attribute of a fact in its own
+brackets (`foo["of" x]["OF" bar]`) and the anonymous fact `[[a]]` as `[a]`, neither of which Isar
+parses; now all attributes form one list. Only `src/HOL/Tools/try0_util.ML` differs from 2026.0.1;
+the README also says more exactly what a trigger receives. Same dependencies and license. Released
+alone by the patch tool's `release-features.yml`, the tool 1.0.1 reused: release run 42988196693
+of commit 84e1d60, dry run 42986040102. Publish green, smoke green on ubuntu and windows.
+`download-counter.py check` printed nothing. 2026.0.1 stays on the channel. No package on the
+channel depends on either; light_locale and default_fact_qualifiers name the feature as base on
+Isabelle2026.
+
+Before that, 2026-11-11 — `isabelle-sledgehammer-fact-trigger` 2026.0.1 (build `Isabelle2026_0`,
 release tag `Isabelle2026/sledgehammer_fact_trigger/1`), a new feature package: fact triggers for
 Sledgehammer's relevance filter MePo (`Sledgehammer_MePo.add_trigger`), which generate candidate
 facts named by Isar fact expressions while MePo iterates; also, Sledgehammer's tactic provers accept
@@ -147,11 +159,11 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and 0.3.1 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2, `isabelle-fast-abbrev-printing` 2026.0.2 and `isabelle-sledgehammer-fact-trigger` 2026.0.1 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and 0.3.1 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2, `isabelle-fast-abbrev-printing` 2026.0.2 and `isabelle-sledgehammer-fact-trigger` 2026.0.1 and 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
 | `isabelle-patch-control` | 1.0.1 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
 | `isabelle-bicompose-rename-fix` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; license BSD-3-Clause (2026.0.1 has none); released by the patch tool's `release-features.yml` |
 | `isabelle-fast-abbrev-printing` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches five files of Pure (`item_net.ML`, `consts.ML`, `Isar/proof_context.ML`, `ROOT.ML`, and the new `improved_net.ML`) of the environment's Isabelle at install; Isabelle2026 only; built on `isabelle-bicompose-rename-fix` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
-| `isabelle-sledgehammer-fact-trigger` | 2026.0.1 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches six files of HOL (`Tools/Sledgehammer/sledgehammer_{fact,mash,mepo,prover_tactic,util}.ML` and `Tools/try0_util.ML`) of the environment's Isabelle at install; Isabelle2026 only; built on `isabelle-fast-abbrev-printing` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
+| `isabelle-sledgehammer-fact-trigger` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches six files of HOL (`Tools/Sledgehammer/sledgehammer_{fact,mash,mepo,prover_tactic,util}.ML` and `Tools/try0_util.ML`) of the environment's Isabelle at install; Isabelle2026 only; built on `isabelle-fast-abbrev-printing` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
 | `isabelle-performant-ml` | 0.3.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms (thread CPU clocks, the xxh128 theory hash); Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `auto-sledgehammer` | 0.3.1 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2); needs performant-ml 0.3.x since 0.3.1 |
 | `isabelle-rpc` | 0.6.0 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); needs performant-ml 0.3.x since 0.6.0; conda only since 0.4.1 (PyPI stays at 0.4.0) |

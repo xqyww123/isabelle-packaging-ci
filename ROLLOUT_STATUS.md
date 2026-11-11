@@ -5,7 +5,28 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-11 — `isabelle-sledgehammer-fact-trigger` 2026.0.2 (build `Isabelle2026_0`,
+Last updated: 2026-11-11 — `isabelle-sledgehammer-fact-trigger` 2026.0.3 (build `Isabelle2026_0`,
+release tag `Isabelle2026/sledgehammer_fact_trigger/3`) and `isabelle-patch-control` 1.1.0 (build
+`pyh4616a5c_0`), published in one batch. The feature release collects every place found where
+Sledgehammer or Metis wrote a fact reference as text that Isar does not read back as that fact:
+the names Sledgehammer gives to the facts listed in its invocation (several attributes, a
+selection like `foo(3-, 1)`, literal facts), the name of an instantiated induction rule, the names
+Metis gives to the theorems of an argument and to `using` facts, and the literal facts `try0`
+prints. It newly patches `src/HOL/Tools/Metis/metis_tactic.ML` (seven patched files now); the
+theorems of a listed multi-theorem fact now reach the provers in the written order, not reversed.
+Its package requires `isabelle-patch-control >=1.1,<2` (rendered by the tool 1.1.0; 2026.0.1 and
+2026.0.2 require `>=1.0,<2`); the other dependencies and the license are unchanged. The tool 1.1.0
+(a feature built directly on several feature packages; `features` input words of the form
+`<GitHub repository>@<release tag>`; no table of features in the workflow) had not been published
+before: the batch of default_fact_qualifiers that was to carry it was cancelled, and the owner
+ordered this batch to publish it. Release run 43119657199 of commit 259b90d, dry run 43112498412
+of the same commit. Publish green, smoke green on ubuntu and windows. `download-counter.py check`
+printed nothing. 2026.0.1 and 2026.0.2 stay on the channel. No package on the channel depends on
+the feature; light_locale and default_fact_qualifiers name it as base on Isabelle2026.
+default_fact_qualifiers has merged release 3 (its branch at e0b9191) but is not released on it:
+its tag `Isabelle2026/default_fact_qualifiers/1` is built on release 2 and was never published.
+
+Before that, 2026-11-11 — `isabelle-sledgehammer-fact-trigger` 2026.0.2 (build `Isabelle2026_0`,
 release tag `Isabelle2026/sledgehammer_fact_trigger/2`), a fix of 2026.0.1 found by a second code
 review: `try0`, and so Sledgehammer's tactic provers, printed each attribute of a fact in its own
 brackets (`foo["of" x]["OF" bar]`) and the anonymous fact `[[a]]` as `[a]`, neither of which Isar
@@ -159,11 +180,11 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and 0.3.1 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2, `isabelle-fast-abbrev-printing` 2026.0.2 and `isabelle-sledgehammer-fact-trigger` 2026.0.1 and 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
-| `isabelle-patch-control` | 1.0.1 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and 0.3.1 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2, `isabelle-fast-abbrev-printing` 2026.0.2 and `isabelle-sledgehammer-fact-trigger` 2026.0.1, 2026.0.2 and 2026.0.3 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle-patch-control` | 1.1.0 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
 | `isabelle-bicompose-rename-fix` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; license BSD-3-Clause (2026.0.1 has none); released by the patch tool's `release-features.yml` |
 | `isabelle-fast-abbrev-printing` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches five files of Pure (`item_net.ML`, `consts.ML`, `Isar/proof_context.ML`, `ROOT.ML`, and the new `improved_net.ML`) of the environment's Isabelle at install; Isabelle2026 only; built on `isabelle-bicompose-rename-fix` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
-| `isabelle-sledgehammer-fact-trigger` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches six files of HOL (`Tools/Sledgehammer/sledgehammer_{fact,mash,mepo,prover_tactic,util}.ML` and `Tools/try0_util.ML`) of the environment's Isabelle at install; Isabelle2026 only; built on `isabelle-fast-abbrev-printing` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
+| `isabelle-sledgehammer-fact-trigger` | 2026.0.3 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches seven files of HOL (`Tools/Sledgehammer/sledgehammer_{fact,mash,mepo,prover_tactic,util}.ML`, `Tools/Metis/metis_tactic.ML` and `Tools/try0_util.ML`) of the environment's Isabelle at install; requires `isabelle-patch-control >=1.1`; Isabelle2026 only; built on `isabelle-fast-abbrev-printing` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
 | `isabelle-performant-ml` | 0.3.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms (thread CPU clocks, the xxh128 theory hash); Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `auto-sledgehammer` | 0.3.1 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2); needs performant-ml 0.3.x since 0.3.1 |
 | `isabelle-rpc` | 0.6.0 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); needs performant-ml 0.3.x since 0.6.0; conda only since 0.4.1 (PyPI stays at 0.4.0) |

@@ -5,7 +5,18 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-11 — `isabelle-fast-abbrev-printing` 2026.0.2 (build `Isabelle2026_0`,
+Last updated: 2026-11-11 — auto-sledgehammer 0.3.1 (build 0). Its cap on performant-ml moved to
+`isabelle-performant-ml >=0.3.0,<0.4.0` (ba66a81): 0.3.0 only adds to the library and the session
+uses none of it, so the cap was the whole port; `isabelle >=2026,<2026.1` is unchanged. Also in it:
+raw_sledgehammer re-raises a non-interrupt failure of the sledgehammer arm instead of hiding it
+behind the generic failure message (2ccead2). Release run 42960854103 of commit d3a7b0d (dry run
+42960476817, whose verify installed performant-ml 0.3.0 from the channel and built
+Auto_Sledgehammer). Publish green, smoke green on ubuntu and windows. `download-counter.py check`
+printed nothing. Dependents on the channel: isabelle-minilang 0.6.0 and 0.7.0, both for
+Isabelle2025-2 (caps `<0.2.0` and `<0.3.0`), so neither takes 0.3.1. auto-sledgehammer and
+isabelle-rpc 0.6.0 now require the same performant-ml series (0.3.x).
+
+Before that, 2026-11-11 — `isabelle-fast-abbrev-printing` 2026.0.2 (build `Isabelle2026_0`,
 release tag `Isabelle2026/fast_abbrev_printing/2`), the feature's first package on the channel (its
 release 1 was never published): Pure keeps the reverted abbreviations on iNet and
 `contract_abbrevs` retrieves by matching, so printing in big locale contexts is many times faster
@@ -124,12 +135,12 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2 and `isabelle-fast-abbrev-printing` 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and 0.3.1 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2 and `isabelle-fast-abbrev-printing` 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
 | `isabelle-patch-control` | 1.0.1 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
 | `isabelle-bicompose-rename-fix` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; license BSD-3-Clause (2026.0.1 has none); released by the patch tool's `release-features.yml` |
 | `isabelle-fast-abbrev-printing` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches five files of Pure (`item_net.ML`, `consts.ML`, `Isar/proof_context.ML`, `ROOT.ML`, and the new `improved_net.ML`) of the environment's Isabelle at install; Isabelle2026 only; built on `isabelle-bicompose-rename-fix` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
 | `isabelle-performant-ml` | 0.3.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms (thread CPU clocks, the xxh128 theory hash); Isabelle2026 only (0.2.0 is the last for 2025.2) |
-| `auto-sledgehammer` | 0.3.0 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2) |
+| `auto-sledgehammer` | 0.3.1 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2); needs performant-ml 0.3.x since 0.3.1 |
 | `isabelle-rpc` | 0.6.0 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); needs performant-ml 0.3.x since 0.6.0; conda only since 0.4.1 (PyPI stays at 0.4.0) |
 | `isabelle-mcp` | 0.7.1 | noarch python, no session, no hooks; Isabelle2026 only (0.7.0 build 1 is the last for 2025.2); PyPI 0.7.1 (0.7.0 is on PyPI too) |
 | `isabelle-minilang` | 0.7.0 | noarch python, session + AoA; PyPI `IsaMini` 0.5.0 (not updated) |
@@ -157,9 +168,10 @@ that permitted the defect deletion: `CHANNEL_OPERATIONS.md`, "Defect deletions".
 ## In flight
 
 - Releases that accept isabelle 2026: isabelle-mcp 0.7.1, isabelle-performant-ml 0.2.1 and
-  0.3.0, auto-sledgehammer 0.3.0 and isabelle-rpc 0.5.2, 0.5.3 and 0.6.0 (2026-11-02..09);
-  auto-sledgehammer's `<0.3.0` cap on performant-ml must move before isabelle-minilang for
-  Isabelle2026 (it needs auto-sledgehammer and isabelle-rpc 0.6.0 together); every other
+  0.3.0, auto-sledgehammer 0.3.0 and 0.3.1 and isabelle-rpc 0.5.2, 0.5.3 and 0.6.0
+  (2026-11-02..11); auto-sledgehammer 0.3.1 moved its cap on performant-ml to 0.3.x, as
+  isabelle-minilang for Isabelle2026 needs (it needs auto-sledgehammer and isabelle-rpc 0.6.0
+  together); every other
   package that depends on `isabelle` still needs one: the SKILL conda-release, "11. A new
   Isabelle release";
   `isabelle-ai` goes last (`RELEASE_ISABELLE.md`, "`isabelle-ai`").

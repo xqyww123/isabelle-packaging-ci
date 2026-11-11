@@ -5,7 +5,20 @@ package and workflow authors: `PACKAGING_RULES.md`. Channel operations: `CHANNEL
 This file holds the **current state and the decisions already made**, so a fresh session can
 resume without re-litigating anything.
 
-Last updated: 2026-11-09 — isabelle-performant-ml 0.3.0 (build 0) and isabelle-rpc 0.6.0
+Last updated: 2026-11-11 — `isabelle-fast-abbrev-printing` 2026.0.2 (build `Isabelle2026_0`,
+release tag `Isabelle2026/fast_abbrev_printing/2`), the feature's first package on the channel (its
+release 1 was never published): Pure keeps the reverted abbreviations on iNet and
+`contract_abbrevs` retrieves by matching, so printing in big locale contexts is many times faster
+with the same text. Isabelle2026 only; built on `isabelle-bicompose-rename-fix` (`==2026.0.2`);
+license BSD-3-Clause (its `tools/license.txt`; isabelle-base-features' `LICENSE`). Released alone by
+the patch tool's `release-features.yml`, the tool 1.0.1 reused: release run 42956090557 of commit
+3d3b4e7, whose sessions and accept jobs run on linux-64, linux-aarch64 and win-64 only (macOS
+dropped on the owner's order); its dry run 42944009866 of 1ee67e8 was green on every job but the
+osx-64 sessions leg, cancelled on the owner's order after 30 minutes. Publish green, smoke green on
+ubuntu and windows. `download-counter.py check` printed nothing. No package on the channel depends
+on it yet.
+
+Before that, 2026-11-09 — isabelle-performant-ml 0.3.0 (build 0) and isabelle-rpc 0.6.0
 (build 0). Theory_Hash moved from Isabelle_RPC to Performant_Isabelle_ML, computed natively by a
 streaming XXH3 128-bit (XXHash, the native library's new `xxhash.c`), every hash the same bit for
 bit; `Theory.resolve_theory`; the native library's self-test and the verify job now run on all five
@@ -111,9 +124,10 @@ by the owner's decision of 2026-10-03).
 
 | Package | Version | Shape |
 |---|---|---|
-| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
+| `isabelle` | 2026; 2025.2 | per-platform, 5 subdirs. 2026 is the official release unchanged; 2025.2 predates this rollout. `isabelle-mcp` 0.7.1, `isabelle-performant-ml` 0.2.1 and 0.3.0, `auto-sledgehammer` 0.3.0 and `isabelle-rpc` 0.5.2, 0.5.3 and 0.6.0 accept 2026 (`isabelle >=2026,<2026.1`), and `isabelle-bicompose-rename-fix` 2026.0.1 and 2026.0.2 and `isabelle-fast-abbrev-printing` 2026.0.2 pin the build `isabelle ==2026 0`; every other package below accepts only 2025.2 (`isabelle >=2025.2,<2025.3`) |
 | `isabelle-patch-control` | 1.0.1 | noarch python, the patch tool that applies and reverses feature packages; released by the patch tool's `release-features.yml`, together with feature packages |
 | `isabelle-bicompose-rename-fix` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches `src/Pure/thm.ML` of the environment's Isabelle at install; Isabelle2026 only; license BSD-3-Clause (2026.0.1 has none); released by the patch tool's `release-features.yml` |
+| `isabelle-fast-abbrev-printing` | 2026.0.2 (build `Isabelle2026_0`) | noarch generic, **feature package**: patches five files of Pure (`item_net.ML`, `consts.ML`, `Isar/proof_context.ML`, `ROOT.ML`, and the new `improved_net.ML`) of the environment's Isabelle at install; Isabelle2026 only; built on `isabelle-bicompose-rename-fix` 2026.0.2; license BSD-3-Clause; released by the patch tool's `release-features.yml` |
 | `isabelle-performant-ml` | 0.3.0 | noarch generic, two sessions (`Performant_Isabelle_ML`, `Performant_Isabelle_HOL`) + the prebuilt native library for 5 platforms (thread CPU clocks, the xxh128 theory hash); Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `auto-sledgehammer` | 0.3.0 | noarch generic, session; Isabelle2026 only (0.2.0 is the last for 2025.2) |
 | `isabelle-rpc` | 0.6.0 | noarch python, session + Python host; Isabelle2026 only (0.5.1 is the last for 2025.2); needs performant-ml 0.3.x since 0.6.0; conda only since 0.4.1 (PyPI stays at 0.4.0) |

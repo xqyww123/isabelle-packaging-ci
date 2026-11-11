@@ -940,10 +940,12 @@ tests              [ubuntu-latest]   the unit tests of tests/; conda waits for t
 bundles            [ubuntu-latest]   download the five official platform bundles, check them against releases/<R>/SHA256SUMS → one artifact
 conda              [ubuntu-latest]   scripts/pack.sh makes the conda packages one by one (including check_pristine.py's assertions)
                                      → install linux-64 from a local channel and really run it; the user directories of two environments of the same name; the post-link re-run
-install-macos      [macos-15, macos-15-intel]   osx-arm64 and osx-64 are each installed and run on a native machine (with a GUI check on arm in addition)
 install-linux-arm  [ubuntu-24.04-arm]   linux-aarch64: install, run, GUI check
 install-windows    [windows-latest]  win-64: install, the first `isabelle` call (Cygwin's initialization, with a negative control for failure), the post-link re-run (.bat)
 ```
+
+No job runs on macOS (owner, 2026-11-11: "osx 太慢了，把它统一从 release pipelines 中移除吧"; only the checks go): the
+osx-64 and osx-arm64 packages are built from the official bundles and published without being run on a Mac.
 
 This document and the comments always call these jobs by their job id (the left column of the table above), not by
 letters (owner, 2026-11-01).

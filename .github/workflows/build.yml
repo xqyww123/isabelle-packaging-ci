@@ -13,7 +13,7 @@ name: build
 #                     It VERIFIES by installing from a local channel; it does NOT publish.
 #                     Publishing to R2 lives in release.yml, so that a push can never move
 #                     the channel (PACKAGING_DESIGN.md §5.4).
-# install-macos, install-linux-arm, install-windows
+# install-linux-arm, install-windows
 #                   — install and run the packages on the platforms they are for.
 
 on:
@@ -348,109 +348,19 @@ jobs:
   # actually for.
   #
   # `conda` can only run what it builds on: linux-64.  The other four are cross-built
-  # from Linux; these jobs run them natively:
+  # from Linux; these jobs run two of them natively (no macOS job: its runners are too
+  # slow; the osx-64 and osx-arm64 packages are built and published unrun):
   #
-  #   install-macos      macos-15          osx-arm64      (+ the GUI check)
-  #   install-macos      macos-15-intel    osx-64
   #   install-linux-arm  ubuntu-24.04-arm  linux-aarch64  (+ the GUI check)
   #   install-windows    windows-latest    win-64         (+ the post-link re-run, in .bat)
   #
   # All consume `conda`'s `conda-packages` artifact, so what is installed here is the
   # EXACT byte-for-byte package that would be published -- not a rebuild of it.
   #
-  # The load-bearing assertion of install-macos and install-linux-arm is the one in
+  # The load-bearing assertion of install-linux-arm is the one in
   # scripts/verify_install.sh: build a real session on top of Main and require that HOL
   # is NOT recompiled.
   # ===========================================================================
-
-  install-macos:
-    name: "install-macos - install + run (${{ matrix.subdir }}, ${{ matrix.runner }})"
-    needs: conda
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - subdir: osx-arm64
-            runner: macos-15
-            miniforge: Miniforge3-MacOSX-arm64.sh
-          - subdir: osx-64
-            runner: macos-15-intel
-            miniforge: Miniforge3-MacOSX-x86_64.sh
-    steps:
-      - name: Checkout CI repo
-        uses: actions/checkout@v4
-
-      - name: Free up disk (drop the extra Xcodes)
-        run: |
-          set -euo pipefail
-          df -h /
-          sudo rm -rf /Applications/Xcode_*.app || true
-          df -h /
-
-      - name: Download the conda packages
-        uses: actions/download-artifact@v4
-        with:
-          name: conda-packages
-          path: ${{ runner.temp }}/pkgs
-
-      - name: Build a local channel with just the ${{ matrix.subdir }} package
-        run: |
-          set -euo pipefail
-          CH="$RUNNER_TEMP/channel"
-          S=${{ matrix.subdir }}
-          mkdir -p "$CH/noarch" "$CH/$S"
-          [ -d "$RUNNER_TEMP/pkgs/$S" ] || { echo "::error::conda produced no $S package"; exit 1; }
-          cp "$RUNNER_TEMP/pkgs/$S"/isabelle-*.conda "$CH/$S/"
-          rm -rf "$RUNNER_TEMP/pkgs"
-          ls -lh "$CH/$S"
-          echo "CH=$CH" >> "$GITHUB_ENV"
-
-          # Miniforge rather than the preinstalled $CONDA: it exists on every runner we
-          # use, and it is ours (no root-owned prefix to chown).
-          curl -fsSL -o "$RUNNER_TEMP/mf.sh" \
-            https://github.com/conda-forge/miniforge/releases/latest/download/${{ matrix.miniforge }}
-          bash "$RUNNER_TEMP/mf.sh" -b -p "$HOME/mf"
-          "$HOME/mf/bin/conda" install -y -q -c conda-forge conda-index
-          "$HOME/mf/bin/python" -m conda_index "$CH" --no-zst --no-bz2 --channeldata \
-            --channel-name conda.qiyuan.me
-
-      - name: "${{ matrix.subdir }}: install and RUN"
-        run: |
-          set -euo pipefail
-          ENV="$RUNNER_TEMP/isaenv"
-          "$HOME/mf/bin/conda" create -y -p "$ENV" -c "file://$CH" -c conda-forge --override-channels isabelle
-          scripts/verify_install.sh "$ENV"
-
-      # ---------------------------------------------------------------------
-      # The real macOS GUI check: start jEdit on the runner's own window server and let
-      # Claude Code judge the screenshot.  Same criteria as Linux -- both call the shared
-      # scripts/gui_judge.sh -- only the launch is macOS-specific (Quartz +
-      # screencapture, no Xvfb).
-      #
-      # arm64 only, on purpose: jEdit is the same Quartz code on both Mac architectures,
-      # and osx-64's CLI + heap + platform resolution are covered by its own
-      # install-and-run step above.
-      - name: "GUI verification (osx-arm64): jEdit + Claude Code judge"
-        if: matrix.subdir == 'osx-arm64'
-        env:
-          # OAuth (subscription) token ONLY.  Never add ANTHROPIC_API_KEY here.
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-        run: scripts/verify_gui_macos.sh "$RUNNER_TEMP/isaenv" "$RUNNER_TEMP/gui"
-
-      - name: Upload the macOS GUI screenshot + verdict
-        if: always() && matrix.subdir == 'osx-arm64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-gui
-          path: |
-            ${{ runner.temp }}/gui/jedit.png
-            ${{ runner.temp }}/gui/verdict.json
-            ${{ runner.temp }}/gui/jedit.log
-            ${{ runner.temp }}/gui/claude.err
-          if-no-files-found: warn
-          retention-days: 7
 
   install-linux-arm:
     name: "install-linux-arm - install + run + GUI (linux-aarch64)"

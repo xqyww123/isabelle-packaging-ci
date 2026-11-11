@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false          # one platform's failure must not hide the others
       matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-15-intel, windows-latest]
+        runner: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]      # no macOS: its runners are too slow
     defaults:
       run:
         # bash -l (LOGIN shell), not plain bash: setup-miniconda only puts `conda` on

@@ -41,8 +41,9 @@
 # is then unreachable by any other run.  The only thing two overlapping runs can still
 # race on is repodata.json, and the worst outcome there is a repodata that is missing
 # the very newest package -- the FILE is safely on the channel, the next publish (or a
-# re-run of this one) puts it back in the index, and the verify step below fails loudly
-# rather than silently.  That is a self-healing stale index instead of data loss.
+# re-run of this one) puts it back in the index, and the audit step below turns the run
+# that hid it red rather than staying silent.  That is a self-healing stale index instead
+# of data loss.
 # ---------------------------------------------------------------------------
 name: publish-conda
 
@@ -324,26 +325,37 @@ jobs:
           #   pushes, verifies GREEN -> A pushes its now-stale index over B's.
           #
           # A's own package is in A's index, so A's verification passes; B already
-          # finished green.  B's package is on R2 and invisible to the solver, with no
-          # bound on how long until some unrelated publish repairs it.  Auditing the WHOLE
-          # channel is what turns that silent loss into a red run -- and because a re-run
-          # re-pulls and re-indexes, the repair is one click.
-          # Walk $CH, NOT R2.  The pull step above already fetched the whole channel
-          # under `set -e` with a bare rclone call, so a listing failure cannot reach
-          # here silently -- whereas `for sub in $(rclone lsf ...)` puts the status in
-          # a for-loop word list, where NEITHER errexit NOR pipefail observes it:
+          # finished green.  B's package is on R2 and invisible to the solver until some
+          # later publish re-indexes.  Only A can see it: it is on R2 but not in A's $CH.
+          # So list R2 now, after our push: a .conda that $CH lacks was uploaded while
+          # this job ran, and the index we pushed may hide it.  When there is none, any
+          # later upload is pulled by its own job after our push, so that job's index
+          # has ours too.  This also reddens when B pushes last, which is harmless; so
+          # is the re-run, which re-pulls and re-indexes.
+          #
+          # Into a FILE under set -e, never `for f in $(rclone lsf ...)`: a for-loop
+          # word list is where NEITHER errexit NOR pipefail observes the status --
           #
           #   set -euo pipefail; fail=0; for s in $(false); do fail=1; done; exit $fail
           #
-          # exits 0.  The loop body never runs, nothing is printed, and the step goes
-          # green having audited nothing -- indistinguishable from a clean channel, in
-          # the one step whose entire job is to catch a lost release.  (The
-          # immutability guard above branches on rclone's exit code for exactly this
-          # reason; this step used to be the only rclone consumer here that did not.)
-          #
-          # Auditing the pulled snapshot is also the MORE meaningful comparison: it is
-          # precisely what conda-index consumed and what was pushed.
+          # exits 0, and the audit would go green having listed nothing.
           fail=0
+          rclone lsf -R --files-only --include '*.conda' "R2:$R2_BUCKET/" \
+            --s3-no-check-bucket --fast-list | sort > "$RUNNER_TEMP/audit-r2.txt"
+          (cd "$CH" && find . -name '*.conda' | sed 's|^\./||' | sort) > "$RUNNER_TEMP/audit-ch.txt"
+          [ -s "$RUNNER_TEMP/audit-r2.txt" ] || {
+            echo "::error::the R2 listing is empty -- it cannot have checked anything"
+            exit 1; }
+          late=$(comm -23 "$RUNNER_TEMP/audit-r2.txt" "$RUNNER_TEMP/audit-ch.txt")
+          if [ -n "$late" ]; then
+            echo "::error::uploaded while this job ran, so the index it pushed may lack them:"
+            printf '          %s\n' $late
+            echo "          Re-run this job: it re-pulls and re-indexes the whole channel."
+            fail=1
+          fi
+
+          # And every package in $CH must be named in the live index: this catches
+          # one that conda-index skipped, and a staler push that landed after ours.
           audited=0
           for dir in "$CH"/*/; do
             sub=$(basename "$dir")
